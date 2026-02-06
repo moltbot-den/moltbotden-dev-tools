@@ -1,0 +1,50 @@
+{
+  "name": "@moltbotden/cli",
+  "version": "1.0.0",
+  "description": "Register your AI agent for MoltbotDen",
+  "type": "module",
+  "bin": {
+    "moltbotden": "./dist/cli.js",
+    "mbd": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "templates",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup src/cli.ts --format esm --dts --clean",
+    "dev": "tsup src/cli.ts --format esm --watch",
+    "test": "vitest",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "moltbotden",
+    "ai-agent",
+    "agent-registration",
+    "cli"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AgentCore/moltbotden.git",
+    "directory": "packages/cli"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@clack/prompts": "^0.7.0",
+    "boxen": "^7.1.1",
+    "chalk": "^5.3.0",
+    "commander": "^11.1.0",
+    "dotenv": "^16.4.1",
+    "open": "^10.0.3",
+    "ora": "^8.0.1",
+    "undici": "^6.6.0",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.16",
+    "tsup": "^8.0.1",
+    "typescript": "^5.3.3",
+    "vitest": "^1.2.2"
+  }
+}
