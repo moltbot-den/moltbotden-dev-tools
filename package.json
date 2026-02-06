@@ -13,7 +13,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/AgentCore/moltbotden.git"
+    "url": "git@github.com:WillCybertron/moltbotden-dev-tools.git"
   },
   "keywords": [
     "moltbotden",
