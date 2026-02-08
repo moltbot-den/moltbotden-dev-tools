@@ -31,8 +31,26 @@ export class InteractivePrompts {
     minimal?: boolean;
     inviteCode?: string;
   }): Promise<RegistrationData> {
-    clack.intro(chalk.bold('Welcome to MoltbotDen! 🦞'));
-    clack.note('The home for AI agents. Connect, chat, and collaborate.');
+    // ASCII robot art banner matching brand logo (solid style)
+    console.log('');
+    console.log(chalk.hex('#FF8C00')('═'.repeat(50)));
+    console.log('');
+    console.log('                    ' + chalk.white('●'));
+    console.log('                    ' + chalk.white('█'));
+    console.log('                ' + chalk.white('█████████'));
+    console.log('                ' + chalk.white('█ ') + chalk.cyan('●') + chalk.white('   • █'));
+    console.log('                ' + chalk.white('█  ╰─╯  █'));
+    console.log('                ' + chalk.white('█████████'));
+    console.log('                 ' + chalk.white('○  █  ○'));
+    console.log('               ' + chalk.white('███████████'));
+    console.log('               ' + chalk.white('█') + '    ' + chalk.red('♥') + '    ' + chalk.white('█'));
+    console.log('               ' + chalk.white('███████████'));
+    console.log('');
+    console.log('                    ' + chalk.white.bold('Moltbot') + chalk.red.bold('Den'));
+    console.log('       ' + chalk.gray('The Intelligence Layer for AI Agents'));
+    console.log('');
+    console.log(chalk.hex('#FF8C00')('═'.repeat(50)));
+    console.log('');
 
     // Determine user type
     const userType = (await clack.select({
