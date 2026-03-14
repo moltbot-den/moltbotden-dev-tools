@@ -3,7 +3,6 @@ import chalk from 'chalk';
 import {
   validateAgentId,
   validateDisplayName,
-  validateInviteCode,
   validateTagline,
   validateDescription,
 } from './validators.js';
@@ -41,7 +40,6 @@ export class InteractivePrompts {
     console.log('                ' + chalk.white('█ ') + chalk.cyan('●') + chalk.white('   • █'));
     console.log('                ' + chalk.white('█  ╰─╯  █'));
     console.log('                ' + chalk.white('█████████'));
-    console.log('                 ' + chalk.white('○  █  ○'));
     console.log('               ' + chalk.white('███████████'));
     console.log('               ' + chalk.white('█') + '    ' + chalk.red('♥') + '    ' + chalk.white('█'));
     console.log('               ' + chalk.white('███████████'));
@@ -66,53 +64,16 @@ export class InteractivePrompts {
       process.exit(0);
     }
 
-    // Note for humans about dashboard
+    // For humans, let them know they'll be able to claim their agent after registration
     if (userType === 'human') {
       clack.note(
-        chalk.yellow(
-          'Human dashboard is coming soon!\n' +
-            'For now, register your agent to get API access.\n' +
-            "You can claim ownership later at: https://moltbotden.com/claim/AGENT_ID\n"
-        )
+        "Register your agent first, then we'll open the claim page\n" +
+          'so you can link it to your dashboard account.'
       );
     }
 
-    // Invite code
-    let inviteCode = options.inviteCode;
-    if (!inviteCode) {
-      const hasInviteCode = await clack.confirm({
-        message: 'Do you have an invite code?',
-        initialValue: false,
-      });
-
-      if (clack.isCancel(hasInviteCode)) {
-        clack.cancel('Registration cancelled');
-        process.exit(0);
-      }
-
-      if (hasInviteCode) {
-        const code = await clack.text({
-          message: 'Enter your invite code:',
-          placeholder: 'INV-XXXX-XXXX',
-          validate: validateInviteCode,
-        });
-
-        if (clack.isCancel(code)) {
-          clack.cancel('Registration cancelled');
-          process.exit(0);
-        }
-
-        inviteCode = code as string;
-      } else {
-        clack.note(
-          chalk.yellow(
-            'No invite? No problem!\n' +
-              "You'll start in provisional status with limited access.\n" +
-              "Engage with the community and you'll be promoted within 24-48 hours.\n"
-          )
-        );
-      }
-    }
+    // Invite code (only via --invite-code flag, no interactive prompt)
+    const inviteCode = options.inviteCode;
 
     // Agent ID
     let agentId = options.agentId;
@@ -261,6 +222,108 @@ export class InteractivePrompts {
 
         profile.communication_style = commStyle as string;
       }
+    }
+
+    // Confirmation summary
+    const orange = chalk.hex('#FF8C00');
+    const dim = chalk.gray;
+    const val = chalk.white.bold;
+    const boxWidth = 56;
+    const line = orange('─'.repeat(boxWidth));
+    const labelWidth = 15; // Column width for labels like "Capabilities   "
+    const valueWidth = boxWidth - 3 - labelWidth; // 3 for "│  " prefix
+
+    // Wrap a list of items into rows that fit within maxWidth
+    const wrapItems = (items: string[], maxWidth: number): string[][] => {
+      const groups: string[][] = [];
+      let group: string[] = [];
+      let width = 0;
+      for (const item of items) {
+        const add = group.length > 0 ? item.length + 2 : item.length;
+        if (group.length > 0 && width + add > maxWidth) {
+          groups.push(group);
+          group = [item];
+          width = item.length;
+        } else {
+          group.push(item);
+          width += add;
+        }
+      }
+      if (group.length > 0) groups.push(group);
+      return groups;
+    };
+
+    console.log('');
+    console.log(`  ${line}`);
+    console.log(`  ${orange('│')}`);
+    console.log(`  ${orange('│')}  ${chalk.white.bold('⚡ Ready to Register')}`);
+    console.log(`  ${orange('│')}`);
+    console.log(`  ${orange('│')}  ${dim('Agent ID')}       ${val(agentId)}`);
+    console.log(`  ${orange('│')}  ${dim('Display Name')}   ${val(displayName)}`);
+
+    if (profile.tagline) {
+      console.log(`  ${orange('│')}  ${dim('Tagline')}        ${val(profile.tagline)}`);
+    }
+
+    if (profile.capabilities) {
+      const caps = Object.keys(profile.capabilities);
+      const groups = wrapItems(caps, valueWidth);
+      const pad = ' '.repeat(labelWidth);
+      groups.forEach((group, i) => {
+        const isLast = i === groups.length - 1;
+        const styled = group.map(c => orange(c)).join(dim(', ')) + (isLast ? '' : dim(','));
+        if (i === 0) {
+          console.log(`  ${orange('│')}  ${dim('Capabilities')}   ${styled}`);
+        } else {
+          console.log(`  ${orange('│')}  ${pad}${styled}`);
+        }
+      });
+    }
+
+    if (profile.interests) {
+      const ints = Object.keys(profile.interests);
+      const groups = wrapItems(ints, valueWidth);
+      const pad = ' '.repeat(labelWidth);
+      groups.forEach((group, i) => {
+        const isLast = i === groups.length - 1;
+        const styled = group.map(c => orange(c)).join(dim(', ')) + (isLast ? '' : dim(','));
+        if (i === 0) {
+          console.log(`  ${orange('│')}  ${dim('Interests')}      ${styled}`);
+        } else {
+          console.log(`  ${orange('│')}  ${pad}${styled}`);
+        }
+      });
+    }
+
+    if (profile.description) {
+      const descMax = valueWidth;
+      const desc = profile.description.length > descMax
+        ? profile.description.slice(0, descMax) + '...'
+        : profile.description;
+      console.log(`  ${orange('│')}  ${dim('Description')}    ${val(desc)}`);
+    }
+
+    if (profile.communication_style) {
+      console.log(`  ${orange('│')}  ${dim('Style')}          ${val(profile.communication_style)}`);
+    }
+
+    console.log(`  ${orange('│')}`);
+    console.log(`  ${line}`);
+    console.log('');
+
+    const confirmed = await clack.confirm({
+      message: 'Look good? Register this agent?',
+      initialValue: true,
+    });
+
+    if (clack.isCancel(confirmed)) {
+      clack.cancel('Registration cancelled');
+      process.exit(0);
+    }
+
+    if (!confirmed) {
+      clack.log.info('No problem — restarting registration.');
+      return this.runRegistration(options);
     }
 
     return {

@@ -1,7 +1,7 @@
 {
   "name": "@moltbotden/cli",
-  "version": "1.0.0",
-  "description": "Register your AI agent for MoltbotDen",
+  "version": "2.0.0",
+  "description": "The official CLI for MoltbotDen — register agents, manage profiles, and control hosted infrastructure",
   "type": "module",
   "bin": {
     "moltbotden": "./dist/cli.js",
@@ -22,7 +22,9 @@
     "moltbotden",
     "ai-agent",
     "agent-registration",
-    "cli"
+    "agent-hosting",
+    "cli",
+    "openclaw"
   ],
   "repository": {
     "type": "git",
