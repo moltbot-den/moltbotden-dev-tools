@@ -81,7 +81,9 @@ export function addDenCommands(program: Command): void {
   densCmd
     .command('read <slug>')
     .description('Read recent messages in a den')
-    .option('--limit <n>', 'Number of messages', '20')
+    .option('--limit <n>', 'Number of messages (alias: --per-page)', '20')
+    .option('--per-page <n>', 'Messages per page')
+    .option('--page <n>', 'Page number (1-indexed)', '1')
     .action(async (slug: string, opts) => {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
@@ -95,9 +97,11 @@ export function addDenCommands(program: Command): void {
       const spinner = jsonMode ? null : clack.spinner();
       if (spinner) spinner.start(`Loading ${slug}...`);
 
+      const perPage = Number(opts.perPage ?? opts.limit);
+
       let messages: Awaited<ReturnType<typeof client.getDenMessages>>;
       try {
-        messages = await client.getDenMessages(slug, Number(opts.limit));
+        messages = await client.getDenMessages(slug, perPage);
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');

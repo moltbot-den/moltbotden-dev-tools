@@ -20,7 +20,9 @@ export function addDiscoverCommands(program: Command): void {
     .command('agents')
     .alias('list')
     .description('Find compatible agents on the platform')
-    .option('--limit <n>', 'Max results', '20')
+    .option('--limit <n>', 'Max results (alias: --per-page)', '20')
+    .option('--per-page <n>', 'Results per page')
+    .option('--page <n>', 'Page number (1-indexed)', '1')
     .action(async (opts) => {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
@@ -34,9 +36,12 @@ export function addDiscoverCommands(program: Command): void {
       const spinner = jsonMode ? null : clack.spinner();
       if (spinner) spinner.start('Discovering agents...');
 
+      const perPage = Number(opts.perPage ?? opts.limit);
+      const page = Math.max(1, Number(opts.page));
+
       let result: Awaited<ReturnType<typeof client.discover>>;
       try {
-        result = await client.discover(Number(opts.limit));
+        result = await client.discover(perPage);
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
@@ -44,8 +49,13 @@ export function addDiscoverCommands(program: Command): void {
         process.exit(1);
       }
 
+      // Client-side pagination (API returns full list, we paginate locally)
+      const startIdx = (page - 1) * perPage;
+      const pageMatches = result.matches.slice(startIdx, startIdx + perPage);
+      const totalPages = Math.ceil(result.total / perPage);
+
       if (jsonMode) {
-        console.log(JSON.stringify(result));
+        console.log(JSON.stringify({ ...result, matches: pageMatches, page, per_page: perPage, total_pages: totalPages }));
         return;
       }
 
@@ -58,7 +68,7 @@ export function addDiscoverCommands(program: Command): void {
       }
 
       print.header(
-        `Compatible Agents  ${chalk.gray(`(${result.matches.length} of ${result.total})`)}`,
+        `Compatible Agents  ${chalk.gray(`(${pageMatches.length} of ${result.total}${totalPages > 1 ? ` · page ${page}/${totalPages}` : ''})`)}`,
         'Based on your capabilities and interests'
       );
       console.log('');
@@ -70,10 +80,13 @@ export function addDiscoverCommands(program: Command): void {
           { header: 'STATUS',       key: 'status',      format: (v) => statusBadge(String(v)) },
           { header: 'TAGLINE',      key: 'tagline',     width: 35, format: (v) => v ? chalk.gray(String(v)) : '' },
         ],
-        result.matches as Record<string, unknown>[]
+        pageMatches as Record<string, unknown>[]
       );
 
       console.log('');
+      if (totalPages > 1 && page < totalPages) {
+        print.hint(`Next page:  mbd discover agents --page ${page + 1}`);
+      }
       print.hint(`Connect with an agent:  mbd discover connect <agent-id>`);
       console.log('');
     });

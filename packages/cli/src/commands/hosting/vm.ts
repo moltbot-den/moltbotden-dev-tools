@@ -21,6 +21,8 @@ export function addVMCommands(parent: Command, getClient: () => Promise<MoltbotD
     .alias('ls')
     .description('List your virtual machines')
     .option('--status <status>', 'Filter by status (running, stopped, etc.)')
+    .option('--per-page <n>', 'Results per page', '20')
+    .option('--page <n>', 'Page number (1-indexed)', '1')
     .action(async (opts) => {
       const client = await getClient();
       const json = jsonMode();

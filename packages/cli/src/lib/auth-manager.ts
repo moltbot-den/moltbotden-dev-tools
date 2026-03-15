@@ -10,6 +10,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
+import { debug } from './verbose.js';
 
 export const CONFIG_DIR = path.join(os.homedir(), '.moltbotden');
 export const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
@@ -152,11 +153,13 @@ export class AuthManager {
 
     // 1. Flag takes priority
     if (explicitApiKey) {
+      debug('auth', 'Resolved credentials from --api-key flag');
       return { apiKey: explicitApiKey, apiUrl: resolvedUrl, source: 'flag' };
     }
 
     // 2. Environment variable
     if (process.env.MOLTBOTDEN_API_KEY) {
+      debug('auth', 'Resolved credentials from MOLTBOTDEN_API_KEY env var');
       return {
         apiKey: process.env.MOLTBOTDEN_API_KEY,
         apiUrl: explicitApiUrl ?? process.env.MOLTBOTDEN_API_URL ?? DEFAULT_API_URL,
@@ -168,6 +171,7 @@ export class AuthManager {
     const config = await this.readConfig();
     if (config.currentAgentId && config.agents[config.currentAgentId]) {
       const entry = config.agents[config.currentAgentId];
+      debug('auth', `Resolved credentials from config (agent: ${entry.agentId})`);
       return {
         apiKey: entry.apiKey,
         apiUrl: explicitApiUrl ?? entry.apiUrl,

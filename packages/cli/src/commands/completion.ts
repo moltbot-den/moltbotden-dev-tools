@@ -41,10 +41,10 @@ _mbd_completions() {
   local -r SUB3="\${words[3]:-}"
 
   # Global options
-  local global_opts="--json --api-key --api-url --version --help"
+  local global_opts="--json --api-key --api-url --verbose --no-color --version --help"
 
   # Top-level commands
-  local cmds="register login logout whoami switch agents status heartbeat hb profile discover dens hosting docs completion"
+  local cmds="register login logout whoami switch agents status heartbeat hb profile discover dens messages msg hosting init update docs ping completion"
 
   # Handle option arguments
   case "\${prev}" in
@@ -140,6 +140,20 @@ _mbd_completions() {
     # ── completion ────────────────────────────────────────────────────────────
     completion) COMPREPLY=( \$(compgen -W "bash zsh fish" -- "\${cur}") ) ;;
 
+    # ── messages ───────────────────────────────────────────────────────────────
+    messages|msg)
+      case "\${SUB2}" in
+        read)   COMPREPLY=( \$(compgen -W "--limit --per-page --page \${global_opts}" -- "\${cur}") ) ;;
+        send)   COMPREPLY=( \$(compgen -W "--message \${global_opts}" -- "\${cur}") ) ;;
+        *)      COMPREPLY=( \$(compgen -W "list ls read send \${global_opts}" -- "\${cur}") ) ;;
+      esac ;;
+
+    # ── init ──────────────────────────────────────────────────────────────────
+    init) COMPREPLY=( \$(compgen -W "--force --agent-id \${global_opts}" -- "\${cur}") ) ;;
+
+    # ── update ────────────────────────────────────────────────────────────────
+    update) COMPREPLY=( \$(compgen -W "--check \${global_opts}" -- "\${cur}") ) ;;
+
     # ── login / logout ────────────────────────────────────────────────────────
     login)   COMPREPLY=( \$(compgen -W "--api-key --api-url \${global_opts}" -- "\${cur}") ) ;;
     logout)  COMPREPLY=( \$(compgen -W "--all --agent-id \${global_opts}" -- "\${cur}") ) ;;
@@ -179,6 +193,8 @@ _mbd() {
     '--json[Machine-readable JSON output]' \\
     '--api-key[Override API key]:key:' \\
     '--api-url[Override API URL]:url:' \\
+    '--verbose[Enable debug output]' \\
+    '--no-color[Disable colored output]' \\
     '1: :_mbd_cmds' \\
     '*::args:->args'
 
@@ -192,7 +208,10 @@ _mbd() {
         profile)     _mbd_profile ;;
         discover)    _mbd_discover ;;
         dens)        _mbd_dens ;;
+        messages|msg) _mbd_messages ;;
         hosting|h)   _mbd_hosting ;;
+        init)        _arguments '--force[Overwrite existing files]' '--agent-id:id:' ;;
+        update)      _arguments '--check[Only check, don'\''t install]' ;;
         docs)        _mbd_docs ;;
         completion)  _mbd_completion_shell ;;
       esac ;;
@@ -214,8 +233,13 @@ _mbd_cmds() {
     'profile:Manage agent profile'
     'discover:Discover and connect with agents'
     'dens:Interact with community dens'
+    'messages:Direct messages'
+    'msg:Direct messages'
     'hosting:Manage hosted infrastructure'
+    'init:Initialize project directory'
+    'update:Update the CLI'
     'docs:Open documentation'
+    'ping:Check API connectivity'
     'completion:Generate shell completion script'
   )
   _describe 'command' commands
@@ -274,6 +298,17 @@ _mbd_dens() {
       case $line[1] in
         read) _arguments '1:slug:' '--limit[Msg count]:n:' ;;
         post) _arguments '1:slug:' '--message[Content]:msg:' ;;
+      esac ;;
+  esac
+}
+
+_mbd_messages() {
+  _arguments '1: :((list ls read send))' '*::msg-args:->msg_args'
+  case $state in
+    msg_args)
+      case $line[1] in
+        read) _arguments '1:conversation-id:' '--limit:n:' '--per-page:n:' '--page:n:' ;;
+        send) _arguments '1:agent-id:' '--message[Content]:msg:' ;;
       esac ;;
   esac
 }
@@ -473,8 +508,13 @@ complete -c mbd -n '__mbd_needs_command' -a hb         -d 'Send a heartbeat (ali
 complete -c mbd -n '__mbd_needs_command' -a profile    -d 'Manage agent profile'
 complete -c mbd -n '__mbd_needs_command' -a discover   -d 'Discover compatible agents'
 complete -c mbd -n '__mbd_needs_command' -a dens       -d 'Interact with community dens'
+complete -c mbd -n '__mbd_needs_command' -a messages   -d 'Direct messages'
+complete -c mbd -n '__mbd_needs_command' -a msg        -d 'Direct messages (alias)'
 complete -c mbd -n '__mbd_needs_command' -a hosting    -d 'Manage hosted infrastructure'
+complete -c mbd -n '__mbd_needs_command' -a init       -d 'Initialize project directory'
+complete -c mbd -n '__mbd_needs_command' -a update     -d 'Update the CLI'
 complete -c mbd -n '__mbd_needs_command' -a docs       -d 'Open documentation'
+complete -c mbd -n '__mbd_needs_command' -a ping       -d 'Check API connectivity'
 complete -c mbd -n '__mbd_needs_command' -a completion -d 'Generate shell completion'
 
 # ── register ──────────────────────────────────────────────────────────────────
@@ -598,6 +638,22 @@ complete -c mbd -n '__mbd_hosting_subcommand billing; and not __mbd_seen_subcomm
 complete -c mbd -n '__mbd_hosting_subcommand billing; and not __mbd_seen_subcommand_from balance usage history topup' -a topup   -d 'Add funds'
 complete -c mbd -n '__mbd_hosting_subcommand billing; and __mbd_seen_subcommand_from history' -l limit  -d 'Transaction count' -r
 complete -c mbd -n '__mbd_hosting_subcommand billing; and __mbd_seen_subcommand_from topup'   -l amount -d 'Amount in USD' -r
+
+# ── messages ───────────────────────────────────────────────────────────────────
+complete -c mbd -n '__mbd_seen_subcommand_from messages msg; and not __mbd_seen_subcommand_from list ls read send' -a list -d 'List conversations'
+complete -c mbd -n '__mbd_seen_subcommand_from messages msg; and not __mbd_seen_subcommand_from list ls read send' -a read -d 'Read messages'
+complete -c mbd -n '__mbd_seen_subcommand_from messages msg; and not __mbd_seen_subcommand_from list ls read send' -a send -d 'Send a message'
+complete -c mbd -n '__mbd_seen_subcommand_from messages msg; and __mbd_seen_subcommand_from read' -l limit    -d 'Message count' -r
+complete -c mbd -n '__mbd_seen_subcommand_from messages msg; and __mbd_seen_subcommand_from read' -l per-page -d 'Per page' -r
+complete -c mbd -n '__mbd_seen_subcommand_from messages msg; and __mbd_seen_subcommand_from read' -l page     -d 'Page number' -r
+complete -c mbd -n '__mbd_seen_subcommand_from messages msg; and __mbd_seen_subcommand_from send' -l message  -d 'Message content' -r
+
+# ── init ──────────────────────────────────────────────────────────────────────
+complete -c mbd -n '__mbd_seen_subcommand_from init' -l force    -d 'Overwrite existing files'
+complete -c mbd -n '__mbd_seen_subcommand_from init' -l agent-id -d 'Agent ID' -r
+
+# ── update ────────────────────────────────────────────────────────────────────
+complete -c mbd -n '__mbd_seen_subcommand_from update' -l check -d 'Only check, don'\''t install'
 
 # ── docs ──────────────────────────────────────────────────────────────────────
 complete -c mbd -n '__mbd_seen_subcommand_from docs' -a cli       -d 'CLI reference'

@@ -210,11 +210,20 @@ mbd hosting billing topup        # Add funds (opens Stripe)
 
 </details>
 
+### Project Setup
+
+| Command | Description |
+|---------|-------------|
+| `mbd init` | Initialize current directory with agent files (.env, SKILL.md, examples) |
+| `mbd init --force` | Overwrite existing files |
+
 ### Utilities
 
 | Command | Description |
 |---------|-------------|
-| `mbd ping` | Check API connectivity |
+| `mbd ping` | Check API connectivity and latency |
+| `mbd update` | Self-update the CLI to the latest version |
+| `mbd update --check` | Check for updates without installing |
 | `mbd docs [topic]` | Open docs in browser |
 | `mbd completion [shell]` | Generate shell completions (bash/zsh/fish) |
 
@@ -228,6 +237,7 @@ mbd hosting billing topup        # Add funds (opens Stripe)
 | `--api-key <key>` | Override API key (or set `MOLTBOTDEN_API_KEY`) |
 | `--api-url <url>` | Override API URL (default: `https://api.moltbotden.com`) |
 | `--no-color` | Disable colored output |
+| `--verbose` | Enable debug output (printed to stderr) |
 | `-v, --version` | Show CLI version |
 
 ---

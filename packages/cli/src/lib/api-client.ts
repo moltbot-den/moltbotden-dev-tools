@@ -18,6 +18,7 @@ import {
   AgentRegistrationResponseSchema,
   ApiError,
 } from '../types/api.js';
+import { debug } from './verbose.js';
 import type {
   VM, VMTier, Database, DatabasePlan, DatabaseEngine,
   Bucket, StoragePlan, OpenClawInstance, OpenClawPlan,
@@ -47,6 +48,8 @@ export class MoltbotDenClient {
     extraHeaders: Record<string, string> = {}
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
+    const startTime = Date.now();
+    debug('api', `${method} ${path}`);
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 30_000);
@@ -59,6 +62,7 @@ export class MoltbotDenClient {
       });
 
       clearTimeout(timeout);
+      debug('api', `${method} ${path} → ${res.status} (${Date.now() - startTime}ms)`);
 
       if (!res.ok) {
         let message = `HTTP ${res.status}`;

@@ -49,7 +49,10 @@
  *     status    Overview of all resources
  *     account   Hosting account details
  *
+ *   init        Initialize current directory for an existing agent
+ *   update      Self-update the CLI to the latest version
  *   docs        Open documentation in browser
+ *   ping        Check API connectivity
  *   version     Show version information
  */
 
@@ -67,7 +70,12 @@ import { addDenCommands } from './commands/dens.js';
 import { addMessageCommands } from './commands/messages.js';
 import { addHostingCommands } from './commands/hosting/index.js';
 import { addCompletionCommand } from './commands/completion.js';
+import { addInitCommand } from './commands/init.js';
+import { addUpdateCommand } from './commands/update.js';
 import { print } from './lib/output.js';
+import { setVerbose, debug } from './lib/verbose.js';
+import { didYouMean, KNOWN_COMMANDS } from './lib/did-you-mean.js';
+import { checkForUpdates } from './lib/update-notifier.js';
 import { API_BASE_URL } from './constants/defaults.js';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
@@ -101,6 +109,7 @@ program
   .option('--api-key <key>',    'Override API key (or set MOLTBOTDEN_API_KEY)')
   .option('--api-url <url>',    'Override API URL', API_BASE_URL)
   .option('--no-color',         'Disable colored output')
+  .option('--verbose',          'Enable debug output (printed to stderr)')
 
   .addHelpText('after', `
 ${chalk.bold('Quick Start')}
@@ -164,6 +173,12 @@ addMessageCommands(program);
 
 // ─── Hosting Commands ─────────────────────────────────────────────────────────
 addHostingCommands(program);
+
+// ─── Init Command ─────────────────────────────────────────────────────────────
+addInitCommand(program);
+
+// ─── Update Command ───────────────────────────────────────────────────────────
+addUpdateCommand(program);
 
 // ─── Completion Command ───────────────────────────────────────────────────────
 addCompletionCommand(program);
@@ -246,7 +261,27 @@ program
 // When called with no command, show a contextual welcome screen
 
 program
-  .action(async () => {
+  .action(async (_opts: unknown, cmd: Command) => {
+    // Check if user typed an unknown command (Commander treats it as default action args)
+    const rawArgs = process.argv.slice(2).filter(a => !a.startsWith('-'));
+    if (rawArgs.length > 0) {
+      const maybeCommand = rawArgs[0];
+      // Check if it's a known command — if not, it's a typo
+      const knownCmds = cmd.parent?.commands.map(c => c.name()) ?? [];
+      const knownAliases = cmd.parent?.commands.flatMap(c => c.aliases()) ?? [];
+      if (!knownCmds.includes(maybeCommand) && !knownAliases.includes(maybeCommand)) {
+        const suggestions = didYouMean(maybeCommand, KNOWN_COMMANDS);
+        print.error(`Unknown command: ${maybeCommand}`);
+        if (suggestions.length > 0) {
+          const formatted = suggestions.map((s) => chalk.cyan(`${displayName} ${s}`)).join(', ');
+          print.hint(`Did you mean ${formatted}?`);
+        } else {
+          print.hint(`Run  ${displayName} --help  to see available commands`);
+        }
+        process.exit(1);
+      }
+    }
+
     const { AuthManager } = await import('./lib/auth-manager.js');
     const { renderBanner } = await import('./lib/output.js');
 
@@ -283,20 +318,51 @@ program
 
 // ─── Error Handling ───────────────────────────────────────────────────────────
 
-// Handle unknown commands gracefully
+// Handle unknown commands with "Did you mean?" suggestions
 program.on('command:*', (operands: string[]) => {
-  print.error(`Unknown command: ${operands[0]}`);
-  print.hint(`Run  ${displayName} --help  to see available commands`);
+  const unknown = operands[0];
+  print.error(`Unknown command: ${unknown}`);
+
+  const suggestions = didYouMean(unknown, KNOWN_COMMANDS);
+  if (suggestions.length > 0) {
+    const formatted = suggestions.map((s) => chalk.cyan(`${displayName} ${s}`)).join(', ');
+    print.hint(`Did you mean ${formatted}?`);
+  } else {
+    print.hint(`Run  ${displayName} --help  to see available commands`);
+  }
+
   process.exit(1);
 });
 
 // ─── Parse ────────────────────────────────────────────────────────────────────
 
-program.parseAsync(process.argv).catch((err: unknown) => {
-  if (err instanceof Error) {
-    print.error(err.message);
-  } else {
-    print.error('An unexpected error occurred');
+async function main(): Promise<void> {
+  // Enable verbose mode if --verbose is present (check early, before Commander parses)
+  if (process.argv.includes('--verbose')) {
+    setVerbose(true);
+    debug('cli', `Version ${getVersion()}`);
+    debug('cli', `Node ${process.version}`);
+    debug('cli', `Args: ${process.argv.slice(2).join(' ')}`);
   }
-  process.exit(1);
-});
+
+  // Start update check in background (non-blocking)
+  const showUpdateNotice = await checkForUpdates(getVersion(), {
+    json: process.argv.includes('--json'),
+  });
+
+  try {
+    await program.parseAsync(process.argv);
+  } catch (err) {
+    if (err instanceof Error) {
+      print.error(err.message);
+    } else {
+      print.error('An unexpected error occurred');
+    }
+    process.exit(1);
+  }
+
+  // Show update notice after command completes
+  showUpdateNotice();
+}
+
+main();
