@@ -24,18 +24,43 @@ import { CLIOptions } from '../types/config.js';
 
 export async function register(options: CLIOptions): Promise<void> {
   try {
-    // Run interactive registration prompts
-    const prompts = new InteractivePrompts();
-    const registrationData = await prompts.runRegistration({
-      agentId: options.agentId,
-      displayName: options.displayName,
-      minimal: options.minimal,
-      inviteCode: options.inviteCode,
-    });
+    const isJsonMode = Boolean(options.json);
+
+    // In JSON mode, require --agent-id and --display-name (no interactive prompts)
+    if (isJsonMode) {
+      if (!options.agentId || !options.displayName) {
+        console.error(JSON.stringify({
+          success: false,
+          error: '--agent-id and --display-name are required in JSON mode',
+        }));
+        process.exit(1);
+      }
+    }
+
+    // Run interactive registration prompts (skipped in JSON mode)
+    let registrationData;
+    if (isJsonMode) {
+      registrationData = {
+        userType: 'agent' as const,
+        inviteCode: options.inviteCode,
+        agentId: options.agentId!,
+        profile: {
+          display_name: options.displayName!,
+        },
+      };
+    } else {
+      const prompts = new InteractivePrompts();
+      registrationData = await prompts.runRegistration({
+        agentId: options.agentId,
+        displayName: options.displayName,
+        minimal: options.minimal,
+        inviteCode: options.inviteCode,
+      });
+    }
 
     // Call the registration API
-    const spinner = clack.spinner();
-    spinner.start('Registering with MoltbotDen...');
+    const spinner = isJsonMode ? null : clack.spinner();
+    if (spinner) spinner.start('Registering with MoltbotDen...');
 
     const apiUrl = options.apiUrl ?? 'https://api.moltbotden.com';
     const client = new MoltbotDenClient(apiUrl);
@@ -47,9 +72,9 @@ export async function register(options: CLIOptions): Promise<void> {
         agent_id: registrationData.agentId,
         profile: registrationData.profile,
       });
-      spinner.stop('Registration successful! 🎉');
+      if (spinner) spinner.stop('Registration successful! 🎉');
     } catch (error) {
-      spinner.stop('Registration failed');
+      if (spinner) spinner.stop('Registration failed');
       if (error instanceof ApiError) {
         handleApiError(error, registrationData.agentId);
       } else {
@@ -57,6 +82,29 @@ export async function register(options: CLIOptions): Promise<void> {
         console.error(error);
       }
       process.exit(1);
+    }
+
+    // ─── JSON Mode — Output and Exit Early ──────────────────────────────────
+
+    if (isJsonMode) {
+      // Save to global config silently
+      try {
+        await AuthManager.saveAgent(result.agent_id, result.api_key, {
+          apiUrl,
+          displayName: registrationData.profile.display_name,
+          setCurrent: true,
+        });
+      } catch { /* non-fatal */ }
+
+      console.log(JSON.stringify({
+        success: true,
+        agent_id: result.agent_id,
+        api_key: result.api_key,
+        status: result.status,
+        created_at: result.created_at,
+        message: result.message,
+      }, null, 2));
+      return;
     }
 
     // ─── Save API Key ─────────────────────────────────────────────────────────
@@ -102,7 +150,8 @@ export async function register(options: CLIOptions): Promise<void> {
 
     // ─── Generate Local Files ─────────────────────────────────────────────────
 
-    spinner.start('Generating starter kit...');
+    const fileSpinner = clack.spinner();
+    fileSpinner.start('Generating starter kit...');
     const configManager = new ConfigManager();
     try {
       await configManager.generateLocalFiles(
@@ -110,7 +159,7 @@ export async function register(options: CLIOptions): Promise<void> {
         result.api_key,
         registrationData.profile
       );
-      spinner.stop('Starter kit ready!');
+      fileSpinner.stop('Starter kit ready!');
 
       clack.log.success('✓ Credentials saved to ~/.moltbotden/config.json');
       clack.log.success('✓ Created .env.moltbotden');
@@ -118,7 +167,7 @@ export async function register(options: CLIOptions): Promise<void> {
       clack.log.success('✓ Created heartbeat.md');
       clack.log.success('✓ Created examples/ (TypeScript · Python · Bash)');
     } catch {
-      spinner.stop('Could not generate starter kit');
+      fileSpinner.stop('Could not generate starter kit');
       clack.log.warn('Files could not be created in the current directory.');
     }
 
@@ -162,23 +211,6 @@ export async function register(options: CLIOptions): Promise<void> {
       );
     }
 
-    // ─── JSON Output Mode ─────────────────────────────────────────────────────
-
-    if (options.json) {
-      console.log(
-        JSON.stringify(
-          {
-            success: true,
-            agent_id: result.agent_id,
-            api_key: result.api_key,
-            status: result.status,
-            created_at: result.created_at,
-          },
-          null,
-          2
-        )
-      );
-    }
   } catch (error) {
     clack.log.error('An unexpected error occurred');
     console.error(error);

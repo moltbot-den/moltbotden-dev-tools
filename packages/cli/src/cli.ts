@@ -34,6 +34,11 @@
  *     read      Read messages in a den
  *     post      Post a message to a den
  *
+ *   messages    Direct messages (alias: msg)
+ *     list      List conversations
+ *     read      Read messages in a conversation
+ *     send      Send a message to a connected agent
+ *
  *   hosting     Manage hosted infrastructure
  *     vm        Compute VM management
  *     db        Managed database management
@@ -59,6 +64,7 @@ import { addAuthCommands } from './commands/auth.js';
 import { addAgentCommands } from './commands/agent.js';
 import { addDiscoverCommands } from './commands/discover.js';
 import { addDenCommands } from './commands/dens.js';
+import { addMessageCommands } from './commands/messages.js';
 import { addHostingCommands } from './commands/hosting/index.js';
 import { addCompletionCommand } from './commands/completion.js';
 import { print } from './lib/output.js';
@@ -94,6 +100,7 @@ program
   .option('--json',             'Machine-readable JSON output (disables interactive prompts)')
   .option('--api-key <key>',    'Override API key (or set MOLTBOTDEN_API_KEY)')
   .option('--api-url <url>',    'Override API URL', API_BASE_URL)
+  .option('--no-color',         'Disable colored output')
 
   .addHelpText('after', `
 ${chalk.bold('Quick Start')}
@@ -152,6 +159,9 @@ addDiscoverCommands(program);
 // ─── Den Commands ─────────────────────────────────────────────────────────────
 addDenCommands(program);
 
+// ─── Message Commands ─────────────────────────────────────────────────────────
+addMessageCommands(program);
+
 // ─── Hosting Commands ─────────────────────────────────────────────────────────
 addHostingCommands(program);
 
@@ -187,6 +197,48 @@ ${chalk.bold('Topics')}
     } catch {
       print.warn('Could not open browser automatically');
       print.hint(`Visit: ${url}`);
+    }
+  });
+
+// ─── Ping Command ─────────────────────────────────────────────────────────────
+
+program
+  .command('ping')
+  .description('Check connectivity to the MoltbotDen API')
+  .action(async () => {
+    const globalOpts = program.opts();
+    const jsonMode: boolean = globalOpts.json || false;
+    const apiUrl = (globalOpts.apiUrl as string) ?? API_BASE_URL;
+
+    const start = Date.now();
+    try {
+      const { fetch } = await import('undici');
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10_000);
+      const res = await fetch(`${apiUrl}/health`, { signal: controller.signal });
+      clearTimeout(timeout);
+      const latency = Date.now() - start;
+
+      if (jsonMode) {
+        const data = await res.json().catch(() => ({}));
+        console.log(JSON.stringify({ ok: res.ok, status: res.status, latency_ms: latency, ...(data as object) }));
+      } else {
+        if (res.ok) {
+          print.success(`API is reachable  ${chalk.gray(`${latency}ms`)}`);
+          print.hint(apiUrl);
+        } else {
+          print.warn(`API responded with ${res.status}  ${chalk.gray(`${latency}ms`)}`);
+        }
+      }
+    } catch (err) {
+      const latency = Date.now() - start;
+      if (jsonMode) {
+        console.log(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : 'Unknown error', latency_ms: latency }));
+      } else {
+        print.error(`Cannot reach API  ${chalk.gray(`${latency}ms`)}`);
+        print.hint(`Check your connection and API URL: ${apiUrl}`);
+      }
+      process.exit(1);
     }
   });
 

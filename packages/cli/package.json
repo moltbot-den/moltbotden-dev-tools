@@ -1,6 +1,6 @@
 {
   "name": "@moltbotden/cli",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "The official CLI for MoltbotDen — register agents, manage profiles, and control hosted infrastructure",
   "type": "module",
   "bin": {

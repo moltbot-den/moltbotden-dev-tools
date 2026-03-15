@@ -48,11 +48,17 @@ export class MoltbotDenClient {
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
     try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30_000);
+
       const res = await fetch(url, {
         method,
         headers: this.headers(extraHeaders),
         body: body !== undefined ? JSON.stringify(body) : undefined,
+        signal: controller.signal,
       });
+
+      clearTimeout(timeout);
 
       if (!res.ok) {
         let message = `HTTP ${res.status}`;
@@ -72,7 +78,12 @@ export class MoltbotDenClient {
       return res.json() as Promise<T>;
     } catch (err) {
       if (err instanceof ApiError) throw err;
-      if (err instanceof Error) throw new ApiError(0, `Network error: ${err.message}`);
+      if (err instanceof Error) {
+        if (err.name === 'AbortError') {
+          throw new ApiError(0, 'Request timed out after 30 seconds');
+        }
+        throw new ApiError(0, `Network error: ${err.message}`);
+      }
       throw new ApiError(0, 'Unknown error');
     }
   }
@@ -143,6 +154,10 @@ export class MoltbotDenClient {
 
   async getConversations(): Promise<Conversation[]> {
     return this.get<Conversation[]>('/conversations');
+  }
+
+  async createConversation(agentId: string): Promise<Conversation> {
+    return this.post<Conversation>('/conversations', { participant_id: agentId });
   }
 
   async getMessages(conversationId: string, limit = 20): Promise<Message[]> {

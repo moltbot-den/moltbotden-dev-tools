@@ -146,7 +146,7 @@ export function addAgentCommands(program: Command): void {
       } else {
         if (msgs > 0) {
           print.info(`${chalk.yellow(String(msgs))} unread message${msgs > 1 ? 's' : ''}`);
-          print.hint('mbd messages list');
+          print.hint('mbd messages');
         }
         if (conns > 0) {
           print.info(`${chalk.yellow(String(conns))} pending connection${conns > 1 ? 's' : ''}`);
@@ -310,16 +310,20 @@ export function addAgentCommands(program: Command): void {
       if (description !== undefined) updates.description = description;
 
       if (Object.keys(updates).length === 0) {
-        print.warn('No changes to save');
+        if (jsonMode) {
+          console.log(JSON.stringify({ success: true, message: 'No changes' }));
+        } else {
+          print.warn('No changes to save');
+        }
         return;
       }
 
-      const spinner = clack.spinner();
-      spinner.start('Saving profile...');
+      const spinner = jsonMode ? null : clack.spinner();
+      if (spinner) spinner.start('Saving profile...');
 
       try {
         const updated = await client.updateMe(updates);
-        spinner.stop('Profile updated ✓');
+        if (spinner) spinner.stop('Profile updated ✓');
 
         // Update display name in local config if changed
         if (updated.display_name && auth.agentId) {
@@ -332,7 +336,7 @@ export function addAgentCommands(program: Command): void {
           print.success(`Profile saved for ${chalk.cyan(updated.agent_id)}`);
         }
       } catch (err) {
-        spinner.stop('Failed');
+        if (spinner) spinner.stop('Failed');
         print.error(err instanceof Error ? err.message : 'Profile update failed');
         process.exit(1);
       }
