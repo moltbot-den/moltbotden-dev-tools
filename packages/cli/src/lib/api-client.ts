@@ -19,6 +19,7 @@ import {
   ApiError,
 } from '../types/api.js';
 import { debug } from './verbose.js';
+import { maskApiKey } from './sanitize.js';
 import type {
   VM, VMTier, Database, DatabasePlan, DatabaseEngine,
   Bucket, StoragePlan, OpenClawInstance, OpenClawPlan,
@@ -31,7 +32,11 @@ export class MoltbotDenClient {
   constructor(
     private readonly baseUrl: string,
     private readonly apiKey?: string
-  ) {}
+  ) {
+    if (apiKey) {
+      debug('api', `Client initialized with key ${maskApiKey(apiKey)}`);
+    }
+  }
 
   // ─── Internal Helpers ───────────────────────────────────────────────────────
 
@@ -380,6 +385,100 @@ export class MoltbotDenClient {
 
   async createCheckoutSession(amountCents: number): Promise<{ url: string; session_id: string }> {
     return this.post('/v1/hosting/billing/checkout', { amount_cents: amountCents });
+  }
+
+  // ─── Email ──────────────────────────────────────────────────────────────────
+
+  async emailAccount(): Promise<Record<string, unknown>> {
+    return this.get('/email/account');
+  }
+
+  async emailInbox(limit = 20, offset = 0): Promise<Record<string, unknown>> {
+    return this.get(`/email/inbox?limit=${limit}&offset=${offset}`);
+  }
+
+  async emailSent(limit = 20, offset = 0): Promise<Record<string, unknown>> {
+    return this.get(`/email/sent?limit=${limit}&offset=${offset}`);
+  }
+
+  async emailSend(data: {
+    to: string;
+    subject: string;
+    body: string;
+    reply_to_message_id?: string;
+  }): Promise<Record<string, unknown>> {
+    return this.post('/email/send', data);
+  }
+
+  async emailThread(threadId: string): Promise<Record<string, unknown>> {
+    return this.get(`/email/thread/${threadId}`);
+  }
+
+  async emailMessage(messageId: string): Promise<Record<string, unknown>> {
+    return this.get(`/email/message/${messageId}`);
+  }
+
+  async emailMarkRead(messageId: string, unread = false): Promise<Record<string, unknown>> {
+    return this.post(`/email/message/${messageId}/read?unread=${unread}`);
+  }
+
+  async emailStar(messageId: string, starred = true): Promise<Record<string, unknown>> {
+    return this.post(`/email/message/${messageId}/star?starred=${starred}`);
+  }
+
+  async emailDelete(messageId: string): Promise<void> {
+    return this.delete(`/email/message/${messageId}`);
+  }
+
+  // ─── Skills / Marketplace ───────────────────────────────────────────────────
+
+  async skillsSearch(query: string, opts: {
+    category?: string;
+    sort?: string;
+    page?: number;
+    per_page?: number;
+  } = {}): Promise<Record<string, unknown>> {
+    const params = new URLSearchParams({ q: query });
+    if (opts.category) params.set('category', opts.category);
+    if (opts.sort) params.set('sort', opts.sort);
+    if (opts.page) params.set('page', String(opts.page));
+    if (opts.per_page) params.set('per_page', String(opts.per_page));
+    return this.get(`/marketplace/search?${params.toString()}`);
+  }
+
+  async skillsTrending(): Promise<Record<string, unknown>> {
+    return this.get('/marketplace/trending');
+  }
+
+  async skillsCategories(): Promise<Record<string, unknown>[]> {
+    return this.get('/marketplace/categories');
+  }
+
+  async skillsInfo(listingId: string): Promise<Record<string, unknown>> {
+    return this.get(`/marketplace/listings/${listingId}`);
+  }
+
+  async skillsFavorites(): Promise<Record<string, unknown>> {
+    return this.get('/marketplace/favorites');
+  }
+
+  async skillsFavorite(listingId: string): Promise<Record<string, unknown>> {
+    return this.post(`/marketplace/listings/${listingId}/favorite`);
+  }
+
+  async skillsUnfavorite(listingId: string): Promise<void> {
+    return this.delete(`/marketplace/listings/${listingId}/favorite`);
+  }
+
+  async skillsBrowseCategory(slug: string, opts: {
+    page?: number;
+    per_page?: number;
+  } = {}): Promise<Record<string, unknown>> {
+    const params = new URLSearchParams();
+    if (opts.page) params.set('page', String(opts.page));
+    if (opts.per_page) params.set('per_page', String(opts.per_page));
+    const qs = params.toString();
+    return this.get(`/marketplace/categories/${slug}${qs ? '?' + qs : ''}`);
   }
 }
 

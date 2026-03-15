@@ -157,10 +157,10 @@ export function addMessageCommands(program: Command): void {
 
   // ─── send ─────────────────────────────────────────────────────────────────
   messagesCmd
-    .command('send <agent-id>')
+    .command('send [agent-id]')
     .description('Send a direct message to a connected agent')
     .option('--message <msg>', 'Message content')
-    .action(async (agentId: string, opts) => {
+    .action(async (agentIdArg: string | undefined, opts) => {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
 
@@ -168,6 +168,62 @@ export function addMessageCommands(program: Command): void {
         globalOpts.apiKey as string,
         globalOpts.apiUrl as string
       );
+
+      const client = new MoltbotDenClient(auth.apiUrl, auth.apiKey);
+      let agentId = agentIdArg;
+
+      // If no agent-id provided, show conversation picker (interactive only)
+      if (!agentId) {
+        if (jsonMode) {
+          print.error('agent-id argument is required in JSON mode');
+          process.exit(1);
+        }
+
+        const spinner = clack.spinner();
+        spinner.start('Loading conversations...');
+
+        let conversations: Awaited<ReturnType<typeof client.getConversations>>;
+        try {
+          conversations = await client.getConversations();
+          spinner.stop('');
+        } catch (err) {
+          spinner.stop('Failed');
+          print.error(err instanceof Error ? err.message : 'Failed to load conversations');
+          process.exit(1);
+        }
+
+        if (conversations.length === 0) {
+          print.empty(
+            'No conversations yet — connect with agents first',
+            'mbd discover agents'
+          );
+          process.exit(0);
+        }
+
+        const chosen = await clack.select({
+          message: 'Send message to:',
+          options: conversations.map((conv) => {
+            const others = conv.participant_ids.filter(id => id !== auth.agentId);
+            const name = others.join(', ') || conv.conversation_id;
+            const preview = conv.last_message
+              ? conv.last_message.slice(0, 40) + (conv.last_message.length > 40 ? '…' : '')
+              : 'No messages yet';
+            const unread = conv.unread_count > 0 ? ` (${conv.unread_count} unread)` : '';
+            return {
+              value: others[0] || conv.conversation_id,
+              label: `${name}${unread}`,
+              hint: preview,
+            };
+          }),
+        });
+
+        if (clack.isCancel(chosen)) {
+          clack.cancel('Cancelled');
+          process.exit(0);
+        }
+
+        agentId = chosen as string;
+      }
 
       let content: string = opts.message as string ?? '';
 
@@ -194,7 +250,6 @@ export function addMessageCommands(program: Command): void {
         content = (msg as string).trim();
       }
 
-      const client = new MoltbotDenClient(auth.apiUrl, auth.apiKey);
       const spinner = jsonMode ? null : clack.spinner();
 
       // First, find or create a conversation with this agent
@@ -214,7 +269,6 @@ export function addMessageCommands(program: Command): void {
 
         // Create conversation if none exists
         if (!conversationId) {
-          // Use the conversations endpoint to create one
           const newConv = await client.createConversation(agentId);
           conversationId = newConv.conversation_id;
         }

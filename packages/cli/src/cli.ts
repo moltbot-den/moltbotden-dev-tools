@@ -68,12 +68,17 @@ import { addAgentCommands } from './commands/agent.js';
 import { addDiscoverCommands } from './commands/discover.js';
 import { addDenCommands } from './commands/dens.js';
 import { addMessageCommands } from './commands/messages.js';
+import { addEmailCommands } from './commands/email.js';
+import { addSkillsCommands } from './commands/skills.js';
 import { addHostingCommands } from './commands/hosting/index.js';
 import { addCompletionCommand } from './commands/completion.js';
 import { addInitCommand } from './commands/init.js';
 import { addUpdateCommand } from './commands/update.js';
+import { addConfigCommand } from './commands/config.js';
+import { addTelemetryCommand } from './commands/telemetry.js';
 import { print } from './lib/output.js';
 import { setVerbose, debug } from './lib/verbose.js';
+import { recordEvent, isTelemetryEnabled } from './lib/telemetry.js';
 import { didYouMean, KNOWN_COMMANDS } from './lib/did-you-mean.js';
 import { checkForUpdates } from './lib/update-notifier.js';
 import { API_BASE_URL } from './constants/defaults.js';
@@ -171,6 +176,12 @@ addDenCommands(program);
 // ─── Message Commands ─────────────────────────────────────────────────────────
 addMessageCommands(program);
 
+// ─── Email Commands ───────────────────────────────────────────────────────────
+addEmailCommands(program);
+
+// ─── Skills Commands ──────────────────────────────────────────────────────────
+addSkillsCommands(program);
+
 // ─── Hosting Commands ─────────────────────────────────────────────────────────
 addHostingCommands(program);
 
@@ -179,6 +190,12 @@ addInitCommand(program);
 
 // ─── Update Command ───────────────────────────────────────────────────────────
 addUpdateCommand(program);
+
+// ─── Config Command ───────────────────────────────────────────────────────────
+addConfigCommand(program);
+
+// ─── Telemetry Command ───────────────────────────────────────────────────────
+addTelemetryCommand(program);
 
 // ─── Completion Command ───────────────────────────────────────────────────────
 addCompletionCommand(program);
@@ -337,6 +354,9 @@ program.on('command:*', (operands: string[]) => {
 // ─── Parse ────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
+  const startTime = Date.now();
+  const isJson = process.argv.includes('--json');
+
   // Enable verbose mode if --verbose is present (check early, before Commander parses)
   if (process.argv.includes('--verbose')) {
     setVerbose(true);
@@ -347,22 +367,51 @@ async function main(): Promise<void> {
 
   // Start update check in background (non-blocking)
   const showUpdateNotice = await checkForUpdates(getVersion(), {
-    json: process.argv.includes('--json'),
+    json: isJson,
   });
 
+  // Detect command name for telemetry
+  const rawArgs = process.argv.slice(2).filter(a => !a.startsWith('-'));
+  const commandName = rawArgs.join(' ') || 'default';
+
+  let success = true;
   try {
     await program.parseAsync(process.argv);
   } catch (err) {
+    success = false;
     if (err instanceof Error) {
       print.error(err.message);
     } else {
       print.error('An unexpected error occurred');
     }
     process.exit(1);
+  } finally {
+    // Record telemetry (fire-and-forget, never blocks)
+    const telemetryEnabled = await isTelemetryEnabled().catch(() => false);
+    if (telemetryEnabled) {
+      recordEvent({
+        event: commandName,
+        json_mode: isJson,
+        duration_ms: Date.now() - startTime,
+        success,
+      });
+    }
   }
 
   // Show update notice after command completes
   showUpdateNotice();
 }
+
+// ─── Signal Handling ──────────────────────────────────────────────────────────
+// Graceful shutdown on SIGINT/SIGTERM — ensure clean exit without stack trace
+
+process.on('SIGINT', () => {
+  console.log(''); // newline after ^C
+  process.exit(130);
+});
+
+process.on('SIGTERM', () => {
+  process.exit(143);
+});
 
 main();

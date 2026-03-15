@@ -258,4 +258,114 @@ describe('CLI E2E', () => {
       expect(parsed.ok).toBe(false);
     });
   });
+
+  // ─── Email Command ─────────────────────────────────────────────────────────
+
+  describe('email', () => {
+    it('should show help for email command', () => {
+      const output = exec('email --help');
+      expect(output).toContain('inbox');
+      expect(output).toContain('sent');
+      expect(output).toContain('send');
+      expect(output).toContain('read');
+      expect(output).toContain('thread');
+      expect(output).toContain('address');
+    });
+
+    it('should require auth for email inbox in JSON mode', () => {
+      const { code } = execWithCode('--json email inbox --api-key invalid_key_here');
+      expect(code).not.toBe(0);
+    });
+  });
+
+  // ─── Skills Command ────────────────────────────────────────────────────────
+
+  describe('skills', () => {
+    it('should show help for skills command', () => {
+      const output = exec('skills --help');
+      expect(output).toContain('search');
+      expect(output).toContain('trending');
+      expect(output).toContain('categories');
+      expect(output).toContain('info');
+      expect(output).toContain('favorites');
+      expect(output).toContain('browse');
+    });
+
+    it('should return results for skills search in JSON mode', () => {
+      const output = exec('--json skills search "test" --api-key invalid_key_here');
+      const parsed = JSON.parse(output);
+      // Marketplace search is public — should return results
+      expect(parsed).toHaveProperty('total_results');
+    });
+  });
+
+  // ─── Config Command ────────────────────────────────────────────────────────
+
+  describe('config', () => {
+    it('should show help for config command', () => {
+      const output = exec('config --help');
+      expect(output).toContain('list');
+      expect(output).toContain('get');
+      expect(output).toContain('set');
+      expect(output).toContain('reset');
+      expect(output).toContain('path');
+    });
+
+    it('should show config path in JSON mode', () => {
+      const output = exec('--json config path');
+      const parsed = JSON.parse(output);
+      expect(parsed.config_file).toContain('.moltbotden');
+      expect(parsed.config_file).toContain('config.json');
+    });
+
+    it('should reject unknown config keys', () => {
+      const { code } = execWithCode('--json config set unknown_key value');
+      expect(code).not.toBe(0);
+    });
+  });
+
+  // ─── Telemetry Command ─────────────────────────────────────────────────────
+
+  describe('telemetry', () => {
+    it('should show help for telemetry command', () => {
+      const output = exec('telemetry --help');
+      expect(output).toContain('enable');
+      expect(output).toContain('disable');
+      expect(output).toContain('status');
+    });
+
+    it('should show telemetry status in JSON mode', () => {
+      const output = exec('--json telemetry status');
+      const parsed = JSON.parse(output);
+      expect(typeof parsed.enabled).toBe('boolean');
+    });
+  });
+
+  // ─── Did You Mean — new commands ───────────────────────────────────────────
+
+  describe('did you mean — new commands', () => {
+    it('should suggest email for emal', () => {
+      const { output, code } = execWithCode('emal');
+      expect(code).toBe(1);
+      expect(output).toContain('email');
+    });
+
+    it('should suggest skills for skils', () => {
+      const { output, code } = execWithCode('skils');
+      expect(code).toBe(1);
+      expect(output).toContain('skills');
+    });
+
+    it('should suggest config for conifg', () => {
+      const { output, code } = execWithCode('conifg');
+      expect(code).toBe(1);
+      expect(output).toContain('config');
+    });
+
+    it('should suggest telemetry for telmetry', () => {
+      const { output, code } = execWithCode('telmetry');
+      expect(code).toBe(1);
+      expect(output).toContain('telemetry');
+    });
+  });
 });

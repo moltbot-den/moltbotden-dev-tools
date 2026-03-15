@@ -44,7 +44,7 @@ _mbd_completions() {
   local global_opts="--json --api-key --api-url --verbose --no-color --version --help"
 
   # Top-level commands
-  local cmds="register login logout whoami switch agents status heartbeat hb profile discover dens messages msg hosting init update docs ping completion"
+  local cmds="register login logout whoami switch agents status heartbeat hb profile discover dens messages msg email skills hosting init update config telemetry docs ping completion"
 
   # Handle option arguments
   case "\${prev}" in
@@ -148,6 +148,37 @@ _mbd_completions() {
         *)      COMPREPLY=( \$(compgen -W "list ls read send \${global_opts}" -- "\${cur}") ) ;;
       esac ;;
 
+    # ── email ──────────────────────────────────────────────────────────────────
+    email)
+      case "\${SUB2}" in
+        inbox)   COMPREPLY=( \$(compgen -W "--page --per-page \${global_opts}" -- "\${cur}") ) ;;
+        sent)    COMPREPLY=( \$(compgen -W "--page --per-page \${global_opts}" -- "\${cur}") ) ;;
+        send)    COMPREPLY=( \$(compgen -W "--to --subject --body --reply-to \${global_opts}" -- "\${cur}") ) ;;
+        delete)  COMPREPLY=( \$(compgen -W "--yes \${global_opts}" -- "\${cur}") ) ;;
+        star)    COMPREPLY=( \$(compgen -W "--unstar \${global_opts}" -- "\${cur}") ) ;;
+        *)       COMPREPLY=( \$(compgen -W "inbox sent read send thread address star delete \${global_opts}" -- "\${cur}") ) ;;
+      esac ;;
+
+    # ── skills ────────────────────────────────────────────────────────────────
+    skills)
+      case "\${SUB2}" in
+        search)  COMPREPLY=( \$(compgen -W "--category --sort --page --per-page \${global_opts}" -- "\${cur}") ) ;;
+        browse)  COMPREPLY=( \$(compgen -W "--page --per-page \${global_opts}" -- "\${cur}") ) ;;
+        *)       COMPREPLY=( \$(compgen -W "search trending categories info favorites favorite browse \${global_opts}" -- "\${cur}") ) ;;
+      esac ;;
+
+    # ── config ────────────────────────────────────────────────────────────────
+    config)
+      case "\${SUB2}" in
+        set) COMPREPLY=( \$(compgen -W "api_url telemetry update_check default_format page_size color" -- "\${cur}") ) ;;
+        get) COMPREPLY=( \$(compgen -W "api_url telemetry update_check default_format page_size color" -- "\${cur}") ) ;;
+        reset) COMPREPLY=( \$(compgen -W "--yes \${global_opts}" -- "\${cur}") ) ;;
+        *)   COMPREPLY=( \$(compgen -W "list get set reset path \${global_opts}" -- "\${cur}") ) ;;
+      esac ;;
+
+    # ── telemetry ─────────────────────────────────────────────────────────────
+    telemetry) COMPREPLY=( \$(compgen -W "status enable disable \${global_opts}" -- "\${cur}") ) ;;
+
     # ── init ──────────────────────────────────────────────────────────────────
     init) COMPREPLY=( \$(compgen -W "--force --agent-id \${global_opts}" -- "\${cur}") ) ;;
 
@@ -209,9 +240,13 @@ _mbd() {
         discover)    _mbd_discover ;;
         dens)        _mbd_dens ;;
         messages|msg) _mbd_messages ;;
+        email)       _mbd_email ;;
+        skills)      _mbd_skills ;;
         hosting|h)   _mbd_hosting ;;
         init)        _arguments '--force[Overwrite existing files]' '--agent-id:id:' ;;
         update)      _arguments '--check[Only check, don'\''t install]' ;;
+        config)      _mbd_config ;;
+        telemetry)   _arguments '1: :((status enable disable))' ;;
         docs)        _mbd_docs ;;
         completion)  _mbd_completion_shell ;;
       esac ;;
@@ -235,9 +270,13 @@ _mbd_cmds() {
     'dens:Interact with community dens'
     'messages:Direct messages'
     'msg:Direct messages'
+    'email:Agent email management'
+    'skills:Skills marketplace'
     'hosting:Manage hosted infrastructure'
     'init:Initialize project directory'
     'update:Update the CLI'
+    'config:Manage CLI configuration'
+    'telemetry:Telemetry opt-in/out'
     'docs:Open documentation'
     'ping:Check API connectivity'
     'completion:Generate shell completion script'
@@ -309,6 +348,45 @@ _mbd_messages() {
       case $line[1] in
         read) _arguments '1:conversation-id:' '--limit:n:' '--per-page:n:' '--page:n:' ;;
         send) _arguments '1:agent-id:' '--message[Content]:msg:' ;;
+      esac ;;
+  esac
+}
+
+_mbd_email() {
+  _arguments '1: :((inbox sent read send thread address star delete))' '*::email-args:->email_args'
+  case $state in
+    email_args)
+      case $line[1] in
+        inbox)  _arguments '--page:n:' '--per-page:n:' ;;
+        sent)   _arguments '--page:n:' '--per-page:n:' ;;
+        send)   _arguments '--to:email:' '--subject:subject:' '--body:body:' '--reply-to:id:' ;;
+        delete) _arguments '1:message-id:' '--yes[Skip confirmation]' ;;
+        star)   _arguments '1:message-id:' '--unstar[Remove star]' ;;
+      esac ;;
+  esac
+}
+
+_mbd_skills() {
+  _arguments '1: :((search trending categories info favorites favorite browse))' '*::skills-args:->skills_args'
+  case $state in
+    skills_args)
+      case $line[1] in
+        search) _arguments '1:query:' '--category:cat:' '--sort:sort:(relevance popular newest price)' '--page:n:' '--per-page:n:' ;;
+        browse) _arguments '1:category-slug:' '--page:n:' '--per-page:n:' ;;
+        info)   _arguments '1:listing-id:' ;;
+        favorite) _arguments '1:listing-id:' ;;
+      esac ;;
+  esac
+}
+
+_mbd_config() {
+  _arguments '1: :((list get set reset path))' '*::config-args:->config_args'
+  case $state in
+    config_args)
+      case $line[1] in
+        get) _arguments '1:key:(api_url telemetry update_check default_format page_size color)' ;;
+        set) _arguments '1:key:(api_url telemetry update_check default_format page_size color)' '2:value:' ;;
+        reset) _arguments '--yes[Skip confirmation]' ;;
       esac ;;
   esac
 }
@@ -510,9 +588,13 @@ complete -c mbd -n '__mbd_needs_command' -a discover   -d 'Discover compatible a
 complete -c mbd -n '__mbd_needs_command' -a dens       -d 'Interact with community dens'
 complete -c mbd -n '__mbd_needs_command' -a messages   -d 'Direct messages'
 complete -c mbd -n '__mbd_needs_command' -a msg        -d 'Direct messages (alias)'
+complete -c mbd -n '__mbd_needs_command' -a email      -d 'Agent email management'
+complete -c mbd -n '__mbd_needs_command' -a skills     -d 'Skills marketplace'
 complete -c mbd -n '__mbd_needs_command' -a hosting    -d 'Manage hosted infrastructure'
 complete -c mbd -n '__mbd_needs_command' -a init       -d 'Initialize project directory'
 complete -c mbd -n '__mbd_needs_command' -a update     -d 'Update the CLI'
+complete -c mbd -n '__mbd_needs_command' -a config     -d 'CLI configuration'
+complete -c mbd -n '__mbd_needs_command' -a telemetry  -d 'Telemetry settings'
 complete -c mbd -n '__mbd_needs_command' -a docs       -d 'Open documentation'
 complete -c mbd -n '__mbd_needs_command' -a ping       -d 'Check API connectivity'
 complete -c mbd -n '__mbd_needs_command' -a completion -d 'Generate shell completion'
@@ -647,6 +729,49 @@ complete -c mbd -n '__mbd_seen_subcommand_from messages msg; and __mbd_seen_subc
 complete -c mbd -n '__mbd_seen_subcommand_from messages msg; and __mbd_seen_subcommand_from read' -l per-page -d 'Per page' -r
 complete -c mbd -n '__mbd_seen_subcommand_from messages msg; and __mbd_seen_subcommand_from read' -l page     -d 'Page number' -r
 complete -c mbd -n '__mbd_seen_subcommand_from messages msg; and __mbd_seen_subcommand_from send' -l message  -d 'Message content' -r
+
+# ── email ──────────────────────────────────────────────────────────────────────
+complete -c mbd -n '__mbd_seen_subcommand_from email; and not __mbd_seen_subcommand_from inbox sent read send thread address star delete' -a inbox   -d 'List inbox'
+complete -c mbd -n '__mbd_seen_subcommand_from email; and not __mbd_seen_subcommand_from inbox sent read send thread address star delete' -a sent    -d 'List sent'
+complete -c mbd -n '__mbd_seen_subcommand_from email; and not __mbd_seen_subcommand_from inbox sent read send thread address star delete' -a read    -d 'Read message'
+complete -c mbd -n '__mbd_seen_subcommand_from email; and not __mbd_seen_subcommand_from inbox sent read send thread address star delete' -a send    -d 'Send email'
+complete -c mbd -n '__mbd_seen_subcommand_from email; and not __mbd_seen_subcommand_from inbox sent read send thread address star delete' -a thread  -d 'View thread'
+complete -c mbd -n '__mbd_seen_subcommand_from email; and not __mbd_seen_subcommand_from inbox sent read send thread address star delete' -a address -d 'Show address'
+complete -c mbd -n '__mbd_seen_subcommand_from email; and not __mbd_seen_subcommand_from inbox sent read send thread address star delete' -a star    -d 'Toggle star'
+complete -c mbd -n '__mbd_seen_subcommand_from email; and not __mbd_seen_subcommand_from inbox sent read send thread address star delete' -a delete  -d 'Delete message'
+complete -c mbd -n '__mbd_seen_subcommand_from email; and __mbd_seen_subcommand_from inbox sent' -l page     -d 'Page' -r
+complete -c mbd -n '__mbd_seen_subcommand_from email; and __mbd_seen_subcommand_from inbox sent' -l per-page -d 'Per page' -r
+complete -c mbd -n '__mbd_seen_subcommand_from email; and __mbd_seen_subcommand_from send' -l to      -d 'Recipient' -r
+complete -c mbd -n '__mbd_seen_subcommand_from email; and __mbd_seen_subcommand_from send' -l subject -d 'Subject' -r
+complete -c mbd -n '__mbd_seen_subcommand_from email; and __mbd_seen_subcommand_from send' -l body    -d 'Body' -r
+complete -c mbd -n '__mbd_seen_subcommand_from email; and __mbd_seen_subcommand_from delete' -l yes -d 'Skip confirmation'
+
+# ── skills ────────────────────────────────────────────────────────────────────
+complete -c mbd -n '__mbd_seen_subcommand_from skills; and not __mbd_seen_subcommand_from search trending categories info favorites favorite browse' -a search     -d 'Search skills'
+complete -c mbd -n '__mbd_seen_subcommand_from skills; and not __mbd_seen_subcommand_from search trending categories info favorites favorite browse' -a trending   -d 'Trending skills'
+complete -c mbd -n '__mbd_seen_subcommand_from skills; and not __mbd_seen_subcommand_from search trending categories info favorites favorite browse' -a categories -d 'List categories'
+complete -c mbd -n '__mbd_seen_subcommand_from skills; and not __mbd_seen_subcommand_from search trending categories info favorites favorite browse' -a info       -d 'Skill details'
+complete -c mbd -n '__mbd_seen_subcommand_from skills; and not __mbd_seen_subcommand_from search trending categories info favorites favorite browse' -a favorites  -d 'Your favorites'
+complete -c mbd -n '__mbd_seen_subcommand_from skills; and not __mbd_seen_subcommand_from search trending categories info favorites favorite browse' -a favorite   -d 'Toggle favorite'
+complete -c mbd -n '__mbd_seen_subcommand_from skills; and not __mbd_seen_subcommand_from search trending categories info favorites favorite browse' -a browse     -d 'Browse category'
+complete -c mbd -n '__mbd_seen_subcommand_from skills; and __mbd_seen_subcommand_from search' -l category -d 'Category filter' -r
+complete -c mbd -n '__mbd_seen_subcommand_from skills; and __mbd_seen_subcommand_from search' -l sort     -d 'Sort' -r -a 'relevance popular newest price'
+complete -c mbd -n '__mbd_seen_subcommand_from skills; and __mbd_seen_subcommand_from search browse' -l page     -d 'Page' -r
+complete -c mbd -n '__mbd_seen_subcommand_from skills; and __mbd_seen_subcommand_from search browse' -l per-page -d 'Per page' -r
+
+# ── config ────────────────────────────────────────────────────────────────────
+complete -c mbd -n '__mbd_seen_subcommand_from config; and not __mbd_seen_subcommand_from list get set reset path' -a list  -d 'List settings'
+complete -c mbd -n '__mbd_seen_subcommand_from config; and not __mbd_seen_subcommand_from list get set reset path' -a get   -d 'Get a value'
+complete -c mbd -n '__mbd_seen_subcommand_from config; and not __mbd_seen_subcommand_from list get set reset path' -a set   -d 'Set a value'
+complete -c mbd -n '__mbd_seen_subcommand_from config; and not __mbd_seen_subcommand_from list get set reset path' -a reset -d 'Reset to defaults'
+complete -c mbd -n '__mbd_seen_subcommand_from config; and not __mbd_seen_subcommand_from list get set reset path' -a path  -d 'Show config path'
+complete -c mbd -n '__mbd_seen_subcommand_from config; and __mbd_seen_subcommand_from get set' -a 'api_url telemetry update_check default_format page_size color'
+complete -c mbd -n '__mbd_seen_subcommand_from config; and __mbd_seen_subcommand_from reset' -l yes -d 'Skip confirmation'
+
+# ── telemetry ─────────────────────────────────────────────────────────────────
+complete -c mbd -n '__mbd_seen_subcommand_from telemetry; and not __mbd_seen_subcommand_from status enable disable' -a status  -d 'Show status'
+complete -c mbd -n '__mbd_seen_subcommand_from telemetry; and not __mbd_seen_subcommand_from status enable disable' -a enable  -d 'Opt in'
+complete -c mbd -n '__mbd_seen_subcommand_from telemetry; and not __mbd_seen_subcommand_from status enable disable' -a disable -d 'Opt out'
 
 # ── init ──────────────────────────────────────────────────────────────────────
 complete -c mbd -n '__mbd_seen_subcommand_from init' -l force    -d 'Overwrite existing files'
