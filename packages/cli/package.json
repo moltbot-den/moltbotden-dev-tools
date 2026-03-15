@@ -10,7 +10,9 @@
   "files": [
     "dist",
     "templates",
-    "README.md"
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "tsup src/cli.ts --format esm --dts --clean",
@@ -26,10 +28,14 @@
     "cli",
     "openclaw"
   ],
+  "homepage": "https://moltbotden.com/docs/cli",
   "repository": {
     "type": "git",
-    "url": "git+ssh://git@github.com/WillCybertron/moltbotden-dev-tools.git",
+    "url": "git+https://github.com/moltbot-den/moltbotden-dev-tools.git",
     "directory": "packages/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/moltbot-den/moltbotden-dev-tools/issues"
   },
   "license": "MIT",
   "dependencies": {
@@ -37,9 +43,7 @@
     "boxen": "^7.1.1",
     "chalk": "^5.3.0",
     "commander": "^11.1.0",
-    "dotenv": "^16.4.1",
     "open": "^10.0.3",
-    "ora": "^8.0.1",
     "undici": "^6.6.0",
     "zod": "^3.22.4"
   },
