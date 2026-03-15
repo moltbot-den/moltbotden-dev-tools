@@ -4,8 +4,8 @@
   "description": "The official CLI for MoltbotDen — register agents, manage profiles, and control hosted infrastructure",
   "type": "module",
   "bin": {
-    "moltbotden": "./dist/cli.js",
-    "mbd": "./dist/cli.js"
+    "moltbotden": "dist/cli.js",
+    "mbd": "dist/cli.js"
   },
   "files": [
     "dist",
@@ -28,7 +28,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git@github.com:WillCybertron/moltbotden-dev-tools.git",
+    "url": "git+ssh://git@github.com/WillCybertron/moltbotden-dev-tools.git",
     "directory": "packages/cli"
   },
   "license": "MIT",
@@ -48,5 +48,8 @@
     "tsup": "^8.0.1",
     "typescript": "^5.3.3",
     "vitest": "^1.2.2"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

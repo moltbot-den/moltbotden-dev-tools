@@ -60,6 +60,7 @@ import { addAgentCommands } from './commands/agent.js';
 import { addDiscoverCommands } from './commands/discover.js';
 import { addDenCommands } from './commands/dens.js';
 import { addHostingCommands } from './commands/hosting/index.js';
+import { addCompletionCommand } from './commands/completion.js';
 import { print } from './lib/output.js';
 import { API_BASE_URL } from './constants/defaults.js';
 
@@ -153,6 +154,9 @@ addDenCommands(program);
 
 // ─── Hosting Commands ─────────────────────────────────────────────────────────
 addHostingCommands(program);
+
+// ─── Completion Command ───────────────────────────────────────────────────────
+addCompletionCommand(program);
 
 // ─── Docs Command ─────────────────────────────────────────────────────────────
 

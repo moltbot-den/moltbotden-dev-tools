@@ -382,6 +382,122 @@ export function addVMCommands(parent: Command, getClient: () => Promise<MoltbotD
         process.exit(1);
       }
     });
+
+  // ─── logs ─────────────────────────────────────────────────────────────────────
+  vmCmd
+    .command('logs <vm-id>')
+    .description('Stream logs from a VM (polls the console endpoint)')
+    .option('--lines <n>',  'Initial lines to show', '50')
+    .option('--follow',     'Keep streaming new output (polls every 3s)')
+    .option('--interval <ms>', 'Poll interval in ms when using --follow', '3000')
+    .action(async (vmId: string, opts) => {
+      const client = await getClient();
+      const json = jsonMode();
+      const lines = Number(opts.lines);
+      const follow = Boolean(opts.follow);
+      const interval = Number(opts.interval);
+
+      if (!json) {
+        if (follow) {
+          console.log(chalk.gray(`  Streaming logs for ${chalk.cyan(vmId)} (Ctrl+C to stop)...\n`));
+        } else {
+          console.log(chalk.gray(`  Last ${lines} lines from ${chalk.cyan(vmId)}:\n`));
+        }
+      }
+
+      // Fetch initial output
+      let lastOutput = '';
+
+      const fetchAndPrint = async (isInitial = false): Promise<boolean> => {
+        try {
+          const result = await client.getVMConsole(vmId, isInitial ? lines : Math.min(lines, 200));
+          const output = result.output ?? '';
+
+          if (json) {
+            console.log(JSON.stringify({ vm_id: vmId, output, timestamp: new Date().toISOString() }));
+            return true;
+          }
+
+          if (isInitial) {
+            if (!output.trim()) {
+              print.empty('No console output yet');
+            } else {
+              printLogLines(output, undefined, follow);
+              lastOutput = output;
+            }
+          } else {
+            // Only print new lines (diff)
+            const newContent = getNewContent(lastOutput, output);
+            if (newContent) {
+              printLogLines(newContent, undefined, follow);
+              lastOutput = output;
+            }
+          }
+          return true;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : 'Failed to fetch logs';
+          if (json) {
+            process.stderr.write(JSON.stringify({ error: msg }) + '\n');
+          } else {
+            print.error(msg);
+          }
+          return false;
+        }
+      };
+
+      // Initial fetch
+      const ok = await fetchAndPrint(true);
+      if (!ok) process.exit(1);
+
+      // Polling loop for --follow
+      if (follow) {
+        process.on('SIGINT', () => {
+          if (!json) console.log(chalk.gray('\n  Log stream stopped.'));
+          process.exit(0);
+        });
+
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          await sleep(interval);
+          await fetchAndPrint(false);
+        }
+      }
+    });
+}
+
+// ─── Log Helpers ──────────────────────────────────────────────────────────────
+
+function printLogLines(text: string, prefix?: string, dimTimestamps = false): void {
+  const lines = text.split('\n').filter(Boolean);
+  for (const line of lines) {
+    // Detect log levels for color coding
+    if (/\b(ERROR|FATAL|CRIT)\b/i.test(line)) {
+      console.log('  ' + chalk.red(line));
+    } else if (/\b(WARN|WARNING)\b/i.test(line)) {
+      console.log('  ' + chalk.yellow(line));
+    } else if (/\b(INFO|DEBUG)\b/i.test(line)) {
+      console.log('  ' + chalk.gray(line));
+    } else {
+      console.log('  ' + chalk.gray(line));
+    }
+  }
+}
+
+function getNewContent(prev: string, curr: string): string {
+  if (!prev) return curr;
+  // Find the overlap — return only lines that are new
+  const prevLines = prev.split('\n');
+  const currLines = curr.split('\n');
+  // Find where prev ends in curr (compare from end)
+  const lastPrevLine = prevLines[prevLines.length - 1];
+  const idx = currLines.lastIndexOf(lastPrevLine);
+  if (idx === -1) return curr; // No overlap found — return all
+  const newLines = currLines.slice(idx + 1);
+  return newLines.join('\n');
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
