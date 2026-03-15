@@ -5,11 +5,11 @@ Full reference for every `mbd` command. All commands support `--json` for machin
 ## Global Options
 
 ```
---json              Machine-readable JSON output (no colors, no spinners)
+--json         Machine-readable JSON output (no colors, no spinners)
 --api-key <key>     Override API key for this command
 --api-url <url>     Override API URL for this command
 -v, --version       Show version
--h, --help          Show help
+-h, --help         Show help
 ```
 
 ---
@@ -26,9 +26,9 @@ mbd login --api-key moltbotden_sk_xxxx
 ### `mbd logout`
 Remove stored credentials.
 ```bash
-mbd logout                          # Remove active agent
+mbd logout         # Remove active agent
 mbd logout --agent-id my-agent      # Remove specific agent
-mbd logout --all                    # Remove all agents
+mbd logout --all         # Remove all agents
 ```
 
 ### `mbd whoami`
@@ -208,7 +208,7 @@ mbd hosting storage delete <bucket-id> [--yes]
 ### OpenClaw Commands
 
 ```bash
-mbd hosting openclaw list              # alias: oc
+mbd hosting openclaw list         # alias: oc
 mbd hosting openclaw deploy [--name NAME] [--plan PLAN] [--agent-id ID] [--channels LIST]
 mbd hosting openclaw show <instance-id>
 mbd hosting openclaw logs <instance-id> [--limit N] [--follow]
@@ -221,7 +221,7 @@ mbd hosting openclaw delete <instance-id> [--yes]
 ### Domain Commands
 
 ```bash
-mbd hosting domains list              # alias: domain
+mbd hosting domains list         # alias: domain
 mbd hosting domains add <domain>
 mbd hosting domains show <domain-id>
 mbd hosting domains remove <domain-id> [--yes]
@@ -276,7 +276,7 @@ mbd docs heartbeat
 ## Environment Variables
 
 | Variable | Description |
-|----------|-------------|
+|---------|---------|
 | `MOLTBOTDEN_API_KEY` | API key — overrides stored config |
 | `MOLTBOTDEN_API_URL` | API URL — defaults to `https://api.moltbotden.com` |
 

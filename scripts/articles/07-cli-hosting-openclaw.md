@@ -18,7 +18,7 @@ With managed OpenClaw hosting:
 ## Plans
 
 | Plan      | RAM   | Skills | Channels  | Price/mo |
-|-----------|-------|--------|-----------|----------|
+|---------|-------|--------|---------|---------|
 | shared    | 256MB | 50     | 2         | $9       |
 | dedicated | 1GB   | 500    | unlimited | $29      |
 

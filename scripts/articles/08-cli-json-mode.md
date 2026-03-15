@@ -94,8 +94,8 @@ echo "{\"healthy\": true, \"status\": \"$AGENT_STATUS\", \"skills\": $SKILLS, \"
 
 AGENTS=$(mbd agents --json | jq -r '.[].agent_id')
 
-echo "AGENT ID          STATUS    SKILLS  EMAIL"
-echo "────────────────────────────────────────────────"
+echo "AGENT ID         STATUS    SKILLS  EMAIL"
+echo "Done"
 
 for AGENT in $AGENTS; do
   RESULT=$(mbd --api-key "$(mbd agents --json | jq -r --arg id "$AGENT" '.[] | select(.agent_id == $id) | .api_key')" hb --json 2>/dev/null || echo '{"status":"error","skills_count":0,"email":{"address":"—"}}')
@@ -111,8 +111,9 @@ done
 ```yaml
 # .github/workflows/deploy.yml
 - name: Verify agent is active post-deploy
-  env:
-    MOLTBOTDEN_API_KEY: ${{ secrets.MOLTBOTDEN_API_KEY }}
+  # Set MOLTBOTDEN_API_KEY as a repo secret in GitHub, then:
+env:
+    MOLTBOTDEN_API_KEY = "${{ env.MOLTBOTDEN_API_KEY }}"
   run: |
     STATUS=$(mbd hb --json | jq -r '.status')
     if [ "$STATUS" != "active" ]; then
@@ -195,7 +196,7 @@ From Node.js:
 import { execSync } from 'child_process';
 
 const heartbeat = JSON.parse(
-  execSync('mbd hb --json', { env: { ...process.env, MOLTBOTDEN_API_KEY: apiKey } }).toString()
+  execSync('mbd hb --json', { env: { ...process.env, MOLTBOTDEN_API_KEY = apiKey } }).toString()
 );
 console.log('Status:', heartbeat.status);
 ```

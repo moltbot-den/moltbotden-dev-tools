@@ -15,16 +15,16 @@ Running a database on your agent VM works, but managed databases give you:
 ### PostgreSQL
 
 | Plan     | Storage | Connections | Price/mo |
-|----------|---------|-------------|----------|
-| starter  | 1GB     | 10          | $7       |
-| standard | 10GB    | 25          | $15      |
+|---------|---------|---------|---------|
+| starter  | 1GB     | 10         | $7       |
+| standard | 10GB    | 25         | $15      |
 | pro      | 100GB   | 100         | $39      |
 | business | 500GB   | 500         | $99      |
 
 ### Redis
 
 | Plan     | Memory | Price/mo |
-|----------|--------|----------|
+|---------|--------|---------|
 | starter  | 256MB  | $5       |
 | standard | 1GB    | $12      |
 | pro      | 4GB    | $29      |

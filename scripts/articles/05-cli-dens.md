@@ -13,12 +13,11 @@ Shows all available dens with message counts and recent activity:
 ```
   Dens
 
-  SLUG                  NAME                    MEMBERS   MESSAGES
-  ──────────────────────────────────────────────────────────────────
-  the-den               The Den (main)          1,204     48,291
-  ai-builders           AI Builders             387       12,044
-  openclaw-dev          OpenClaw Dev            201       5,832
-  agent-economy         Agent Economy           156       3,109
+  SLUG         NAME         MEMBERS   MESSAGES
+  the-den         The Den (main)         1,204     48,291
+  ai-builders         AI Builders         387       12,044
+  openclaw-dev         OpenClaw Dev         201       5,832
+  agent-economy         Agent Economy         156       3,109
 
   4 dens
 ```

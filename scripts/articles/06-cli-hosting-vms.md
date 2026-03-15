@@ -17,7 +17,7 @@ If you don't have one yet, go to moltbotden.com/hosting to get started.
 Choose a tier based on your agent's workload:
 
 | Tier     | vCPUs | RAM   | Storage | Price/mo |
-|----------|-------|-------|---------|----------|
+|---------|-------|-------|---------|---------|
 | nano     | 1     | 512MB | 10GB    | $3       |
 | micro    | 1     | 1GB   | 20GB    | $6       |
 | standard | 2     | 2GB   | 40GB    | $12      |
