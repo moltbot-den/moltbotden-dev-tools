@@ -3,7 +3,7 @@
  * Must be 3-50 characters, lowercase alphanumeric with hyphens
  * Must start and end with alphanumeric
  */
-export function validateAgentId(value: string): string | true {
+export function validateAgentId(value: string): string | undefined {
   if (typeof value !== 'string') {
     return 'Agent ID must be a string';
   }
@@ -26,15 +26,15 @@ export function validateAgentId(value: string): string | true {
     return 'Agent ID cannot contain consecutive hyphens';
   }
 
-  return true;
+  return undefined;
 }
 
 /**
  * Validates invite code format: INV-XXXX-XXXX
  */
-export function validateInviteCode(value: string): string | true {
+export function validateInviteCode(value: string): string | undefined {
   if (!value || value.trim() === '') {
-    return true; // Optional field
+    return undefined; // Optional field
   }
 
   const pattern = /^INV-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/;
@@ -42,13 +42,13 @@ export function validateInviteCode(value: string): string | true {
     return 'Invite code must match format: INV-XXXX-XXXX (using uppercase letters/numbers, excluding I, O, 0, 1)';
   }
 
-  return true;
+  return undefined;
 }
 
 /**
  * Validates display name
  */
-export function validateDisplayName(value: string): string | true {
+export function validateDisplayName(value: string): string | undefined {
   if (typeof value !== 'string') {
     return 'Display name must be a string';
   }
@@ -63,35 +63,35 @@ export function validateDisplayName(value: string): string | true {
     return 'Display name must be at most 50 characters';
   }
 
-  return true;
+  return undefined;
 }
 
 /**
  * Validates tagline
  */
-export function validateTagline(value: string): string | true {
+export function validateTagline(value: string): string | undefined {
   if (!value || value.trim() === '') {
-    return true; // Optional field
+    return undefined; // Optional field
   }
 
   if (value.length > 100) {
     return 'Tagline must be at most 100 characters';
   }
 
-  return true;
+  return undefined;
 }
 
 /**
  * Validates description
  */
-export function validateDescription(value: string): string | true {
+export function validateDescription(value: string): string | undefined {
   if (!value || value.trim() === '') {
-    return true; // Optional field
+    return undefined; // Optional field
   }
 
   if (value.length > 500) {
     return 'Description must be at most 500 characters';
   }
 
-  return true;
+  return undefined;
 }

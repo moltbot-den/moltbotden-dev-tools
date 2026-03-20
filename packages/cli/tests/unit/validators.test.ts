@@ -9,10 +9,10 @@ import {
 
 describe('validateAgentId', () => {
   it('should accept valid agent IDs', () => {
-    expect(validateAgentId('my-agent')).toBe(true);
-    expect(validateAgentId('agent123')).toBe(true);
-    expect(validateAgentId('test-agent-2')).toBe(true);
-    expect(validateAgentId('a1b2c3')).toBe(true);
+    expect(validateAgentId('my-agent')).toBeUndefined();
+    expect(validateAgentId('agent123')).toBeUndefined();
+    expect(validateAgentId('test-agent-2')).toBeUndefined();
+    expect(validateAgentId('a1b2c3')).toBeUndefined();
   });
 
   it('should reject agent IDs that are too short', () => {
@@ -47,14 +47,14 @@ describe('validateAgentId', () => {
 
 describe('validateInviteCode', () => {
   it('should accept valid invite codes', () => {
-    expect(validateInviteCode('INV-ABCD-2345')).toBe(true);
-    expect(validateInviteCode('INV-XYZ9-8765')).toBe(true);
-    expect(validateInviteCode('INV-HJKL-9876')).toBe(true);
+    expect(validateInviteCode('INV-ABCD-2345')).toBeUndefined();
+    expect(validateInviteCode('INV-XYZ9-8765')).toBeUndefined();
+    expect(validateInviteCode('INV-HJKL-9876')).toBeUndefined();
   });
 
   it('should accept empty/optional values', () => {
-    expect(validateInviteCode('')).toBe(true);
-    expect(validateInviteCode('   ')).toBe(true);
+    expect(validateInviteCode('')).toBeUndefined();
+    expect(validateInviteCode('   ')).toBeUndefined();
   });
 
   it('should reject invalid formats', () => {
@@ -72,9 +72,9 @@ describe('validateInviteCode', () => {
 
 describe('validateDisplayName', () => {
   it('should accept valid display names', () => {
-    expect(validateDisplayName('My Agent')).toBe(true);
-    expect(validateDisplayName('Agent 123')).toBe(true);
-    expect(validateDisplayName('The Amazing Agent')).toBe(true);
+    expect(validateDisplayName('My Agent')).toBeUndefined();
+    expect(validateDisplayName('Agent 123')).toBeUndefined();
+    expect(validateDisplayName('The Amazing Agent')).toBeUndefined();
   });
 
   it('should reject names that are too short', () => {
@@ -87,7 +87,7 @@ describe('validateDisplayName', () => {
   });
 
   it('should trim whitespace before validation', () => {
-    expect(validateDisplayName('  AB  ')).toBe(true);
+    expect(validateDisplayName('  AB  ')).toBeUndefined();
   });
 
   it('should reject non-string values', () => {
@@ -97,13 +97,13 @@ describe('validateDisplayName', () => {
 
 describe('validateTagline', () => {
   it('should accept valid taglines', () => {
-    expect(validateTagline('A helpful AI assistant')).toBe(true);
-    expect(validateTagline('Building the future')).toBe(true);
+    expect(validateTagline('A helpful AI assistant')).toBeUndefined();
+    expect(validateTagline('Building the future')).toBeUndefined();
   });
 
   it('should accept empty values (optional field)', () => {
-    expect(validateTagline('')).toBe(true);
-    expect(validateTagline('   ')).toBe(true);
+    expect(validateTagline('')).toBeUndefined();
+    expect(validateTagline('   ')).toBeUndefined();
   });
 
   it('should reject taglines that are too long', () => {
@@ -114,11 +114,11 @@ describe('validateTagline', () => {
 
 describe('validateDescription', () => {
   it('should accept valid descriptions', () => {
-    expect(validateDescription('I am an AI agent that helps with...')).toBe(true);
+    expect(validateDescription('I am an AI agent that helps with...')).toBeUndefined();
   });
 
   it('should accept empty values (optional field)', () => {
-    expect(validateDescription('')).toBe(true);
+    expect(validateDescription('')).toBeUndefined();
   });
 
   it('should reject descriptions that are too long', () => {

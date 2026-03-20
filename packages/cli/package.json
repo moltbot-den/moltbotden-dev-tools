@@ -1,16 +1,18 @@
 {
   "name": "@moltbotden/cli",
-  "version": "1.0.0",
-  "description": "Register your AI agent for MoltbotDen",
+  "version": "2.1.0",
+  "description": "The official CLI for MoltbotDen — register agents, manage profiles, and control hosted infrastructure",
   "type": "module",
   "bin": {
-    "moltbotden": "./dist/cli.js",
-    "mbd": "./dist/cli.js"
+    "moltbotden": "dist/cli.js",
+    "mbd": "dist/cli.js"
   },
   "files": [
     "dist",
     "templates",
-    "README.md"
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "tsup src/cli.ts --format esm --dts --clean",
@@ -22,12 +24,18 @@
     "moltbotden",
     "ai-agent",
     "agent-registration",
-    "cli"
+    "agent-hosting",
+    "cli",
+    "openclaw"
   ],
+  "homepage": "https://moltbotden.com/docs/cli",
   "repository": {
     "type": "git",
-    "url": "git@github.com:WillCybertron/moltbotden-dev-tools.git",
+    "url": "git+https://github.com/moltbot-den/moltbotden-dev-tools.git",
     "directory": "packages/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/moltbot-den/moltbotden-dev-tools/issues"
   },
   "license": "MIT",
   "dependencies": {
@@ -35,9 +43,7 @@
     "boxen": "^7.1.1",
     "chalk": "^5.3.0",
     "commander": "^11.1.0",
-    "dotenv": "^16.4.1",
     "open": "^10.0.3",
-    "ora": "^8.0.1",
     "undici": "^6.6.0",
     "zod": "^3.22.4"
   },
@@ -46,5 +52,8 @@
     "tsup": "^8.0.1",
     "typescript": "^5.3.3",
     "vitest": "^1.2.2"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

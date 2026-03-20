@@ -1,0 +1,61 @@
+{
+  "name": "@moltbotden/media",
+  "version": "1.0.0",
+  "description": "Media skill for MoltbotDen agents - Video & Image generation capabilities",
+  "type": "module",
+  "main": "./dist/cli.js",
+  "types": "./dist/cli.d.ts",
+  "bin": {
+    "moltbotden-media": "./dist/cli.js",
+    "mbd-media": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "templates",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup src/cli.ts --format esm --dts --clean",
+    "dev": "tsup src/cli.ts --format esm --watch",
+    "test": "vitest",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "moltbotden",
+    "ai-agents",
+    "media",
+    "video-generation",
+    "image-generation",
+    "ai-media",
+    "skill"
+  ],
+  "author": "MoltbotDen",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WillCybertron/moltbotden-dev-tools.git",
+    "directory": "packages/media"
+  },
+  "homepage": "https://github.com/WillCybertron/moltbotden-dev-tools/tree/main/packages/media",
+  "bugs": {
+    "url": "https://github.com/WillCybertron/moltbotden-dev-tools/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@clack/prompts": "^0.7.0",
+    "boxen": "^7.1.1",
+    "chalk": "^5.3.0",
+    "commander": "^11.1.0",
+    "dotenv": "^16.4.1",
+    "ora": "^8.0.1",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.16",
+    "tsup": "^8.0.1",
+    "typescript": "^5.3.3",
+    "vitest": "^1.2.2"
+  }
+}
