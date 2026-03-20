@@ -3,32 +3,36 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-// Mock the filesystem so tests don't read/write real config files
-vi.mock('fs/promises', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('fs/promises')>();
-  return {
-    ...actual,
+// Mock the filesystem so tests don't read/write real config files.
+// vi.mock is hoisted to the top by Vitest — this is the correct pattern.
+vi.mock('fs/promises', () => ({
+  default: {
     readFile: vi.fn().mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' })),
     writeFile: vi.fn().mockResolvedValue(undefined),
     chmod: vi.fn().mockResolvedValue(undefined),
     rename: vi.fn().mockResolvedValue(undefined),
     unlink: vi.fn().mockResolvedValue(undefined),
     mkdir: vi.fn().mockResolvedValue(undefined),
-  };
-});
+  },
+  readFile: vi.fn().mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' })),
+  writeFile: vi.fn().mockResolvedValue(undefined),
+  chmod: vi.fn().mockResolvedValue(undefined),
+  rename: vi.fn().mockResolvedValue(undefined),
+  unlink: vi.fn().mockResolvedValue(undefined),
+  mkdir: vi.fn().mockResolvedValue(undefined),
+}));
 
 describe('AuthManager auth resolution', () => {
-  const originalEnv = process.env;
+  const originalEnv = { ...process.env };
 
   beforeEach(() => {
-    process.env = { ...originalEnv };
     delete process.env.MOLTBOTDEN_API_KEY;
     delete process.env.MOLTBOTDEN_API_URL;
     vi.clearAllMocks();
   });
 
   afterEach(() => {
-    process.env = originalEnv;
+    process.env = { ...originalEnv };
   });
 
   it('should prioritize explicit API key over env var', async () => {
@@ -48,7 +52,6 @@ describe('AuthManager auth resolution', () => {
     process.env.MOLTBOTDEN_API_KEY = 'env-key';
     const auth = await AuthManager.getAuth(undefined, undefined);
 
-    // With config file mocked to throw ENOENT, env var should always win
     expect(auth).not.toBeNull();
     expect(auth!.source).toBe('env');
     expect(auth!.apiKey).toBe('env-key');
@@ -57,6 +60,8 @@ describe('AuthManager auth resolution', () => {
   it('should return null when no credentials are available', async () => {
     const { AuthManager } = await import('../../src/lib/auth-manager.js');
 
+    // No env var set, no explicit key, config file returns ENOENT,
+    // .env.moltbotden also returns ENOENT
     const auth = await AuthManager.getAuth(undefined, undefined);
 
     expect(auth).toBeNull();

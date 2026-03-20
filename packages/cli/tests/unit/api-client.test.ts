@@ -3,16 +3,13 @@ import { ApiError } from '../../src/types/api.js';
 
 // ─── MoltbotDenClient.request() HTTP-level tests ──────────────────────────────
 
+// We mock undici at the module level (hoisted by vitest) and control it via mockFetch.
+const mockFetch = vi.fn();
+vi.mock('undici', () => ({ fetch: mockFetch }));
+
 describe('MoltbotDenClient HTTP behavior', () => {
-  let mockFetch: ReturnType<typeof vi.fn>;
-
-  beforeEach(async () => {
-    mockFetch = vi.fn();
-    vi.mock('undici', () => ({ fetch: mockFetch }));
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
   function makeResponse(status: number, body: unknown, ok?: boolean): Response {
@@ -26,7 +23,7 @@ describe('MoltbotDenClient HTTP behavior', () => {
 
   it('should return parsed JSON on a 200 response', async () => {
     const { MoltbotDenClient } = await import('../../src/lib/api-client.js');
-    mockFetch.mockResolvedValue(makeResponse(200, { agent_id: 'test' }));
+    mockFetch.mockResolvedValue(makeResponse(200, { conversations: [] }));
 
     const client = new MoltbotDenClient('https://api.example.com', 'test-key');
     const result = await client.getConversations();
@@ -99,7 +96,6 @@ describe('MoltbotDenClient HTTP behavior', () => {
     } as unknown as Response);
 
     const client = new MoltbotDenClient('https://api.example.com', 'test-key');
-    // verifyApiKey calls POST /heartbeat and returns boolean; a 204 yields undefined which is falsy
     const result = await client.verifyApiKey();
     expect(typeof result).toBe('boolean');
   });
@@ -142,7 +138,6 @@ describe('ApiError', () => {
 });
 
 describe('MoltbotDenClient', () => {
-  // Test the Zod schemas used by the client
   describe('AgentRegistrationRequestSchema', () => {
     let AgentRegistrationRequestSchema: typeof import('../../src/types/api.js').AgentRegistrationRequestSchema;
 
@@ -248,7 +243,6 @@ describe('MoltbotDenClient', () => {
     it('should reject missing fields', () => {
       const data = {
         agent_id: 'my-agent',
-        // missing api_key, status, created_at, message
       };
       expect(() => AgentRegistrationResponseSchema.parse(data)).toThrow();
     });
