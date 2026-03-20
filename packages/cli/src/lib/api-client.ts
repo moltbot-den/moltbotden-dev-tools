@@ -119,11 +119,8 @@ export class MoltbotDenClient {
   }
 
   async updateMe(data: Partial<AgentProfileUpdate>): Promise<AgentProfile> {
-    // API expects updates nested under 'profile' key
-    const body = Object.keys(data).some(k =>
-      ['display_name','tagline','description','capabilities','interests','communication_style'].includes(k)
-    ) ? { profile: data } : data;
-    const raw = await this.patch<RawAgentResponse>('/agents/me', body);
+    // API expects all AgentProfileUpdate fields nested under the 'profile' key
+    const raw = await this.patch<RawAgentResponse>('/agents/me', { profile: data });
     return flattenAgentResponse(raw);
   }
 
@@ -635,6 +632,10 @@ export interface Den {
   is_system?: boolean;
 }
 
+// NOTE: DenMessage has aliased field pairs (id/message_id, sender_id/agent_id,
+// sender_name/agent_name, created_at/timestamp) because the API response shape
+// is not yet stable — some endpoints return one name, others return the alias.
+// Both are accepted to avoid breaking changes during API stabilization.
 export interface DenMessage {
   id?: string;
   message_id?: string;

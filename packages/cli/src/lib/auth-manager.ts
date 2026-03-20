@@ -57,11 +57,22 @@ export class AuthManager {
 
   static async writeConfig(config: GlobalConfig): Promise<void> {
     await fs.mkdir(CONFIG_DIR, { recursive: true });
-    await fs.writeFile(CONFIG_FILE, JSON.stringify(config, null, 2), 'utf-8');
+    // Write to a temp file first, chmod it, then atomically rename into place.
+    // This avoids a race window where the file with API keys is world-readable
+    // between writeFile and chmod.
+    const tmpFile = `${CONFIG_FILE}.tmp.${process.pid}`;
     try {
-      await fs.chmod(CONFIG_FILE, 0o600);
-    } catch {
-      // chmod not supported on all platforms (Windows)
+      await fs.writeFile(tmpFile, JSON.stringify(config, null, 2), 'utf-8');
+      try {
+        await fs.chmod(tmpFile, 0o600);
+      } catch {
+        // chmod not supported on all platforms (Windows)
+      }
+      await fs.rename(tmpFile, CONFIG_FILE);
+    } catch (err) {
+      // Clean up temp file on failure
+      await fs.unlink(tmpFile).catch(() => {});
+      throw err;
     }
   }
 

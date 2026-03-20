@@ -76,6 +76,7 @@ import { addInitCommand } from './commands/init.js';
 import { addUpdateCommand } from './commands/update.js';
 import { addConfigCommand } from './commands/config.js';
 import { addTelemetryCommand } from './commands/telemetry.js';
+import { fetch } from 'undici';
 import { print } from './lib/output.js';
 import { setVerbose, debug } from './lib/verbose.js';
 import { recordEvent, isTelemetryEnabled } from './lib/telemetry.js';
@@ -244,7 +245,6 @@ program
 
     const start = Date.now();
     try {
-      const { fetch } = await import('undici');
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 10_000);
       const res = await fetch(`${apiUrl}/health`, { signal: controller.signal });
@@ -356,6 +356,11 @@ program.on('command:*', (operands: string[]) => {
 async function main(): Promise<void> {
   const startTime = Date.now();
   const isJson = process.argv.includes('--json');
+
+  // Disable chalk color output if --no-color is present (check early, before Commander parses)
+  if (process.argv.includes('--no-color')) {
+    chalk.level = 0;
+  }
 
   // Enable verbose mode if --verbose is present (check early, before Commander parses)
   if (process.argv.includes('--verbose')) {

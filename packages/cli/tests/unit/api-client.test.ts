@@ -1,5 +1,109 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ApiError } from '../../src/types/api.js';
+
+// ─── MoltbotDenClient.request() HTTP-level tests ──────────────────────────────
+
+describe('MoltbotDenClient HTTP behavior', () => {
+  let mockFetch: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    mockFetch = vi.fn();
+    vi.mock('undici', () => ({ fetch: mockFetch }));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function makeResponse(status: number, body: unknown, ok?: boolean): Response {
+    return {
+      ok: ok ?? (status >= 200 && status < 300),
+      status,
+      statusText: String(status),
+      json: () => Promise.resolve(body),
+    } as unknown as Response;
+  }
+
+  it('should return parsed JSON on a 200 response', async () => {
+    const { MoltbotDenClient } = await import('../../src/lib/api-client.js');
+    mockFetch.mockResolvedValue(makeResponse(200, { agent_id: 'test' }));
+
+    const client = new MoltbotDenClient('https://api.example.com', 'test-key');
+    const result = await client.getConversations();
+    expect(result).toBeDefined();
+  });
+
+  it('should throw ApiError with status and message on 4xx response', async () => {
+    const { MoltbotDenClient } = await import('../../src/lib/api-client.js');
+    mockFetch.mockResolvedValue(makeResponse(404, { detail: 'Agent not found' }, false));
+
+    const client = new MoltbotDenClient('https://api.example.com', 'test-key');
+    await expect(client.getMe()).rejects.toMatchObject({
+      status: 404,
+      message: 'Agent not found',
+    });
+  });
+
+  it('should throw ApiError with status and message on 500 response', async () => {
+    const { MoltbotDenClient } = await import('../../src/lib/api-client.js');
+    mockFetch.mockResolvedValue(makeResponse(500, { detail: 'Internal server error' }, false));
+
+    const client = new MoltbotDenClient('https://api.example.com', 'test-key');
+    await expect(client.getMe()).rejects.toMatchObject({ status: 500 });
+  });
+
+  it('should throw ApiError with status 0 on network error', async () => {
+    const { MoltbotDenClient } = await import('../../src/lib/api-client.js');
+    mockFetch.mockRejectedValue(new Error('ECONNREFUSED'));
+
+    const client = new MoltbotDenClient('https://api.example.com', 'test-key');
+    await expect(client.getMe()).rejects.toMatchObject({
+      status: 0,
+      message: expect.stringContaining('Network error'),
+    });
+  });
+
+  it('should throw ApiError with timeout message on AbortError', async () => {
+    const { MoltbotDenClient } = await import('../../src/lib/api-client.js');
+    const abortErr = new Error('The operation was aborted');
+    abortErr.name = 'AbortError';
+    mockFetch.mockRejectedValue(abortErr);
+
+    const client = new MoltbotDenClient('https://api.example.com', 'test-key');
+    await expect(client.getMe()).rejects.toMatchObject({
+      status: 0,
+      message: expect.stringContaining('timed out'),
+    });
+  });
+
+  it('should handle malformed JSON in error response gracefully', async () => {
+    const { MoltbotDenClient } = await import('../../src/lib/api-client.js');
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 503,
+      statusText: 'Service Unavailable',
+      json: () => Promise.reject(new SyntaxError('Unexpected token')),
+    } as unknown as Response);
+
+    const client = new MoltbotDenClient('https://api.example.com', 'test-key');
+    await expect(client.getMe()).rejects.toMatchObject({ status: 503 });
+  });
+
+  it('should handle 204 No Content without throwing', async () => {
+    const { MoltbotDenClient } = await import('../../src/lib/api-client.js');
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 204,
+      statusText: 'No Content',
+      json: () => Promise.resolve(null),
+    } as unknown as Response);
+
+    const client = new MoltbotDenClient('https://api.example.com', 'test-key');
+    // verifyApiKey calls POST /heartbeat and returns boolean; a 204 yields undefined which is falsy
+    const result = await client.verifyApiKey();
+    expect(typeof result).toBe('boolean');
+  });
+});
 
 describe('ApiError', () => {
   it('should store status and message', () => {

@@ -151,7 +151,8 @@ export function addMessageCommands(program: Command): void {
       console.log('');
       print.divider(52);
       print.spacer();
-      print.hint(`Reply:  mbd messages send ${messages[0]?.sender_id !== auth.agentId ? messages[0]?.sender_id : 'agent-id'} --message "Your reply"`);
+      const lastMsg = messages[messages.length - 1];
+      print.hint(`Reply:  mbd messages send ${lastMsg?.sender_id !== auth.agentId ? lastMsg?.sender_id : 'agent-id'} --message "Your reply"`);
       console.log('');
     });
 

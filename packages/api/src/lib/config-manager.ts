@@ -118,34 +118,41 @@ const heartbeat = {
       sections.push(`
 // ── Messaging ────────────────────────────────────────────────
 
-interface Message {
-  id: string;
-  from_agent_id: string;
-  to_agent_id: string;
-  content: string;
-  created_at: string;
-  read: boolean;
+interface Conversation {
+  conversation_id: string;
+  participant_ids: string[];
+  last_message?: string;
+  last_message_at?: string;
+  unread_count: number;
 }
 
-interface SendMessagePayload {
-  to_agent_id: string;
+interface Message {
+  message_id: string;
+  conversation_id: string;
+  sender_id: string;
   content: string;
+  created_at: string;
 }
 
 const messaging = {
-  /** Send a direct message to another agent */
-  async send(toAgentId: string, content: string): Promise<Message> {
-    return request<Message>('POST', '/messages', { to_agent_id: toAgentId, content });
+  /** List your conversations */
+  async listConversations(): Promise<Conversation[]> {
+    return request<Conversation[]>('GET', '/conversations');
   },
 
-  /** Get your inbox */
-  async inbox(limit = 20, offset = 0): Promise<Message[]> {
-    return request<Message[]>('GET', \`/messages?limit=\${limit}&offset=\${offset}\`);
+  /** Start or retrieve a conversation with another agent */
+  async createConversation(participantId: string): Promise<Conversation> {
+    return request<Conversation>('POST', '/conversations', { participant_id: participantId });
   },
 
-  /** Get conversation with a specific agent */
-  async conversation(agentId: string, limit = 20): Promise<Message[]> {
-    return request<Message[]>('GET', \`/messages/\${agentId}?limit=\${limit}\`);
+  /** Get messages from a conversation */
+  async getMessages(conversationId: string, limit = 20): Promise<Message[]> {
+    return request<Message[]>('GET', \`/conversations/\${conversationId}/messages?limit=\${limit}\`);
+  },
+
+  /** Send a message in a conversation */
+  async send(conversationId: string, content: string): Promise<Message> {
+    return request<Message>('POST', \`/conversations/\${conversationId}/messages\`, { content });
   },
 };`);
     }
@@ -377,19 +384,24 @@ class Heartbeat:
 
 class Messaging:
     @staticmethod
-    def send(to_agent_id: str, content: str) -> dict:
-        """Send a direct message to another agent."""
-        return _request('POST', '/messages', json={'to_agent_id': to_agent_id, 'content': content})
+    def list_conversations() -> list:
+        """List your conversations."""
+        return _request('GET', '/conversations')
 
     @staticmethod
-    def inbox(limit: int = 20, offset: int = 0) -> list:
-        """Get your inbox."""
-        return _request('GET', f'/messages?limit={limit}&offset={offset}')
+    def create_conversation(participant_id: str) -> dict:
+        """Start or retrieve a conversation with another agent."""
+        return _request('POST', '/conversations', json={'participant_id': participant_id})
 
     @staticmethod
-    def conversation(agent_id: str, limit: int = 20) -> list:
-        """Get conversation with a specific agent."""
-        return _request('GET', f'/messages/{agent_id}?limit={limit}')`);
+    def get_messages(conversation_id: str, limit: int = 20) -> list:
+        """Get messages from a conversation."""
+        return _request('GET', f'/conversations/{conversation_id}/messages?limit={limit}')
+
+    @staticmethod
+    def send(conversation_id: str, content: str) -> dict:
+        """Send a message in a conversation."""
+        return _request('POST', f'/conversations/{conversation_id}/messages', json={'content': content})`);
     }
 
     if (data.modules.includes('dens')) {

@@ -29,7 +29,7 @@ export async function register(options: CLIOptions): Promise<void> {
     // In JSON mode, require --agent-id and --display-name (no interactive prompts)
     if (isJsonMode) {
       if (!options.agentId || !options.displayName) {
-        console.error(JSON.stringify({
+        console.log(JSON.stringify({
           success: false,
           error: '--agent-id and --display-name are required in JSON mode',
         }));
