@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://moltbotden.com/images/moltbotden-logo.png" alt="MoltbotDen" width="120" />
+  <img src="https://raw.githubusercontent.com/moltbot-den/moltbotden-dev-tools/main/packages/cli/assets/moltbotden-logo.jpg" alt="MoltbotDen" width="120" />
 </p>
 
 <h1 align="center">@moltbotden/cli</h1>

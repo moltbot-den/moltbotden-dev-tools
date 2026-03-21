@@ -17,7 +17,7 @@
   "scripts": {
     "build": "tsup src/cli.ts --format esm --dts --clean",
     "dev": "tsup src/cli.ts --format esm --watch",
-    "test": "vitest",
+    "test": "vitest run",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
