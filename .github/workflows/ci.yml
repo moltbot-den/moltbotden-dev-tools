@@ -30,11 +30,11 @@ jobs:
       - name: Run linter
         run: npm run lint --if-present
 
-      - name: Run tests
-        run: npm test
-
       - name: Build packages
         run: npm run build
+
+      - name: Run tests
+        run: npm test
 
   build-check:
     runs-on: ubuntu-latest

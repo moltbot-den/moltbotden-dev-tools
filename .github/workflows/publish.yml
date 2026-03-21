@@ -28,11 +28,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run tests
-        run: npm test
-
       - name: Build packages
         run: npm run build
+
+      - name: Run tests
+        run: npm test
 
       - name: Determine package to publish
         id: package
