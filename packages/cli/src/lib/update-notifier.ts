@@ -1,71 +1,62 @@
 /**
- * Update notifier — checks for new CLI versions and notifies the user.
+ * Update notifier: tells interactive users when a newer CLI is on npm.
  *
- * Strategy:
- *   - On every CLI invocation, check if we should query npm (at most once per 24h)
- *   - Store last-check timestamp + latest version in ~/.moltbotden/update-check.json
- *   - If a newer version is available, print a one-line notice after command output
- *   - Never blocks the main command — check happens async in background
- *   - Respects --json mode (no notification) and CI environments
+ *   - Never blocks a command: the notice uses the cached result from the
+ *     previous check; a refresh (at most once per 24h) runs in the background
+ *     with a short timeout.
+ *   - Skipped entirely when stdout is not a TTY, in CI, with --json,
+ *     MBD_NO_UPDATE_CHECK / NO_UPDATE_NOTIFIER, or `mbd config set update_check false`.
+ *   - The notice goes to stderr so stdout stays clean for pipes.
  */
 
-import fs from 'fs/promises';
-import path from 'path';
-import os from 'os';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import chalk from 'chalk';
+import { atomicWriteFile, ensureConfigDir, getConfigDir, peekConfigFile } from './config-store.js';
 
-const CONFIG_DIR = path.join(os.homedir(), '.moltbotden');
-const UPDATE_CHECK_FILE = path.join(CONFIG_DIR, 'update-check.json');
-const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
-const PACKAGE_NAME = '@moltbotden/cli';
+const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const FETCH_TIMEOUT_MS = 1_500;
+export const PACKAGE_NAME = '@moltbotden/cli';
+
+/** npm "latest" endpoint; MBD_NPM_REGISTRY overrides the registry (mirrors, tests). */
+export function npmLatestUrl(env: NodeJS.ProcessEnv = process.env): string {
+  const registry = (env.MBD_NPM_REGISTRY || 'https://registry.npmjs.org').replace(/\/+$/, '');
+  return `${registry}/${PACKAGE_NAME}/latest`;
+}
 
 interface UpdateCheckData {
   lastChecked: number;
   latestVersion: string | null;
-  currentVersion: string;
 }
 
-/**
- * Read the cached update check data.
- */
+function cacheFile(): string {
+  return path.join(getConfigDir(), 'update-check.json');
+}
+
 async function readCache(): Promise<UpdateCheckData | null> {
   try {
-    const raw = await fs.readFile(UPDATE_CHECK_FILE, 'utf-8');
-    return JSON.parse(raw) as UpdateCheckData;
+    return JSON.parse(await fs.readFile(cacheFile(), 'utf-8')) as UpdateCheckData;
   } catch {
     return null;
   }
 }
 
-/**
- * Write update check data to cache.
- */
 async function writeCache(data: UpdateCheckData): Promise<void> {
   try {
-    await fs.mkdir(CONFIG_DIR, { recursive: true });
-    await fs.writeFile(UPDATE_CHECK_FILE, JSON.stringify(data, null, 2), 'utf-8');
+    await ensureConfigDir();
+    await atomicWriteFile(cacheFile(), JSON.stringify(data));
   } catch {
-    // Non-fatal — cache write failures are silently ignored
+    // Non-fatal
   }
 }
 
-/**
- * Fetch the latest version from the npm registry.
- * Returns null on any error (network, parse, etc.).
- */
-async function fetchLatestVersion(): Promise<string | null> {
+/** Latest published version from npm, or null on any failure. */
+export async function fetchLatestVersion(timeoutMs = FETCH_TIMEOUT_MS): Promise<string | null> {
   try {
-    const { fetch } = await import('undici');
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5_000);
-
-    const res = await fetch(`https://registry.npmjs.org/${PACKAGE_NAME}/latest`, {
-      signal: controller.signal,
+    const res = await fetch(npmLatestUrl(), {
+      signal: AbortSignal.timeout(timeoutMs),
       headers: { Accept: 'application/json' },
     });
-
-    clearTimeout(timeout);
-
     if (!res.ok) return null;
     const data = (await res.json()) as { version?: string };
     return data.version ?? null;
@@ -75,96 +66,69 @@ async function fetchLatestVersion(): Promise<string | null> {
 }
 
 /**
- * Compare two semver strings. Returns:
- *   1  if a > b
- *   0  if a === b
- *  -1  if a < b
+ * Compare semver strings: 1 if a > b, -1 if a < b, 0 if equal.
+ * A pre-release sorts before its release (2.0.0-beta.1 < 2.0.0).
  */
-function compareSemver(a: string, b: string): number {
-  const pa = a.split('.').map(Number);
-  const pb = b.split('.').map(Number);
+export function compareSemver(a: string, b: string): number {
+  const parse = (v: string) => {
+    const [core, pre] = v.replace(/^v/, '').split('-', 2);
+    return { parts: core.split('.').map((n) => Number.parseInt(n, 10) || 0), pre };
+  };
+  const pa = parse(a);
+  const pb = parse(b);
   for (let i = 0; i < 3; i++) {
-    const va = pa[i] ?? 0;
-    const vb = pb[i] ?? 0;
+    const va = pa.parts[i] ?? 0;
+    const vb = pb.parts[i] ?? 0;
     if (va > vb) return 1;
     if (va < vb) return -1;
   }
+  if (pa.pre && !pb.pre) return -1;
+  if (!pa.pre && pb.pre) return 1;
+  if (pa.pre && pb.pre) return pa.pre < pb.pre ? -1 : pa.pre > pb.pre ? 1 : 0;
   return 0;
 }
 
+export function shouldCheckForUpdates(opts: { json?: boolean; env?: NodeJS.ProcessEnv; isTTY?: boolean }): boolean {
+  const env = opts.env ?? process.env;
+  const isTTY = opts.isTTY ?? Boolean(process.stdout.isTTY);
+  if (opts.json || !isTTY) return false;
+  if (env.CI || env.MBD_NO_UPDATE_CHECK || env.NO_UPDATE_NOTIFIER) return false;
+  return true;
+}
+
 /**
- * Check for updates (non-blocking). Call this early in CLI startup.
- * Returns a function that, when called, prints the update notice if needed.
- *
- * Usage:
- *   const showNotice = await checkForUpdates('2.1.0');
- *   // ... run the command ...
- *   showNotice(); // prints notice if update available
+ * Start an update check. Returns a function that prints the notice (if any)
+ * after the command has finished. Never throws.
  */
 export async function checkForUpdates(
   currentVersion: string,
-  options: { json?: boolean } = {}
+  options: { json?: boolean } = {},
 ): Promise<() => void> {
-  // Skip in JSON mode, CI, or when stdout is not a TTY
-  if (options.json || process.env.CI || process.env.MBD_NO_UPDATE_CHECK || !process.stdout.isTTY) {
-    return () => {};
-  }
+  const noop = () => {};
+  if (!shouldCheckForUpdates(options)) return noop;
 
   let latestVersion: string | null = null;
-
   try {
+    const prefs = (await peekConfigFile()).preferences as Record<string, unknown> | undefined;
+    if (prefs?.update_check === false) return noop;
+
     const cache = await readCache();
-
-    // Check if we need to fetch (once per 24h)
-    const now = Date.now();
-    if (cache && (now - cache.lastChecked) < CHECK_INTERVAL_MS) {
-      // Use cached data
-      latestVersion = cache.latestVersion;
-    } else {
-      // Fetch in background — don't await it to block the command
-      // Instead, we fire-and-forget the fetch and use cached data if available
-      latestVersion = cache?.latestVersion ?? null;
-
-      // Do the actual fetch (fire-and-forget for next time)
-      fetchLatestVersion().then(async (version) => {
-        if (version) {
-          await writeCache({
-            lastChecked: Date.now(),
-            latestVersion: version,
-            currentVersion,
-          });
-        }
-      }).catch(() => {});
+    latestVersion = cache?.latestVersion ?? null;
+    if (!cache || Date.now() - cache.lastChecked >= CHECK_INTERVAL_MS) {
+      void fetchLatestVersion().then((version) =>
+        writeCache({ lastChecked: Date.now(), latestVersion: version ?? latestVersion }),
+      );
     }
   } catch {
-    // Non-fatal
+    return noop;
   }
 
-  // Return the notice printer
   return () => {
-    if (!latestVersion) return;
-    if (compareSemver(latestVersion, currentVersion) <= 0) return;
-
-    console.log('');
-    console.log(
-      chalk.yellow('  ╭─────────────────────────────────────────────────────╮')
-    );
-    console.log(
-      chalk.yellow('  │') +
-      `  Update available: ${chalk.gray(currentVersion)} → ${chalk.green(latestVersion)}` +
-      ' '.repeat(Math.max(0, 20 - currentVersion.length - latestVersion.length)) +
-      chalk.yellow('│')
-    );
-    console.log(
-      chalk.yellow('  │') +
-      `  Run ${chalk.cyan('npm install -g @moltbotden/cli')} to update` +
-      '     ' +
-      chalk.yellow('│')
-    );
-    console.log(
-      chalk.yellow('  ╰─────────────────────────────────────────────────────╯')
+    if (!latestVersion || compareSemver(latestVersion, currentVersion) <= 0) return;
+    process.stderr.write(
+      '\n' +
+        chalk.yellow(`  Update available: ${chalk.gray(currentVersion)} → ${chalk.green(latestVersion)}\n`) +
+        chalk.gray(`  Run ${chalk.cyan('mbd update')} or ${chalk.cyan(`npm install -g ${PACKAGE_NAME}`)}\n`),
     );
   };
 }
-
-export { compareSemver };

@@ -1,155 +1,114 @@
 /**
- * Telemetry client — industry-standard opt-in telemetry (like Next.js).
+ * Opt-in CLI telemetry.
  *
- * Disabled by default. Must be explicitly enabled via:
- *   mbd telemetry enable
- *   mbd config set telemetry true
+ * Disabled by default. Enabled only via `mbd telemetry enable` (or
+ * `mbd config set telemetry true`). MBD_TELEMETRY_DISABLED=1 always wins.
  *
- * Environment override:
- *   MBD_TELEMETRY_DISABLED=1   — always disables telemetry regardless of config
+ * Payload (see buildTelemetryPayload), and nothing else:
+ *   - command path, e.g. "hosting vm create" (from the command tree, never argv)
+ *   - flag NAMES used, e.g. ["--json", "--tier"] (never their values)
+ *   - duration, exit code, CLI version, OS platform, Node version
+ * Positional arguments and option values (API keys, IDs, message text,
+ * emails) are never read, so they cannot leak.
  *
- * What's tracked:
- *   • Command name (e.g. "heartbeat", "discover agents")
- *   • CLI version
- *   • Node.js version
- *   • OS platform
- *   • Whether --json was used
- *   • Execution duration (ms)
- *   • Success/failure (boolean)
- *
- * What's NEVER tracked:
- *   • API keys, agent IDs, message content, email content, personal data
+ * Sending: the Moltbot Den API has no CLI telemetry endpoint today (checked
+ * against openapi.json), so TELEMETRY_ENDPOINT is null and recordEvent is a
+ * local no-op that only prints the payload under --verbose. When an endpoint
+ * ships, set TELEMETRY_ENDPOINT; the payload contract stays the same.
  */
 
-import fs from 'node:fs/promises';
 import os from 'node:os';
-import { CONFIG_FILE } from '../lib/auth-manager.js';
+import type { Command } from 'commander';
+import { peekConfigFile } from './config-store.js';
+import { CLI_VERSION } from './version.js';
+import { debug } from './verbose.js';
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+export const TELEMETRY_ENDPOINT: string | null = null;
 
 export interface TelemetryEvent {
-  /** Command that was run, e.g. "heartbeat", "discover agents" */
-  event: string;
-  /** Whether --json flag was used */
-  json_mode?: boolean;
-  /** Wall-clock duration in milliseconds */
-  duration_ms?: number;
-  /** Whether the command completed successfully */
-  success?: boolean;
+  /** Command path from the command tree, e.g. "hosting vm create". */
+  command: string;
+  /** Flag names only, e.g. ["--json"]. */
+  flags: string[];
+  duration_ms: number;
+  exit_code: number;
 }
 
-interface TelemetryPayload {
-  event: string;
+export interface TelemetryPayload extends TelemetryEvent {
   cli_version: string;
-  node_version: string;
   os_platform: string;
-  json_mode: boolean;
-  duration_ms: number | null;
-  success: boolean | null;
+  node_version: string;
   timestamp: string;
 }
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-
-const TELEMETRY_ENDPOINT = 'https://api.moltbotden.com/telemetry/cli';
-
-// ─── Version Helper ───────────────────────────────────────────────────────────
-
-import { createRequire } from 'module';
-
-let _cachedVersion: string | null = null;
-
-function getCliVersion(): string {
-  if (_cachedVersion) return _cachedVersion;
-  try {
-    const require = createRequire(import.meta.url);
-    const pkg = require('../../package.json') as { version: string };
-    _cachedVersion = pkg.version;
-    return _cachedVersion;
-  } catch {
-    return '0.0.0';
+/** "hosting vm create" for the matched command (root name excluded). */
+export function commandPath(cmd: Command | undefined): string {
+  const names: string[] = [];
+  let current: Command | null | undefined = cmd;
+  while (current && current.parent) {
+    names.unshift(current.name());
+    current = current.parent;
   }
+  return names.join(' ') || 'default';
 }
 
-// ─── Config Reading ───────────────────────────────────────────────────────────
-
-interface ConfigOnDisk {
-  preferences?: Record<string, unknown>;
-  [extra: string]: unknown;
-}
-
-async function readTelemetryPreference(): Promise<boolean> {
-  try {
-    const raw = await fs.readFile(CONFIG_FILE, 'utf-8');
-    const parsed = JSON.parse(raw) as ConfigOnDisk;
-    const val = parsed.preferences?.telemetry;
-    return val === true;
-  } catch {
-    return false;
-  }
-}
-
-// ─── Public API ───────────────────────────────────────────────────────────────
+const FLAG_NAME = /^--?[A-Za-z][A-Za-z0-9-]*$/;
 
 /**
- * Check whether telemetry is enabled.
- *
+ * Extract flag names from argv, dropping `=value` suffixes and every token
+ * that is not itself a flag (values, positionals, anything after `--`).
+ */
+export function flagNames(argv: readonly string[]): string[] {
+  const names = new Set<string>();
+  for (const token of argv) {
+    if (token === '--') break;
+    if (!token.startsWith('-')) continue;
+    const name = token.split('=')[0];
+    if (FLAG_NAME.test(name)) names.add(name);
+  }
+  return [...names].sort();
+}
+
+export function buildTelemetryPayload(event: TelemetryEvent, now: Date = new Date()): TelemetryPayload {
+  return {
+    command: event.command,
+    flags: [...event.flags],
+    duration_ms: Math.max(0, Math.round(event.duration_ms)),
+    exit_code: event.exit_code,
+    cli_version: CLI_VERSION,
+    os_platform: os.platform(),
+    node_version: process.version,
+    timestamp: now.toISOString(),
+  };
+}
+
+/**
  * Resolution order:
- *  1. MBD_TELEMETRY_DISABLED env var (always wins if set)
- *  2. ~/.moltbotden/config.json → preferences.telemetry
- *
- * Returns false (disabled) by default.
+ *  1. MBD_TELEMETRY_DISABLED=1|true → off
+ *  2. config.json preferences.telemetry === true → on
+ *  3. otherwise off
  */
 export async function isTelemetryEnabled(): Promise<boolean> {
-  // Env var override — if set, telemetry is always disabled
   const envDisabled = process.env.MBD_TELEMETRY_DISABLED;
-  if (envDisabled === '1' || envDisabled?.toLowerCase() === 'true') {
-    return false;
-  }
-
-  return readTelemetryPreference();
+  if (envDisabled === '1' || envDisabled?.toLowerCase() === 'true') return false;
+  const prefs = (await peekConfigFile()).preferences as Record<string, unknown> | undefined;
+  return prefs?.telemetry === true;
 }
 
-/**
- * Record a telemetry event. Fire-and-forget — never blocks, never throws.
- *
- * Silently drops the event if telemetry is disabled or the POST fails.
- */
-export function recordEvent(event: TelemetryEvent): void {
-  // Intentionally not awaited — fire-and-forget
-  void _sendEvent(event);
-}
-
-async function _sendEvent(event: TelemetryEvent): Promise<void> {
+/** Record an event if the user opted in. Never throws, never blocks on the network. */
+export async function recordEvent(event: TelemetryEvent): Promise<void> {
   try {
-    const enabled = await isTelemetryEnabled();
-    if (!enabled) return;
-
-    const payload: TelemetryPayload = {
-      event: event.event,
-      cli_version: getCliVersion(),
-      node_version: process.version,
-      os_platform: os.platform(),
-      json_mode: event.json_mode ?? false,
-      duration_ms: event.duration_ms ?? null,
-      success: event.success ?? null,
-      timestamp: new Date().toISOString(),
-    };
-
-    const { fetch } = await import('undici');
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5_000);
-
+    if (!(await isTelemetryEnabled())) return;
+    const payload = buildTelemetryPayload(event);
+    debug('telemetry', JSON.stringify(payload));
+    if (!TELEMETRY_ENDPOINT) return;
     await fetch(TELEMETRY_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
-      signal: controller.signal,
+      signal: AbortSignal.timeout(2_000),
     });
-
-    clearTimeout(timeout);
   } catch {
-    // Swallow all errors — telemetry must never break the CLI
+    // Telemetry must never break the CLI.
   }
 }

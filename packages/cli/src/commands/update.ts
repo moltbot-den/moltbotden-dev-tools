@@ -1,17 +1,16 @@
 /**
- * Update command — self-update the MoltbotDen CLI to the latest version.
+ * Update command — self-update the Moltbot Den CLI to the latest version.
  *
  * Detects the package manager used to install the CLI and runs the
  * appropriate update command. Supports npm, yarn, pnpm, and bun.
  */
 
 import { Command } from 'commander';
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import chalk from 'chalk';
 import { print } from '../lib/output.js';
-import { compareSemver } from '../lib/update-notifier.js';
-
-const PACKAGE_NAME = '@moltbotden/cli';
+import { compareSemver, fetchLatestVersion, PACKAGE_NAME } from '../lib/update-notifier.js';
+import { CLI_VERSION } from '../lib/version.js';
 
 /**
  * Detect which package manager installed the CLI globally.
@@ -20,14 +19,21 @@ function detectPackageManager(): 'npm' | 'yarn' | 'pnpm' | 'bun' {
   // Check if the CLI binary path gives us a hint
   const execPath = process.argv[1] ?? '';
 
-  if (execPath.includes('.bun/')) return 'bun';
-  if (execPath.includes('pnpm')) return 'pnpm';
-  if (execPath.includes('yarn')) return 'yarn';
+  const normalized = execPath.replace(/\\/g, '/');
+  if (normalized.includes('.bun/')) return 'bun';
+  if (normalized.includes('pnpm')) return 'pnpm';
+  if (normalized.includes('yarn')) return 'yarn';
 
   // Check which global package managers have us installed
+  const listArgs = { pnpm: ['ls', '-g'], yarn: ['global', 'list'], bun: ['pm', 'ls', '-g'] } as const;
   for (const pm of ['pnpm', 'yarn', 'bun'] as const) {
     try {
-      const out = execSync(`${pm} global list 2>/dev/null || true`, { encoding: 'utf-8', timeout: 5_000 });
+      const out = execFileSync(pm, [...listArgs[pm]], {
+        encoding: 'utf-8',
+        timeout: 5_000,
+        stdio: ['ignore', 'pipe', 'ignore'],
+        shell: process.platform === 'win32',
+      });
       if (out.includes(PACKAGE_NAME)) return pm;
     } catch {
       // Not installed or command failed
@@ -52,43 +58,21 @@ function getUpdateCommand(pm: string): string {
 export function addUpdateCommand(program: Command): void {
   program
     .command('update')
-    .description('Update the MoltbotDen CLI to the latest version')
+    .description('Update the Moltbot Den CLI to the latest version')
     .option('--check', 'Only check for updates without installing')
     .action(async (opts) => {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
 
-      // Get current version
-      let currentVersion: string;
-      try {
-        const { createRequire } = await import('module');
-        const require = createRequire(import.meta.url);
-        const pkg = require('../../package.json') as { version: string };
-        currentVersion = pkg.version;
-      } catch {
-        currentVersion = '0.0.0';
-      }
+      const currentVersion = CLI_VERSION;
 
       // Fetch latest version from npm
       if (!jsonMode) {
         print.info('Checking for updates...');
       }
 
-      let latestVersion: string;
-      try {
-        const { fetch } = await import('undici');
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 10_000);
-        const res = await fetch(`https://registry.npmjs.org/${PACKAGE_NAME}/latest`, {
-          signal: controller.signal,
-          headers: { Accept: 'application/json' },
-        });
-        clearTimeout(timeout);
-
-        if (!res.ok) throw new Error(`npm registry returned ${res.status}`);
-        const data = (await res.json()) as { version: string };
-        latestVersion = data.version;
-      } catch (err) {
+      const latest = await fetchLatestVersion(10_000);
+      if (!latest) {
         if (jsonMode) {
           console.log(JSON.stringify({
             success: false,
@@ -100,8 +84,8 @@ export function addUpdateCommand(program: Command): void {
           print.hint('Check your internet connection and try again');
         }
         process.exit(1);
-        return; // Type guard
       }
+      const latestVersion: string = latest;
 
       const isUpToDate = compareSemver(latestVersion, currentVersion) <= 0;
 

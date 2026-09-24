@@ -7,6 +7,7 @@ import * as clack from '@clack/prompts';
 import chalk from 'chalk';
 import { MoltbotDenClient } from '../../lib/api-client.js';
 import { print, statusBadge } from '../../lib/output.js';
+import { fail } from '../../lib/errors.js';
 import { DB_PLAN_SPECS, type DatabasePlan, type DatabaseEngine } from '../../types/hosting.js';
 
 export function addDatabaseCommands(parent: Command, getClient: () => Promise<MoltbotDenClient>, jsonMode: () => boolean): void {
@@ -32,8 +33,7 @@ export function addDatabaseCommands(parent: Command, getClient: () => Promise<Mo
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to list databases');
-        process.exit(1);
+        fail(err, 'Failed to list databases');
       }
 
       if (json) { console.log(JSON.stringify(result)); return; }
@@ -56,7 +56,7 @@ export function addDatabaseCommands(parent: Command, getClient: () => Promise<Mo
           { header: 'HOST',    key: 'host',       width: 24, format: (v) => v ? chalk.gray(String(v)) : chalk.gray('–') },
           { header: 'CREATED', key: 'created_at',            format: (v) => chalk.gray(print.relativeTime(String(v))) },
         ],
-        databases as Record<string, unknown>[]
+        databases
       );
 
       console.log('');
@@ -88,6 +88,7 @@ export function addDatabaseCommands(parent: Command, getClient: () => Promise<Mo
               if (!v || v.trim().length < 2) return 'Name must be at least 2 characters';
               if (!/^[a-z0-9][a-z0-9-]*[a-z0-9]?$/.test(v)) return 'Use lowercase letters, numbers, and hyphens';
               if (v.length > 40) return 'Name must be at most 40 characters';
+              return undefined;
             },
           });
           if (clack.isCancel(n)) { clack.cancel('Cancelled'); process.exit(0); }
@@ -152,8 +153,7 @@ export function addDatabaseCommands(parent: Command, getClient: () => Promise<Mo
         }
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Database creation failed');
-        process.exit(1);
+        fail(err, 'Database creation failed');
       }
     });
 
@@ -173,8 +173,7 @@ export function addDatabaseCommands(parent: Command, getClient: () => Promise<Mo
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Database not found');
-        process.exit(1);
+        fail(err, 'Database not found');
       }
 
       if (json) { console.log(JSON.stringify(db)); return; }
@@ -228,8 +227,7 @@ export function addDatabaseCommands(parent: Command, getClient: () => Promise<Mo
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to get connection string');
-        process.exit(1);
+        fail(err, 'Failed to get connection string');
       }
 
       if (json) {
@@ -285,8 +283,7 @@ export function addDatabaseCommands(parent: Command, getClient: () => Promise<Mo
         }
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Delete failed');
-        process.exit(1);
+        fail(err, 'Delete failed');
       }
     });
 }

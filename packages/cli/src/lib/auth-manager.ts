@@ -1,19 +1,24 @@
 /**
- * Global authentication manager for the MoltbotDen CLI.
+ * Global authentication manager for the Moltbot Den CLI.
  *
- * Stores credentials at ~/.moltbotden/config.json with:
+ * Stores credentials in config.json under getConfigDir() (see config-store.ts):
  * - File permissions restricted to owner (0600)
  * - Support for multiple agents (switch context)
  * - Layered auth resolution (flag → env → config → local .env)
  */
 
-import fs from 'fs/promises';
-import path from 'path';
-import os from 'os';
+import fs from 'node:fs/promises';
 import { debug } from './verbose.js';
+import {
+  getConfigDir,
+  getConfigFile,
+  readConfigFile,
+  writeConfigFile,
+} from './config-store.js';
+import { API_BASE_URL } from '../constants/defaults.js';
+import { CliError, ExitCode } from './errors.js';
 
-export const CONFIG_DIR = path.join(os.homedir(), '.moltbotden');
-export const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
+export { getConfigDir, getConfigFile };
 
 export interface AgentEntry {
   agentId: string;
@@ -27,53 +32,64 @@ export interface GlobalConfig {
   version: number;
   currentAgentId?: string;
   agents: Record<string, AgentEntry>;
+  preferences?: Record<string, unknown>;
+  [extra: string]: unknown;
 }
+
+export type CredentialSource = 'flag' | 'env' | 'config' | 'local-env';
+export type ApiUrlSource = 'flag' | 'env' | 'config' | 'local-env' | 'preference' | 'default';
 
 export interface AuthContext {
   apiKey: string;
   apiUrl: string;
+  apiUrlSource: ApiUrlSource;
   agentId?: string;
   displayName?: string;
-  source: 'flag' | 'env' | 'config' | 'local-env';
+  source: CredentialSource;
 }
 
-const DEFAULT_API_URL = 'https://api.moltbotden.com';
-const EMPTY_CONFIG: GlobalConfig = { version: 1, agents: {} };
+const DEFAULT_API_URL = API_BASE_URL;
+
+/**
+ * Resolve the API base URL. Precedence (highest first):
+ *   1. --api-url flag
+ *   2. MOLTBOTDEN_API_URL env var
+ *   3. URL stored with the credentials being used (config.json agent entry
+ *      or .env.moltbotden), so a staging key keeps talking to staging
+ *   4. `mbd config set api_url` preference
+ *   5. https://api.moltbotden.com
+ */
+export function resolveApiUrl(input: {
+  flag?: string;
+  stored?: { url?: string; source: 'config' | 'local-env' };
+  preference?: unknown;
+}): { apiUrl: string; apiUrlSource: ApiUrlSource } {
+  const clean = (u: string) => u.replace(/\/+$/, '');
+  if (input.flag) return { apiUrl: clean(input.flag), apiUrlSource: 'flag' };
+  const env = process.env.MOLTBOTDEN_API_URL;
+  if (env) return { apiUrl: clean(env), apiUrlSource: 'env' };
+  if (input.stored?.url) return { apiUrl: clean(input.stored.url), apiUrlSource: input.stored.source };
+  if (typeof input.preference === 'string' && input.preference) {
+    return { apiUrl: clean(input.preference), apiUrlSource: 'preference' };
+  }
+  return { apiUrl: DEFAULT_API_URL, apiUrlSource: 'default' };
+}
 
 export class AuthManager {
   // ─── Config I/O ───────────────────────────────────────────────────────────
 
+  /** Throws ConfigCorruptError (after backing the file up) if config.json is unparseable. */
   static async readConfig(): Promise<GlobalConfig> {
-    try {
-      const raw = await fs.readFile(CONFIG_FILE, 'utf-8');
-      const parsed = JSON.parse(raw) as GlobalConfig;
-      // Migrate old single-agent format if needed
-      if (!parsed.agents) return { ...EMPTY_CONFIG };
-      return parsed;
-    } catch {
-      return { ...EMPTY_CONFIG };
-    }
+    const parsed = await readConfigFile();
+    const agents =
+      parsed.agents && typeof parsed.agents === 'object'
+        ? (parsed.agents as Record<string, AgentEntry>)
+        : {};
+    return { ...parsed, version: typeof parsed.version === 'number' ? parsed.version : 1, agents };
   }
 
   static async writeConfig(config: GlobalConfig): Promise<void> {
-    await fs.mkdir(CONFIG_DIR, { recursive: true });
-    // Write to a temp file first, chmod it, then atomically rename into place.
-    // This avoids a race window where the file with API keys is world-readable
-    // between writeFile and chmod.
-    const tmpFile = `${CONFIG_FILE}.tmp.${process.pid}`;
-    try {
-      await fs.writeFile(tmpFile, JSON.stringify(config, null, 2), 'utf-8');
-      try {
-        await fs.chmod(tmpFile, 0o600);
-      } catch {
-        // chmod not supported on all platforms (Windows)
-      }
-      await fs.rename(tmpFile, CONFIG_FILE);
-    } catch (err) {
-      // Clean up temp file on failure
-      await fs.unlink(tmpFile).catch(() => {});
-      throw err;
-    }
+    await writeConfigFile(config);
   }
 
   // ─── Agent Management ─────────────────────────────────────────────────────
@@ -153,27 +169,32 @@ export class AuthManager {
    * Resolve credentials with priority:
    *  1. Explicit --api-key flag
    *  2. MOLTBOTDEN_API_KEY environment variable
-   *  3. ~/.moltbotden/config.json (current agent)
+   *  3. config.json (current agent)
    *  4. .env.moltbotden in cwd (legacy / per-project)
+   * The API URL is resolved independently by resolveApiUrl().
    */
   static async getAuth(
     explicitApiKey?: string,
     explicitApiUrl?: string
   ): Promise<AuthContext | null> {
-    const resolvedUrl = explicitApiUrl ?? DEFAULT_API_URL;
-
     // 1. Flag takes priority
     if (explicitApiKey) {
       debug('auth', 'Resolved credentials from --api-key flag');
-      return { apiKey: explicitApiKey, apiUrl: resolvedUrl, source: 'flag' };
+      const config = await this.readConfig();
+      return {
+        apiKey: explicitApiKey,
+        ...resolveApiUrl({ flag: explicitApiUrl, preference: config.preferences?.api_url }),
+        source: 'flag',
+      };
     }
 
     // 2. Environment variable
     if (process.env.MOLTBOTDEN_API_KEY) {
       debug('auth', 'Resolved credentials from MOLTBOTDEN_API_KEY env var');
+      const config = await this.readConfig();
       return {
         apiKey: process.env.MOLTBOTDEN_API_KEY,
-        apiUrl: explicitApiUrl ?? process.env.MOLTBOTDEN_API_URL ?? DEFAULT_API_URL,
+        ...resolveApiUrl({ flag: explicitApiUrl, preference: config.preferences?.api_url }),
         source: 'env',
       };
     }
@@ -185,7 +206,11 @@ export class AuthManager {
       debug('auth', `Resolved credentials from config (agent: ${entry.agentId})`);
       return {
         apiKey: entry.apiKey,
-        apiUrl: explicitApiUrl ?? entry.apiUrl,
+        ...resolveApiUrl({
+          flag: explicitApiUrl,
+          stored: { url: entry.apiUrl, source: 'config' },
+          preference: config.preferences?.api_url,
+        }),
         agentId: entry.agentId,
         displayName: entry.displayName,
         source: 'config',
@@ -193,19 +218,26 @@ export class AuthManager {
     }
 
     // 4. Local .env.moltbotden
+    let envContent: string | undefined;
     try {
-      const envContent = await fs.readFile('.env.moltbotden', 'utf-8');
+      envContent = await fs.readFile('.env.moltbotden', 'utf-8');
+    } catch {
+      // .env.moltbotden doesn't exist — that's fine
+    }
+    if (envContent !== undefined) {
       const vars = parseEnvFile(envContent);
       if (vars.MOLTBOTDEN_API_KEY) {
         return {
           apiKey: vars.MOLTBOTDEN_API_KEY,
-          apiUrl: explicitApiUrl ?? vars.MOLTBOTDEN_API_URL ?? DEFAULT_API_URL,
+          ...resolveApiUrl({
+            flag: explicitApiUrl,
+            stored: { url: vars.MOLTBOTDEN_API_URL, source: 'local-env' },
+            preference: config.preferences?.api_url,
+          }),
           agentId: vars.MOLTBOTDEN_AGENT_ID,
           source: 'local-env',
         };
       }
-    } catch {
-      // .env.moltbotden doesn't exist — that's fine
     }
 
     return null;
@@ -218,15 +250,13 @@ export class AuthManager {
   ): Promise<AuthContext> {
     const auth = await this.getAuth(explicitApiKey, explicitApiUrl);
     if (!auth) {
-      // Import here to avoid circular dependency
-      const { print } = await import('./output.js');
-      print.error('Not authenticated');
-      print.hint(
-        'Run  mbd login        to authenticate with an existing API key\n' +
-        '   or mbd register     to create a new agent\n' +
-        '   or set  MOLTBOTDEN_API_KEY  environment variable'
-      );
-      process.exit(1);
+      throw new CliError('Not authenticated', {
+        exitCode: ExitCode.AUTH,
+        hint:
+          'Run  mbd login        to authenticate with an existing API key\n' +
+          '   or mbd register     to create a new agent\n' +
+          '   or set  MOLTBOTDEN_API_KEY  environment variable',
+      });
     }
     return auth;
   }

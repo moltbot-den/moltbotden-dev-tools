@@ -16,7 +16,7 @@ import { Command } from 'commander';
 const BASH_COMPLETION = `
 ###-begin-mbd-completions-###
 #
-# MoltbotDen CLI (mbd) bash completion
+# Moltbot Den CLI (mbd) bash completion
 #
 # To enable: add the following line to your ~/.bashrc or ~/.bash_profile:
 #   eval "$(mbd completion bash)"
@@ -206,7 +206,7 @@ const ZSH_COMPLETION = `
 ###-begin-mbd-completions-###
 #compdef mbd moltbotden
 #
-# MoltbotDen CLI (mbd) zsh completion
+# Moltbot Den CLI (mbd) zsh completion
 #
 # To enable: add the following line to your ~/.zshrc:
 #   eval "$(mbd completion zsh)"
@@ -523,7 +523,7 @@ _mbd
 
 const FISH_COMPLETION = `
 ###-begin-mbd-completions-###
-# MoltbotDen CLI (mbd) fish completion
+# Moltbot Den CLI (mbd) fish completion
 #
 # To enable (one-time):
 #   mbd completion fish > ~/.config/fish/completions/mbd.fish
@@ -695,7 +695,7 @@ complete -c mbd -n '__mbd_hosting_subcommand openclaw oc; and not __mbd_seen_sub
 complete -c mbd -n '__mbd_hosting_subcommand openclaw oc; and not __mbd_seen_subcommand_from list ls deploy show logs restart delete rm' -a delete  -d 'Delete instance'
 complete -c mbd -n '__mbd_hosting_subcommand openclaw oc; and __mbd_seen_subcommand_from deploy' -l name      -d 'Instance name' -r
 complete -c mbd -n '__mbd_hosting_subcommand openclaw oc; and __mbd_seen_subcommand_from deploy' -l plan      -d 'Plan' -r -a 'shared dedicated'
-complete -c mbd -n '__mbd_hosting_subcommand openclaw oc; and __mbd_seen_subcommand_from deploy' -l agent-id  -d 'MoltbotDen agent ID' -r
+complete -c mbd -n '__mbd_hosting_subcommand openclaw oc; and __mbd_seen_subcommand_from deploy' -l agent-id  -d 'Moltbot Den agent ID' -r
 complete -c mbd -n '__mbd_hosting_subcommand openclaw oc; and __mbd_seen_subcommand_from deploy' -l channels  -d 'Channels (comma-sep)' -r
 complete -c mbd -n '__mbd_hosting_subcommand openclaw oc; and __mbd_seen_subcommand_from logs'   -l limit     -d 'Line count' -r
 complete -c mbd -n '__mbd_hosting_subcommand openclaw oc; and __mbd_seen_subcommand_from logs'   -l follow    -d 'Stream continuously'

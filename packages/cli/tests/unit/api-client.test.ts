@@ -1,103 +1,223 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { ApiError } from '../../src/types/api.js';
+import {
+  MoltbotDenClient,
+  buildQueryString,
+  formatApiErrorMessage,
+  formatErrorDetail,
+} from '../../src/lib/api-client.js';
 
-// ─── MoltbotDenClient.request() HTTP-level tests ──────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-// We mock undici at the module level (hoisted by vitest) and control it via mockFetch.
-const mockFetch = vi.fn();
-vi.mock('undici', () => ({ fetch: mockFetch }));
+function jsonResponse(status: number, body: unknown, headers: Record<string, string> = {}): Response {
+  return new Response(body === undefined ? null : JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json', ...headers },
+  });
+}
 
-describe('MoltbotDenClient HTTP behavior', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+/** Client wired to a fake fetch and an instant sleep, so retries are observable and fast. */
+function makeClient(fetchImpl: ReturnType<typeof vi.fn>, apiKey = 'test-key') {
+  const sleeps: number[] = [];
+  const client = new MoltbotDenClient('https://api.example.com/', apiKey, {
+    fetch: fetchImpl as unknown as typeof fetch,
+    sleep: async (ms) => {
+      sleeps.push(ms);
+    },
+  });
+  return { client, sleeps };
+}
+
+// ─── request(): transport behaviour ───────────────────────────────────────────
+
+describe('MoltbotDenClient.request', () => {
+  it('returns parsed JSON on 2xx', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { conversations: [] }));
+    const { client } = makeClient(fetchImpl);
+    await expect(client.request('GET', '/conversations')).resolves.toEqual({ conversations: [] });
   });
 
-  function makeResponse(status: number, body: unknown, ok?: boolean): Response {
-    return {
-      ok: ok ?? (status >= 200 && status < 300),
-      status,
-      statusText: String(status),
-      json: () => Promise.resolve(body),
-    } as unknown as Response;
-  }
-
-  it('should return parsed JSON on a 200 response', async () => {
-    const { MoltbotDenClient } = await import('../../src/lib/api-client.js');
-    mockFetch.mockResolvedValue(makeResponse(200, { conversations: [] }));
-
-    const client = new MoltbotDenClient('https://api.example.com', 'test-key');
-    const result = await client.getConversations();
-    expect(result).toBeDefined();
+  it('returns undefined for 204 No Content', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    const { client } = makeClient(fetchImpl);
+    await expect(client.request('DELETE', '/thing/1')).resolves.toBeUndefined();
   });
 
-  it('should throw ApiError with status and message on 4xx response', async () => {
-    const { MoltbotDenClient } = await import('../../src/lib/api-client.js');
-    mockFetch.mockResolvedValue(makeResponse(404, { detail: 'Agent not found' }, false));
+  it('sends X-API-Key and a descriptive User-Agent so the API can attribute CLI traffic', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, {}));
+    const { client } = makeClient(fetchImpl, 'moltbotden_sk_test');
+    await client.request('GET', '/agents/me');
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    const headers = init.headers as Record<string, string>;
+    expect(url).toBe('https://api.example.com/agents/me');
+    expect(headers['X-API-Key']).toBe('moltbotden_sk_test');
+    expect(headers['User-Agent']).toMatch(/^moltbotden-cli\/\S+ node\/\S+ \S+$/);
+  });
 
-    const client = new MoltbotDenClient('https://api.example.com', 'test-key');
+  it('encodes query params and skips undefined, so optional flags never send "undefined"', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, {}));
+    const { client } = makeClient(fetchImpl);
+    await client.request('GET', '/search', { query: { q: 'a b&c', page: 2, category: undefined, tag: ['x', 'y'] } });
+    expect(fetchImpl.mock.calls[0][0]).toBe('https://api.example.com/search?q=a+b%26c&page=2&tag=x&tag=y');
+  });
+
+  it('serializes the JSON body with a Content-Type header', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(201, { id: 'x' }));
+    const { client } = makeClient(fetchImpl);
+    await client.request('POST', '/things', { body: { name: 'n' } });
+    const init = fetchImpl.mock.calls[0][1] as RequestInit;
+    expect(init.body).toBe('{"name":"n"}');
+    expect((init.headers as Record<string, string>)['Content-Type']).toBe('application/json');
+  });
+
+  it('throws ApiError with status and the server detail on 4xx', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(404, { detail: 'Agent not found' }));
+    const { client } = makeClient(fetchImpl);
     await expect(client.getMe()).rejects.toMatchObject({
       status: 404,
-      message: 'Agent not found',
+      message: 'Agent not found (HTTP 404)',
     });
   });
 
-  it('should throw ApiError with status and message on 500 response', async () => {
-    const { MoltbotDenClient } = await import('../../src/lib/api-client.js');
-    mockFetch.mockResolvedValue(makeResponse(500, { detail: 'Internal server error' }, false));
-
-    const client = new MoltbotDenClient('https://api.example.com', 'test-key');
-    await expect(client.getMe()).rejects.toMatchObject({ status: 500 });
-  });
-
-  it('should throw ApiError with status 0 on network error', async () => {
-    const { MoltbotDenClient } = await import('../../src/lib/api-client.js');
-    mockFetch.mockRejectedValue(new Error('ECONNREFUSED'));
-
-    const client = new MoltbotDenClient('https://api.example.com', 'test-key');
-    await expect(client.getMe()).rejects.toMatchObject({
+  it('maps network failures to status 0', async () => {
+    const fetchImpl = vi.fn().mockRejectedValue(Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } }));
+    const { client } = makeClient(fetchImpl);
+    await expect(client.request('POST', '/heartbeat')).rejects.toMatchObject({
       status: 0,
-      message: expect.stringContaining('Network error'),
+      message: 'Network error: ECONNREFUSED',
     });
   });
 
-  it('should throw ApiError with timeout message on AbortError', async () => {
-    const { MoltbotDenClient } = await import('../../src/lib/api-client.js');
-    const abortErr = new Error('The operation was aborted');
-    abortErr.name = 'AbortError';
-    mockFetch.mockRejectedValue(abortErr);
-
-    const client = new MoltbotDenClient('https://api.example.com', 'test-key');
-    await expect(client.getMe()).rejects.toMatchObject({
+  it('reports timeouts clearly', async () => {
+    const err = new DOMException('The operation timed out', 'TimeoutError');
+    const fetchImpl = vi.fn().mockRejectedValue(err);
+    const { client } = makeClient(fetchImpl);
+    await expect(client.request('POST', '/heartbeat')).rejects.toMatchObject({
       status: 0,
       message: expect.stringContaining('timed out'),
     });
   });
 
-  it('should handle malformed JSON in error response gracefully', async () => {
-    const { MoltbotDenClient } = await import('../../src/lib/api-client.js');
-    mockFetch.mockResolvedValue({
-      ok: false,
-      status: 503,
-      statusText: 'Service Unavailable',
-      json: () => Promise.reject(new SyntaxError('Unexpected token')),
-    } as unknown as Response);
+  it('survives a non-JSON error body', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response('<html>bad gateway</html>', { status: 500 }));
+    const { client } = makeClient(fetchImpl);
+    await expect(client.request('POST', '/x')).rejects.toMatchObject({ status: 500 });
+  });
+});
 
-    const client = new MoltbotDenClient('https://api.example.com', 'test-key');
-    await expect(client.getMe()).rejects.toMatchObject({ status: 503 });
+// ─── request(): retry policy ──────────────────────────────────────────────────
+// Retrying a POST/PATCH after a 502 or dropped connection can double-create a
+// VM or double-send an email (the first attempt may have succeeded), so only
+// idempotent methods are retried.
+
+describe('MoltbotDenClient.request retries', () => {
+  it('retries an idempotent GET on 503 and then succeeds', async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(503, { detail: 'busy' }))
+      .mockResolvedValueOnce(jsonResponse(200, { ok: true }));
+    const { client, sleeps } = makeClient(fetchImpl);
+    await expect(client.request('GET', '/x')).resolves.toEqual({ ok: true });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(sleeps).toHaveLength(1);
   });
 
-  it('should handle 204 No Content without throwing', async () => {
-    const { MoltbotDenClient } = await import('../../src/lib/api-client.js');
-    mockFetch.mockResolvedValue({
-      ok: true,
-      status: 204,
-      statusText: 'No Content',
-      json: () => Promise.resolve(null),
-    } as unknown as Response);
+  it('retries DELETE on a network error', async () => {
+    const fetchImpl = vi.fn()
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    const { client } = makeClient(fetchImpl);
+    await client.request('DELETE', '/x');
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
 
-    const client = new MoltbotDenClient('https://api.example.com', 'test-key');
-    const result = await client.verifyApiKey();
-    expect(typeof result).toBe('boolean');
+  it.each(['POST', 'PATCH'])('never retries %s, even on 503 or network errors', async (method) => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(503, { detail: 'busy' }));
+    const { client, sleeps } = makeClient(fetchImpl);
+    await expect(client.request(method, '/x')).rejects.toMatchObject({ status: 503 });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(sleeps).toHaveLength(0);
+
+    const netFetch = vi.fn().mockRejectedValue(new TypeError('fetch failed'));
+    const { client: c2 } = makeClient(netFetch);
+    await expect(c2.request(method, '/x')).rejects.toMatchObject({ status: 0 });
+    expect(netFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('honors Retry-After on 429 for GET', async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(429, { detail: 'slow down' }, { 'retry-after': '2' }))
+      .mockResolvedValueOnce(jsonResponse(200, {}));
+    const { client, sleeps } = makeClient(fetchImpl);
+    await client.request('GET', '/x');
+    expect(sleeps).toEqual([2000]);
+  });
+
+  it('does not retry 4xx client errors (the request itself is wrong)', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(404, { detail: 'nope' }));
+    const { client } = makeClient(fetchImpl);
+    await expect(client.request('GET', '/x')).rejects.toMatchObject({ status: 404 });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives up after maxRetries', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(502, {}));
+    const { client } = makeClient(fetchImpl);
+    await expect(client.request('GET', '/x')).rejects.toMatchObject({ status: 502 });
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+});
+
+// ─── Error formatting ─────────────────────────────────────────────────────────
+// FastAPI returns validation errors as a list of {loc, msg, type}; printing
+// that list raw produced "[object Object]" for every 422.
+
+describe('formatErrorDetail / formatApiErrorMessage', () => {
+  it('formats a FastAPI 422 detail list as "field: msg" lines', () => {
+    const body = {
+      detail: [
+        { loc: ['body', 'profile', 'display_name'], msg: 'String should have at least 2 characters', type: 'string_too_short' },
+        { loc: ['query', 'limit'], msg: 'Input should be less than or equal to 100', type: 'less_than_equal' },
+      ],
+    };
+    const message = formatApiErrorMessage(422, body);
+    expect(message).toBe(
+      'Validation failed (HTTP 422):\n' +
+        '  profile.display_name: String should have at least 2 characters\n' +
+        '  query.limit: Input should be less than or equal to 100',
+    );
+    expect(message).not.toContain('[object Object]');
+  });
+
+  it('passes string detail through and appends the status', () => {
+    expect(formatApiErrorMessage(401, { detail: 'Invalid API key' })).toBe('Invalid API key (HTTP 401)');
+  });
+
+  it('reads message/error fields and nested detail objects', () => {
+    expect(formatErrorDetail({ message: 'boom' })).toBe('boom');
+    expect(formatErrorDetail({ detail: { error: 'nested' } })).toBe('nested');
+    expect(formatErrorDetail({ detail: { code: 7 } })).toBe('{"code":7}');
+  });
+
+  it('explains 402 as insufficient balance and points at top-up', () => {
+    const msg = formatApiErrorMessage(402, { detail: 'Balance too low' });
+    expect(msg).toContain('Insufficient balance (HTTP 402): Balance too low');
+    expect(msg).toContain('mbd hosting billing topup');
+  });
+
+  it('explains a 503 "service disabled" response as a disabled feature, not an outage', () => {
+    expect(formatApiErrorMessage(503, { detail: 'Hosting is disabled' })).toContain('currently disabled');
+    expect(formatApiErrorMessage(503, {})).toContain('temporarily unavailable');
+  });
+
+  it('falls back to the HTTP status when there is no body', () => {
+    expect(formatApiErrorMessage(500, undefined, 'Internal Server Error')).toBe('HTTP 500: Internal Server Error');
+  });
+});
+
+describe('buildQueryString', () => {
+  it('returns an empty string when nothing is set', () => {
+    expect(buildQueryString({ a: undefined, b: null })).toBe('');
+    expect(buildQueryString(undefined)).toBe('');
   });
 });
 

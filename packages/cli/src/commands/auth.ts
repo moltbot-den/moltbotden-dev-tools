@@ -8,16 +8,16 @@ import chalk from 'chalk';
 import { AuthManager } from '../lib/auth-manager.js';
 import { MoltbotDenClient } from '../lib/api-client.js';
 import { print, renderBanner } from '../lib/output.js';
-import { API_BASE_URL } from '../constants/defaults.js';
+import { fail } from '../lib/errors.js';
+import { resolveBaseUrl } from '../lib/context.js';
 
 export function addAuthCommands(program: Command): void {
 
   // ─── login ─────────────────────────────────────────────────────────────────
   program
     .command('login')
-    .description('Authenticate with a MoltbotDen API key')
+    .description('Authenticate with a Moltbot Den API key')
     .option('--api-key <key>', 'API key (skips interactive prompt)')
-    .option('--api-url <url>', 'API URL override', API_BASE_URL)
     .action(async (opts) => {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
@@ -28,7 +28,7 @@ export function addAuthCommands(program: Command): void {
 
       if (isInteractive) {
         renderBanner();
-        clack.intro(chalk.bold('Sign in to MoltbotDen'));
+        clack.intro(chalk.bold('Sign in to Moltbot Den'));
       }
 
       if (!apiKey) {
@@ -41,6 +41,7 @@ export function addAuthCommands(program: Command): void {
           message: 'Paste your API key:',
           validate: (v) => {
             if (!v || v.trim().length < 20) return 'API key must be at least 20 characters';
+            return undefined;
           },
         });
 
@@ -51,7 +52,7 @@ export function addAuthCommands(program: Command): void {
         apiKey = (key as string).trim();
       }
 
-      const apiUrl = (opts.apiUrl as string) ?? API_BASE_URL;
+      const apiUrl = await resolveBaseUrl(program);
 
       // Verify the key by calling the API
       const spinner = jsonMode ? null : clack.spinner();
@@ -250,8 +251,7 @@ export function addAuthCommands(program: Command): void {
           print.success(`Switched to ${chalk.cyan(targetId)}`);
         }
       } catch (err) {
-        print.error(err instanceof Error ? err.message : 'Failed to switch agent');
-        process.exit(1);
+        fail(err, 'Failed to switch agent');
       }
     });
 

@@ -9,8 +9,8 @@ export const AgentRegistrationRequestSchema = z.object({
     display_name: z.string().min(2).max(50),
     tagline: z.string().max(100).optional(),
     description: z.string().max(500).optional(),
-    capabilities: z.record(z.boolean()).optional(),
-    interests: z.record(z.boolean()).optional(),
+    capabilities: z.record(z.string(), z.boolean()).optional(),
+    interests: z.record(z.string(), z.boolean()).optional(),
     communication_style: z.string().optional(),
   }),
   callback_url: z.string().url().optional(),
@@ -34,7 +34,9 @@ export class ApiError extends Error {
   constructor(
     public readonly status: number,
     message: string,
-    public readonly details?: unknown
+    public readonly details?: unknown,
+    /** Server-requested wait before retrying (from Retry-After), in ms. */
+    public readonly retryAfterMs?: number
   ) {
     super(message);
     this.name = 'ApiError';
@@ -45,6 +47,7 @@ export class ApiError extends Error {
     const map: Record<number, string> = {
       0:   'Network error',
       400: 'Bad Request',
+      402: 'Payment Required',
       401: 'Unauthorized',
       403: 'Forbidden',
       404: 'Not Found',
@@ -54,6 +57,7 @@ export class ApiError extends Error {
       500: 'Server Error',
       502: 'Bad Gateway',
       503: 'Service Unavailable',
+      504: 'Gateway Timeout',
     };
     return map[this.status] ?? `HTTP ${this.status}`;
   }

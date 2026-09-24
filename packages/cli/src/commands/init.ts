@@ -1,5 +1,5 @@
 /**
- * Init command — initialize a project directory for an existing MoltbotDen agent.
+ * Init command — initialize a project directory for an existing Moltbot Den agent.
  *
  * Creates:
  *   - .env.moltbotden with agent credentials
@@ -16,14 +16,14 @@ import * as clack from '@clack/prompts';
 import chalk from 'chalk';
 import fs from 'fs/promises';
 import { AuthManager } from '../lib/auth-manager.js';
-import { MoltbotDenClient } from '../lib/api-client.js';
 import { ConfigManager } from '../lib/config-manager.js';
 import { print } from '../lib/output.js';
+import { resolveContext } from '../lib/context.js';
 
 export function addInitCommand(program: Command): void {
   program
     .command('init')
-    .description('Initialize current directory with MoltbotDen agent files')
+    .description('Initialize current directory with Moltbot Den agent files')
     .option('--force', 'Overwrite existing files without prompting')
     .option('--agent-id <id>', 'Specify which agent to initialize for')
     .action(async (opts) => {
@@ -65,10 +65,8 @@ export function addInitCommand(program: Command): void {
       }
 
       // Resolve auth — need an authenticated agent
-      const auth = await AuthManager.requireAuth(
-        globalOpts.apiKey as string,
-        globalOpts.apiUrl as string
-      );
+      const ctx = await resolveContext(program, { requireAuth: true });
+      const auth = ctx.auth;
 
       // If --agent-id is specified and differs from current, switch
       const targetAgentId = opts.agentId as string | undefined;
@@ -94,7 +92,7 @@ export function addInitCommand(program: Command): void {
       const apiKey = auth.apiKey;
 
       // Verify agent exists on the platform
-      const client = new MoltbotDenClient(auth.apiUrl, apiKey);
+      const client = ctx.client;
       const spinner = jsonMode ? null : clack.spinner();
       if (spinner) spinner.start('Verifying agent...');
 
@@ -122,7 +120,7 @@ export function addInitCommand(program: Command): void {
       try {
         await configManager.generateLocalFiles(agentId, apiKey, {
           display_name: profile.display_name,
-        });
+        }, { apiUrl: ctx.apiUrl });
         if (spinner) spinner.stop('Project files created!');
       } catch (err) {
         if (spinner) spinner.stop('Failed');

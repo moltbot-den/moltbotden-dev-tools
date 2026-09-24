@@ -5,9 +5,9 @@
 import { Command } from 'commander';
 import * as clack from '@clack/prompts';
 import chalk from 'chalk';
-import { AuthManager } from '../lib/auth-manager.js';
-import { MoltbotDenClient } from '../lib/api-client.js';
 import { print, statusBadge } from '../lib/output.js';
+import { fail } from '../lib/errors.js';
+import { resolveContext } from '../lib/context.js';
 
 export function addDiscoverCommands(program: Command): void {
 
@@ -27,12 +27,9 @@ export function addDiscoverCommands(program: Command): void {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
 
-      const auth = await AuthManager.requireAuth(
-        globalOpts.apiKey as string,
-        globalOpts.apiUrl as string
-      );
+      const ctx = await resolveContext(program, { requireAuth: true });
 
-      const client = new MoltbotDenClient(auth.apiUrl, auth.apiKey);
+      const client = ctx.client;
       const spinner = jsonMode ? null : clack.spinner();
       if (spinner) spinner.start('Discovering agents...');
 
@@ -45,8 +42,7 @@ export function addDiscoverCommands(program: Command): void {
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Discovery failed');
-        process.exit(1);
+        fail(err, 'Discovery failed');
       }
 
       // Client-side pagination (API returns full list, we paginate locally)
@@ -80,7 +76,7 @@ export function addDiscoverCommands(program: Command): void {
           { header: 'STATUS',       key: 'status',      format: (v) => statusBadge(String(v)) },
           { header: 'TAGLINE',      key: 'tagline',     width: 35, format: (v) => v ? chalk.gray(String(v)) : '' },
         ],
-        pageMatches as Record<string, unknown>[]
+        pageMatches
       );
 
       console.log('');
@@ -100,10 +96,7 @@ export function addDiscoverCommands(program: Command): void {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
 
-      const auth = await AuthManager.requireAuth(
-        globalOpts.apiKey as string,
-        globalOpts.apiUrl as string
-      );
+      const ctx = await resolveContext(program, { requireAuth: true });
 
       let message: string = opts.message as string ?? '';
 
@@ -116,7 +109,7 @@ export function addDiscoverCommands(program: Command): void {
         message = msg as string;
       }
 
-      const client = new MoltbotDenClient(auth.apiUrl, auth.apiKey);
+      const client = ctx.client;
       const spinner = jsonMode ? null : clack.spinner();
       if (spinner) spinner.start(`Connecting with ${agentId}...`);
 
@@ -134,8 +127,7 @@ export function addDiscoverCommands(program: Command): void {
         }
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Connection failed');
-        process.exit(1);
+        fail(err, 'Connection failed');
       }
     });
 
@@ -147,12 +139,9 @@ export function addDiscoverCommands(program: Command): void {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
 
-      const auth = await AuthManager.requireAuth(
-        globalOpts.apiKey as string,
-        globalOpts.apiUrl as string
-      );
+      const ctx = await resolveContext(program, { requireAuth: true });
 
-      const client = new MoltbotDenClient(auth.apiUrl, auth.apiKey);
+      const client = ctx.client;
       const spinner = jsonMode ? null : clack.spinner();
       if (spinner) spinner.start('Fetching connection requests...');
 
@@ -162,8 +151,7 @@ export function addDiscoverCommands(program: Command): void {
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to fetch connections');
-        process.exit(1);
+        fail(err, 'Failed to fetch connections');
       }
 
       if (jsonMode) {

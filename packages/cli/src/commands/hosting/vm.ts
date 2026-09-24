@@ -7,6 +7,7 @@ import * as clack from '@clack/prompts';
 import chalk from 'chalk';
 import { MoltbotDenClient } from '../../lib/api-client.js';
 import { print, statusBadge } from '../../lib/output.js';
+import { fail } from '../../lib/errors.js';
 import { VM_TIER_SPECS, type VMTier } from '../../types/hosting.js';
 
 export function addVMCommands(parent: Command, getClient: () => Promise<MoltbotDenClient>, jsonMode: () => boolean): void {
@@ -35,8 +36,7 @@ export function addVMCommands(parent: Command, getClient: () => Promise<MoltbotD
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to list VMs');
-        process.exit(1);
+        fail(err, 'Failed to list VMs');
       }
 
       if (json) { console.log(JSON.stringify(result)); return; }
@@ -64,7 +64,7 @@ export function addVMCommands(parent: Command, getClient: () => Promise<MoltbotD
           { header: 'ZONE',       key: 'gcp_zone',   width: 16, format: (v) => chalk.gray(String(v)) },
           { header: 'CREATED',    key: 'created_at',            format: (v) => chalk.gray(print.relativeTime(String(v))) },
         ],
-        result.vms as Record<string, unknown>[]
+        result.vms
       );
 
       console.log('');
@@ -98,6 +98,7 @@ export function addVMCommands(parent: Command, getClient: () => Promise<MoltbotD
               if (!v || v.trim().length < 2) return 'Name must be at least 2 characters';
               if (!/^[a-z0-9][a-z0-9-]*[a-z0-9]?$/.test(v)) return 'Use lowercase letters, numbers, and hyphens';
               if (v.length > 30) return 'Name must be at most 30 characters';
+              return undefined;
             },
           });
           if (clack.isCancel(n)) { clack.cancel('Cancelled'); process.exit(0); }
@@ -196,8 +197,7 @@ export function addVMCommands(parent: Command, getClient: () => Promise<MoltbotD
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'VM not found');
-        process.exit(1);
+        fail(err, 'VM not found');
       }
 
       if (json) { console.log(JSON.stringify(vm)); return; }
@@ -312,8 +312,7 @@ export function addVMCommands(parent: Command, getClient: () => Promise<MoltbotD
         }
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Delete failed');
-        process.exit(1);
+        fail(err, 'Delete failed');
       }
     });
 
@@ -333,8 +332,7 @@ export function addVMCommands(parent: Command, getClient: () => Promise<MoltbotD
         spinner.stop('');
       } catch (err) {
         spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'VM not found');
-        process.exit(1);
+        fail(err, 'VM not found');
       }
 
       if (vm.status !== 'running') {
@@ -380,8 +378,7 @@ export function addVMCommands(parent: Command, getClient: () => Promise<MoltbotD
         }
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to get console output');
-        process.exit(1);
+        fail(err, 'Failed to get console output');
       }
     });
 
@@ -469,7 +466,7 @@ export function addVMCommands(parent: Command, getClient: () => Promise<MoltbotD
 
 // ─── Log Helpers ──────────────────────────────────────────────────────────────
 
-function printLogLines(text: string, prefix?: string, dimTimestamps = false): void {
+function printLogLines(text: string, _prefix?: string, _dimTimestamps = false): void {
   const lines = text.split('\n').filter(Boolean);
   for (const line of lines) {
     // Detect log levels for color coding
@@ -533,8 +530,7 @@ async function vmAction(
     }
   } catch (err) {
     if (spinner) spinner.stop('Failed');
-    print.error(err instanceof Error ? err.message : 'Operation failed');
-    process.exit(1);
+    fail(err, 'Operation failed');
   }
 }
 

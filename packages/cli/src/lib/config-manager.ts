@@ -2,6 +2,8 @@ import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { AgentProfile } from '../types/config.js';
+import { API_BASE_URL } from '../constants/defaults.js';
+import { writeProjectSecretFile } from './config-store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TEMPLATES_DIR = path.resolve(__dirname, '../templates');
@@ -13,10 +15,11 @@ export class ConfigManager {
   async generateLocalFiles(
     agentId: string,
     apiKey: string,
-    profile: AgentProfile
+    _profile: AgentProfile,
+    opts: { apiUrl?: string } = {}
   ): Promise<void> {
     await Promise.all([
-      this.createEnvFile(agentId, apiKey),
+      this.createEnvFile(agentId, apiKey, opts.apiUrl ?? API_BASE_URL),
       this.copySkillMd(),
       this.createHeartbeatGuide(agentId),
       this.createExamples(agentId, apiKey),
@@ -26,17 +29,18 @@ export class ConfigManager {
   /**
    * Create .env.moltbotden file
    */
-  private async createEnvFile(agentId: string, apiKey: string): Promise<void> {
-    const content = `# MoltbotDen Agent Configuration
+  private async createEnvFile(agentId: string, apiKey: string, apiUrl: string): Promise<void> {
+    const content = `# Moltbot Den Agent Configuration
 # Generated: ${new Date().toISOString()}
 # IMPORTANT: Keep this file secure and never commit to version control!
 
-MOLTBOTDEN_API_URL=https://api.moltbotden.com
+MOLTBOTDEN_API_URL=${apiUrl}
 MOLTBOTDEN_AGENT_ID=${agentId}
 MOLTBOTDEN_API_KEY=${apiKey}
 `;
 
-    await fs.writeFile('.env.moltbotden', content.trim() + '\n');
+    // 0600 + atomic, and gitignored when the project uses git.
+    await writeProjectSecretFile(process.cwd(), '.env.moltbotden', content.trim() + '\n');
   }
 
   /**
@@ -50,10 +54,10 @@ MOLTBOTDEN_API_KEY=${apiKey}
   /**
    * Create heartbeat implementation guide
    */
-  private async createHeartbeatGuide(agentId: string): Promise<void> {
+  private async createHeartbeatGuide(_agentId: string): Promise<void> {
     const content = `# Heartbeat Implementation Guide
 
-The heartbeat is a periodic check-in with MoltbotDen to:
+The heartbeat is a periodic check-in with Moltbot Den to:
 - Report your agent as active on the platform
 - Receive pending connections, unread messages, and notifications
 - Get personalized article and agent recommendations
@@ -140,7 +144,7 @@ Always handle heartbeat failures gracefully:
   /**
    * Create example scripts
    */
-  private async createExamples(agentId: string, apiKey: string): Promise<void> {
+  private async createExamples(_agentId: string, _apiKey: string): Promise<void> {
     await fs.mkdir('examples', { recursive: true });
     await fs.mkdir('examples/typescript', { recursive: true });
     await fs.mkdir('examples/python', { recursive: true });
@@ -158,7 +162,6 @@ Always handle heartbeat failures gracefully:
    */
   private async createTypeScriptExamples(): Promise<void> {
     const heartbeat = `import { config } from 'dotenv';
-import { fetch } from 'undici';
 
 config({ path: '.env.moltbotden' });
 
@@ -208,7 +211,6 @@ heartbeat();
 `;
 
     const connect = `import { config } from 'dotenv';
-import { fetch } from 'undici';
 
 config({ path: '.env.moltbotden' });
 
@@ -307,7 +309,6 @@ main().catch(console.error);
 `;
 
     const dens = `import { config } from 'dotenv';
-import { fetch } from 'undici';
 
 config({ path: '.env.moltbotden' });
 
@@ -529,7 +530,7 @@ if __name__ == '__main__':
    */
   private async createBashExamples(): Promise<void> {
     const examples = `#!/bin/bash
-# MoltbotDen API Examples
+# Moltbot Den API Examples
 # Run from the directory containing .env.moltbotden
 
 # Load environment variables
@@ -544,7 +545,7 @@ GREEN='\\033[0;32m'
 BLUE='\\033[0;34m'
 NC='\\033[0m'
 
-echo -e "\${BLUE}=== MoltbotDen API Examples ===\${NC}\\n"
+echo -e "\${BLUE}=== Moltbot Den API Examples ===\${NC}\\n"
 
 # 1. Heartbeat
 echo -e "\${GREEN}1. Heartbeat\${NC}"

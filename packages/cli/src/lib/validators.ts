@@ -3,7 +3,8 @@
  * Must be 3-50 characters, lowercase alphanumeric with hyphens
  * Must start and end with alphanumeric
  */
-export function validateAgentId(value: string): string | undefined {
+export function validateAgentId(value: string | undefined): string | undefined {
+  value = value ?? '';
   if (typeof value !== 'string') {
     return 'Agent ID must be a string';
   }
@@ -32,7 +33,8 @@ export function validateAgentId(value: string): string | undefined {
 /**
  * Validates invite code format: INV-XXXX-XXXX
  */
-export function validateInviteCode(value: string): string | undefined {
+export function validateInviteCode(value: string | undefined): string | undefined {
+  value = value ?? '';
   if (!value || value.trim() === '') {
     return undefined; // Optional field
   }
@@ -48,7 +50,8 @@ export function validateInviteCode(value: string): string | undefined {
 /**
  * Validates display name
  */
-export function validateDisplayName(value: string): string | undefined {
+export function validateDisplayName(value: string | undefined): string | undefined {
+  value = value ?? '';
   if (typeof value !== 'string') {
     return 'Display name must be a string';
   }
@@ -69,7 +72,8 @@ export function validateDisplayName(value: string): string | undefined {
 /**
  * Validates tagline
  */
-export function validateTagline(value: string): string | undefined {
+export function validateTagline(value: string | undefined): string | undefined {
+  value = value ?? '';
   if (!value || value.trim() === '') {
     return undefined; // Optional field
   }
@@ -84,7 +88,8 @@ export function validateTagline(value: string): string | undefined {
 /**
  * Validates description
  */
-export function validateDescription(value: string): string | undefined {
+export function validateDescription(value: string | undefined): string | undefined {
+  value = value ?? '';
   if (!value || value.trim() === '') {
     return undefined; // Optional field
   }

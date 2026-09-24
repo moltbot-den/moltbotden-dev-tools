@@ -1,7 +1,7 @@
 /**
  * Register command — the flagship onboarding experience.
  *
- * Creates a new agent on MoltbotDen, saves credentials to:
+ * Creates a new agent on Moltbot Den, saves credentials to:
  *   - ~/.moltbotden/config.json (global, for use by all other commands)
  *   - .env.moltbotden (local, for direct use in the agent's project)
  *
@@ -17,10 +17,11 @@ import boxen from 'boxen';
 import open from 'open';
 import { MoltbotDenClient } from '../lib/api-client.js';
 import { ConfigManager } from '../lib/config-manager.js';
-import { AuthManager } from '../lib/auth-manager.js';
+import { AuthManager, getConfigFile } from '../lib/auth-manager.js';
 import { InteractivePrompts } from '../lib/prompts.js';
 import { ApiError } from '../types/api.js';
 import { CLIOptions } from '../types/config.js';
+import { fail, UsageError } from '../lib/errors.js';
 
 export async function register(options: CLIOptions): Promise<void> {
   try {
@@ -29,11 +30,7 @@ export async function register(options: CLIOptions): Promise<void> {
     // In JSON mode, require --agent-id and --display-name (no interactive prompts)
     if (isJsonMode) {
       if (!options.agentId || !options.displayName) {
-        console.log(JSON.stringify({
-          success: false,
-          error: '--agent-id and --display-name are required in JSON mode',
-        }));
-        process.exit(1);
+        fail(new UsageError('--agent-id and --display-name are required in --json mode'));
       }
     }
 
@@ -60,7 +57,7 @@ export async function register(options: CLIOptions): Promise<void> {
 
     // Call the registration API
     const spinner = isJsonMode ? null : clack.spinner();
-    if (spinner) spinner.start('Registering with MoltbotDen...');
+    if (spinner) spinner.start('Registering with Moltbot Den...');
 
     const apiUrl = options.apiUrl ?? 'https://api.moltbotden.com';
     const client = new MoltbotDenClient(apiUrl);
@@ -157,11 +154,12 @@ export async function register(options: CLIOptions): Promise<void> {
       await configManager.generateLocalFiles(
         result.agent_id,
         result.api_key,
-        registrationData.profile
+        registrationData.profile,
+        { apiUrl }
       );
       fileSpinner.stop('Starter kit ready!');
 
-      clack.log.success('✓ Credentials saved to ~/.moltbotden/config.json');
+      clack.log.success(`✓ Credentials saved to ${getConfigFile()}`);
       clack.log.success('✓ Created .env.moltbotden');
       clack.log.success('✓ Created SKILL.md');
       clack.log.success('✓ Created heartbeat.md');
@@ -244,7 +242,7 @@ function handleApiError(error: ApiError, attemptedAgentId: string): void {
     clack.log.error(chalk.red('Too many registration attempts'));
     clack.note('Please wait 45 minutes before trying again.');
   } else if (error.status === 0) {
-    clack.log.error(chalk.red('Could not reach MoltbotDen API'));
+    clack.log.error(chalk.red('Could not reach Moltbot Den API'));
     clack.note(
       '• Check your internet connection\n' +
         '• API status: https://status.moltbotden.com',

@@ -67,12 +67,12 @@ describe('sanitizeAgentId', () => {
 
 describe('maskApiKey', () => {
   it('masks the middle of a standard key', () => {
-    const key = 'moltbotden_sk_58ab6049666c3438df8234c9f117c545';
+    const key = 'moltbotden_sk_0000000000000000000000000000c545';
     const masked = maskApiKey(key);
     expect(masked).toContain('moltbotden_sk_');
     expect(masked).toContain('c545');
     expect(masked).toContain('****');
-    expect(masked).not.toContain('58ab6049666c3438');
+    expect(masked).not.toContain('0000000000000000');
   });
 
   it('returns short keys as-is', () => {

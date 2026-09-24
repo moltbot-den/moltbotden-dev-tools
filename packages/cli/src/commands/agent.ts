@@ -7,8 +7,9 @@ import * as clack from '@clack/prompts';
 import chalk from 'chalk';
 import open from 'open';
 import { AuthManager } from '../lib/auth-manager.js';
-import { MoltbotDenClient } from '../lib/api-client.js';
 import { print, statusBadge } from '../lib/output.js';
+import { fail } from '../lib/errors.js';
+import { resolveContext } from '../lib/context.js';
 import type { HeartbeatResponse } from '../lib/api-client.js';
 
 export function addAgentCommands(program: Command): void {
@@ -21,12 +22,9 @@ export function addAgentCommands(program: Command): void {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
 
-      const auth = await AuthManager.requireAuth(
-        globalOpts.apiKey as string,
-        globalOpts.apiUrl as string
-      );
+      const ctx = await resolveContext(program, { requireAuth: true });
 
-      const client = new MoltbotDenClient(auth.apiUrl, auth.apiKey);
+      const client = ctx.client;
 
       const spinner = jsonMode ? null : clack.spinner();
       if (spinner) spinner.start('Fetching agent status...');
@@ -39,8 +37,7 @@ export function addAgentCommands(program: Command): void {
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to fetch status');
-        process.exit(1);
+        fail(err, 'Failed to fetch status');
       }
 
       if (jsonMode) {
@@ -106,12 +103,9 @@ export function addAgentCommands(program: Command): void {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
 
-      const auth = await AuthManager.requireAuth(
-        globalOpts.apiKey as string,
-        globalOpts.apiUrl as string
-      );
+      const ctx = await resolveContext(program, { requireAuth: true });
 
-      const client = new MoltbotDenClient(auth.apiUrl, auth.apiKey);
+      const client = ctx.client;
 
       const spinner = jsonMode ? null : clack.spinner();
       if (spinner) spinner.start('Sending heartbeat...');
@@ -122,8 +116,7 @@ export function addAgentCommands(program: Command): void {
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Heartbeat failed');
-        print.error(err instanceof Error ? err.message : 'Heartbeat failed');
-        process.exit(1);
+        fail(err, 'Heartbeat failed');
       }
 
       if (jsonMode) {
@@ -185,12 +178,9 @@ export function addAgentCommands(program: Command): void {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
 
-      const auth = await AuthManager.requireAuth(
-        globalOpts.apiKey as string,
-        globalOpts.apiUrl as string
-      );
+      const ctx = await resolveContext(program, { requireAuth: true });
 
-      const client = new MoltbotDenClient(auth.apiUrl, auth.apiKey);
+      const client = ctx.client;
 
       const spinner = jsonMode ? null : clack.spinner();
       if (spinner) spinner.start('Fetching profile...');
@@ -201,8 +191,7 @@ export function addAgentCommands(program: Command): void {
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to fetch profile');
-        process.exit(1);
+        fail(err, 'Failed to fetch profile');
       }
 
       if (jsonMode) {
@@ -252,12 +241,10 @@ export function addAgentCommands(program: Command): void {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
 
-      const auth = await AuthManager.requireAuth(
-        globalOpts.apiKey as string,
-        globalOpts.apiUrl as string
-      );
+      const ctx = await resolveContext(program, { requireAuth: true });
+      const auth = ctx.auth;
 
-      const client = new MoltbotDenClient(auth.apiUrl, auth.apiKey);
+      const client = ctx.client;
 
       // Fetch current profile first
       const current = await client.getMe();
@@ -276,6 +263,7 @@ export function addAgentCommands(program: Command): void {
           validate: (v) => {
             if (v && v.trim().length < 2) return 'Must be at least 2 characters';
             if (v && v.trim().length > 50) return 'Must be at most 50 characters';
+            return undefined;
           },
         });
         if (clack.isCancel(name)) { clack.cancel('Cancelled'); process.exit(0); }
@@ -287,6 +275,7 @@ export function addAgentCommands(program: Command): void {
           initialValue: current.tagline,
           validate: (v) => {
             if (v && v.length > 100) return 'Must be at most 100 characters';
+            return undefined;
           },
         });
         if (clack.isCancel(tag)) { clack.cancel('Cancelled'); process.exit(0); }
@@ -298,6 +287,7 @@ export function addAgentCommands(program: Command): void {
           initialValue: current.description,
           validate: (v) => {
             if (v && v.length > 500) return 'Must be at most 500 characters';
+            return undefined;
           },
         });
         if (clack.isCancel(desc)) { clack.cancel('Cancelled'); process.exit(0); }
@@ -337,8 +327,7 @@ export function addAgentCommands(program: Command): void {
         }
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Profile update failed');
-        process.exit(1);
+        fail(err, 'Profile update failed');
       }
     });
 
@@ -346,7 +335,7 @@ export function addAgentCommands(program: Command): void {
     .command('open')
     .description('Open your agent profile in the browser')
     .action(async () => {
-      const auth = await AuthManager.requireAuth();
+      const { auth } = await resolveContext(program, { requireAuth: true });
       const agentId = auth.agentId ?? 'unknown';
       const url = `https://moltbotden.com/agent/${agentId}`;
       print.info(`Opening ${chalk.cyan(url)}`);

@@ -7,6 +7,7 @@ import * as clack from '@clack/prompts';
 import chalk from 'chalk';
 import { MoltbotDenClient } from '../../lib/api-client.js';
 import { print, statusBadge } from '../../lib/output.js';
+import { fail } from '../../lib/errors.js';
 import { OPENCLAW_PLAN_SPECS, type OpenClawPlan } from '../../types/hosting.js';
 
 const AVAILABLE_CHANNELS = ['telegram', 'discord', 'slack', 'api'];
@@ -35,8 +36,7 @@ export function addOpenClawCommands(parent: Command, getClient: () => Promise<Mo
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to list instances');
-        process.exit(1);
+        fail(err, 'Failed to list instances');
       }
 
       if (json) { console.log(JSON.stringify(result)); return; }
@@ -59,14 +59,14 @@ export function addOpenClawCommands(parent: Command, getClient: () => Promise<Mo
           { header: 'PLAN',      key: 'plan',         width: 12 },
           { header: 'STATUS',    key: 'status',       width: 16, format: (v) => statusBadge(String(v)) },
           { header: 'AGENT',     key: 'agent_id',     width: 20, format: (v) => v ? chalk.gray(String(v)) : chalk.gray('–') },
-          { header: 'CHANNELS',  key: 'channels',               format: (v, row) => {
+          { header: 'CHANNELS',  key: 'channels',               format: (_v, row) => {
             const r = row as { channels?: string[] };
             return chalk.gray((r.channels ?? []).join(', ') || '–');
           }},
           { header: 'SKILLS',    key: 'skill_count',  align: 'right', format: (v) => chalk.gray(String(v)) },
           { header: 'LAST SEEN', key: 'last_seen_at',            format: (v) => v ? chalk.gray(print.relativeTime(String(v))) : chalk.gray('–') },
         ],
-        instances as Record<string, unknown>[]
+        instances
       );
 
       console.log('');
@@ -81,7 +81,7 @@ export function addOpenClawCommands(parent: Command, getClient: () => Promise<Mo
     .description('Deploy a new managed OpenClaw agent instance')
     .option('--name <name>',     'Instance name')
     .option('--plan <plan>',     'Plan: shared|dedicated')
-    .option('--agent-id <id>',   'MoltbotDen agent ID to link')
+    .option('--agent-id <id>',   'Moltbot Den agent ID to link')
     .option('--channels <list>', 'Comma-separated channels: telegram,discord,slack,api')
     .action(async (opts) => {
       const client = await getClient();
@@ -110,6 +110,7 @@ export function addOpenClawCommands(parent: Command, getClient: () => Promise<Mo
               if (!v || v.trim().length < 2) return 'Name must be at least 2 characters';
               if (!/^[a-z0-9][a-z0-9-]*[a-z0-9]?$/.test(v)) return 'Use lowercase letters, numbers, and hyphens';
               if (v.length > 40) return 'Name must be at most 40 characters';
+              return undefined;
             },
           });
           if (clack.isCancel(n)) { clack.cancel('Cancelled'); process.exit(0); }
@@ -145,7 +146,7 @@ export function addOpenClawCommands(parent: Command, getClient: () => Promise<Mo
 
         if (!agentId) {
           const id = await clack.text({
-            message: 'Link to MoltbotDen agent ID (optional — press Enter to skip):',
+            message: 'Link to Moltbot Den agent ID (optional — press Enter to skip):',
             placeholder: 'my-agent-id',
           });
           if (clack.isCancel(id)) { clack.cancel('Cancelled'); process.exit(0); }
@@ -190,8 +191,7 @@ export function addOpenClawCommands(parent: Command, getClient: () => Promise<Mo
         }
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Deployment failed');
-        process.exit(1);
+        fail(err, 'Deployment failed');
       }
     });
 
@@ -211,8 +211,7 @@ export function addOpenClawCommands(parent: Command, getClient: () => Promise<Mo
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Instance not found');
-        process.exit(1);
+        fail(err, 'Instance not found');
       }
 
       if (json) { console.log(JSON.stringify(instance)); return; }
@@ -277,8 +276,7 @@ export function addOpenClawCommands(parent: Command, getClient: () => Promise<Mo
         }
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to fetch logs');
-        process.exit(1);
+        fail(err, 'Failed to fetch logs');
       }
     });
 
@@ -303,8 +301,7 @@ export function addOpenClawCommands(parent: Command, getClient: () => Promise<Mo
         }
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Restart failed');
-        process.exit(1);
+        fail(err, 'Restart failed');
       }
     });
 
@@ -340,8 +337,7 @@ export function addOpenClawCommands(parent: Command, getClient: () => Promise<Mo
         }
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Delete failed');
-        process.exit(1);
+        fail(err, 'Delete failed');
       }
     });
 }

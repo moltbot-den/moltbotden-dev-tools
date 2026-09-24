@@ -1,100 +1,139 @@
 /**
- * Auth manager tests — tests the auth resolution logic and config format.
+ * Credential and API URL resolution.
+ *
+ * Regression guard: the global --api-url used to carry a default value, so
+ * MOLTBOTDEN_API_URL and the URL stored with each agent were ignored and
+ * staging/local keys were sent to production.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { Command } from 'commander';
+import { AuthManager, resolveApiUrl } from '../../src/lib/auth-manager.js';
+import { resolveContext, resolveBaseUrl } from '../../src/lib/context.js';
+import { writeConfigFile } from '../../src/lib/config-store.js';
 
-// Mock the filesystem so tests don't read/write real config files.
-// vi.mock is hoisted to the top by Vitest — this is the correct pattern.
-vi.mock('fs/promises', () => ({
-  default: {
-    readFile: vi.fn().mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' })),
-    writeFile: vi.fn().mockResolvedValue(undefined),
-    chmod: vi.fn().mockResolvedValue(undefined),
-    rename: vi.fn().mockResolvedValue(undefined),
-    unlink: vi.fn().mockResolvedValue(undefined),
-    mkdir: vi.fn().mockResolvedValue(undefined),
-  },
-  readFile: vi.fn().mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' })),
-  writeFile: vi.fn().mockResolvedValue(undefined),
-  chmod: vi.fn().mockResolvedValue(undefined),
-  rename: vi.fn().mockResolvedValue(undefined),
-  unlink: vi.fn().mockResolvedValue(undefined),
-  mkdir: vi.fn().mockResolvedValue(undefined),
-}));
+const DEFAULT = 'https://api.moltbotden.com';
 
-describe('AuthManager auth resolution', () => {
-  const originalEnv = { ...process.env };
+beforeEach(() => {
+  process.env.MOLTBOTDEN_CONFIG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'mbd-auth-'));
+  delete process.env.MOLTBOTDEN_API_KEY;
+  delete process.env.MOLTBOTDEN_API_URL;
+});
 
-  beforeEach(() => {
-    delete process.env.MOLTBOTDEN_API_KEY;
-    delete process.env.MOLTBOTDEN_API_URL;
-    vi.clearAllMocks();
+async function storeAgent(apiUrl: string, preferences: Record<string, unknown> = {}) {
+  await writeConfigFile({
+    version: 1,
+    currentAgentId: 'stored-agent',
+    agents: {
+      'stored-agent': { agentId: 'stored-agent', apiKey: 'stored-key', apiUrl, addedAt: '2026-01-01' },
+    },
+    preferences,
+  });
+}
+
+/** Build a program shaped like cli.ts (global options, no defaults) and parse argv. */
+function programWith(argv: string[]): Command {
+  const program = new Command();
+  program.option('--json').option('--verbose').option('--api-key <key>').option('--api-url <url>');
+  program.command('noop').action(() => {});
+  program.parse(['node', 'mbd', ...argv, 'noop']);
+  return program;
+}
+
+describe('resolveApiUrl precedence: flag > env > stored > preference > default', () => {
+  const stored = { url: 'https://stored.example', source: 'config' as const };
+
+  it('uses the flag over everything', () => {
+    process.env.MOLTBOTDEN_API_URL = 'https://env.example';
+    expect(resolveApiUrl({ flag: 'https://flag.example/', stored, preference: 'https://pref.example' }))
+      .toEqual({ apiUrl: 'https://flag.example', apiUrlSource: 'flag' });
   });
 
-  afterEach(() => {
-    process.env = { ...originalEnv };
+  it('uses MOLTBOTDEN_API_URL over stored and preference', () => {
+    process.env.MOLTBOTDEN_API_URL = 'https://env.example';
+    expect(resolveApiUrl({ stored, preference: 'https://pref.example' }).apiUrl).toBe('https://env.example');
   });
 
-  it('should prioritize explicit API key over env var', async () => {
-    const { AuthManager } = await import('../../src/lib/auth-manager.js');
-
-    process.env.MOLTBOTDEN_API_KEY = 'env-key';
-    const auth = await AuthManager.getAuth('explicit-key');
-
-    expect(auth).not.toBeNull();
-    expect(auth!.apiKey).toBe('explicit-key');
-    expect(auth!.source).toBe('flag');
+  it('uses the URL stored with the credentials over the preference', () => {
+    expect(resolveApiUrl({ stored, preference: 'https://pref.example' }).apiUrl).toBe('https://stored.example');
   });
 
-  it('should use env var when no explicit key and no config file exists', async () => {
-    const { AuthManager } = await import('../../src/lib/auth-manager.js');
-
-    process.env.MOLTBOTDEN_API_KEY = 'env-key';
-    const auth = await AuthManager.getAuth(undefined, undefined);
-
-    expect(auth).not.toBeNull();
-    expect(auth!.source).toBe('env');
-    expect(auth!.apiKey).toBe('env-key');
-  });
-
-  it('should return null when no credentials are available', async () => {
-    const { AuthManager } = await import('../../src/lib/auth-manager.js');
-
-    // No env var set, no explicit key, config file returns ENOENT,
-    // .env.moltbotden also returns ENOENT
-    const auth = await AuthManager.getAuth(undefined, undefined);
-
-    expect(auth).toBeNull();
-  });
-
-  it('should allow overriding API URL via explicit parameter', async () => {
-    const { AuthManager } = await import('../../src/lib/auth-manager.js');
-
-    const auth = await AuthManager.getAuth('test-key', 'https://custom.api.com');
-
-    expect(auth).not.toBeNull();
-    expect(auth!.apiUrl).toBe('https://custom.api.com');
-  });
-
-  it('should use MOLTBOTDEN_API_URL env var for the URL when resolving from env', async () => {
-    const { AuthManager } = await import('../../src/lib/auth-manager.js');
-
-    process.env.MOLTBOTDEN_API_KEY = 'env-key';
-    process.env.MOLTBOTDEN_API_URL = 'https://env-url.com';
-    const auth = await AuthManager.getAuth(undefined, undefined);
-
-    expect(auth).not.toBeNull();
-    expect(auth!.apiUrl).toBe('https://env-url.com');
+  it('uses the api_url preference, then the default', () => {
+    expect(resolveApiUrl({ preference: 'https://pref.example' }).apiUrl).toBe('https://pref.example');
+    expect(resolveApiUrl({})).toEqual({ apiUrl: DEFAULT, apiUrlSource: 'default' });
   });
 });
 
-describe('GlobalConfig format', () => {
-  it('should define the expected config shape', async () => {
-    const { AuthManager } = await import('../../src/lib/auth-manager.js');
+describe('resolveContext', () => {
+  it('sends a stored staging agent to its own URL, not production', async () => {
+    await storeAgent('https://staging.example');
+    const ctx = await resolveContext(programWith([]), { requireAuth: true });
+    expect(ctx.apiKey).toBe('stored-key');
+    expect(ctx.apiUrl).toBe('https://staging.example');
+    expect(ctx.client.baseUrl).toBe('https://staging.example');
+  });
 
+  it('lets MOLTBOTDEN_API_URL override the stored URL', async () => {
+    await storeAgent('https://staging.example');
+    process.env.MOLTBOTDEN_API_URL = 'http://localhost:8000';
+    const ctx = await resolveContext(programWith([]));
+    expect(ctx.apiUrl).toBe('http://localhost:8000');
+    expect(ctx.apiUrlSource).toBe('env');
+  });
+
+  it('lets --api-url override env and stored URL', async () => {
+    await storeAgent('https://staging.example');
+    process.env.MOLTBOTDEN_API_URL = 'http://localhost:8000';
+    const ctx = await resolveContext(programWith(['--api-url', 'http://127.0.0.1:9']));
+    expect(ctx.apiUrl).toBe('http://127.0.0.1:9');
+  });
+
+  it('resolves a URL even when not logged in', async () => {
+    const ctx = await resolveContext(programWith(['--json']));
+    expect(ctx.auth).toBeNull();
+    expect(ctx.json).toBe(true);
+    expect(ctx.apiUrl).toBe(DEFAULT);
+  });
+
+  it('throws an auth error (exit code 3) when auth is required but missing', async () => {
+    await expect(resolveContext(programWith([]), { requireAuth: true })).rejects.toMatchObject({
+      exitCode: 3,
+      message: 'Not authenticated',
+    });
+  });
+
+  it('prefers --api-key over MOLTBOTDEN_API_KEY over stored config', async () => {
+    await storeAgent('https://staging.example');
+    process.env.MOLTBOTDEN_API_KEY = 'env-key';
+    expect((await resolveContext(programWith(['--api-key', 'flag-key']))).apiKey).toBe('flag-key');
+    expect((await resolveContext(programWith([]))).apiKey).toBe('env-key');
+  });
+
+  it('login/register ignore the stored agent URL (a new key may target another env)', async () => {
+    await storeAgent('https://staging.example', { api_url: 'https://pref.example' });
+    expect(await resolveBaseUrl(programWith([]))).toBe('https://pref.example');
+  });
+});
+
+describe('AuthManager storage', () => {
+  it('keeps preferences when saving an agent', async () => {
+    await storeAgent(DEFAULT, { telemetry: true });
+    await AuthManager.saveAgent('second', 'k2', { apiUrl: DEFAULT });
     const config = await AuthManager.readConfig();
-    expect(config).toHaveProperty('version');
-    expect(config).toHaveProperty('agents');
-    expect(typeof config.agents).toBe('object');
+    expect(config.preferences).toEqual({ telemetry: true });
+    expect(Object.keys(config.agents).sort()).toEqual(['second', 'stored-agent']);
+    expect(config.currentAgentId).toBe('second');
+  });
+
+  it('returns null when there are no credentials anywhere', async () => {
+    const cwd = process.cwd();
+    process.chdir(fs.mkdtempSync(path.join(os.tmpdir(), 'mbd-empty-cwd-')));
+    try {
+      await expect(AuthManager.getAuth()).resolves.toBeNull();
+    } finally {
+      process.chdir(cwd);
+    }
   });
 });

@@ -12,6 +12,60 @@ import {
   COMMUNICATION_STYLES,
 } from '../constants/defaults.js';
 import { AgentProfile, ProfileDepth, UserType } from '../types/config.js';
+import { isJsonMode } from './output.js';
+import { UsageError } from './errors.js';
+
+// ─── Non-interactive safety ───────────────────────────────────────────────────
+// Scripts, CI and agents run the CLI without a terminal. Prompting there either
+// hangs forever or silently picks a default, so every prompt must be guarded.
+
+/** True only when a human can answer prompts (TTY in and out, not --json). */
+export function isInteractive(): boolean {
+  return Boolean(process.stdin.isTTY && process.stdout.isTTY) && !isJsonMode();
+}
+
+function nonInteractiveReason(): string {
+  return isJsonMode() ? '--json is set' : 'stdin/stdout is not a terminal';
+}
+
+/**
+ * Call before prompting for a value that also has a flag. Throws a UsageError
+ * (exit code 2) naming the flag when prompting is impossible.
+ *
+ *   if (!opts.name) { requireInteractive('--name'); opts.name = await clack.text(...) }
+ */
+export function requireInteractive(flagName: string, what?: string): void {
+  if (isInteractive()) return;
+  throw new UsageError(
+    `Missing required ${flagName}${what ? ` (${what})` : ''}: cannot prompt because ${nonInteractiveReason()}.`,
+    { hint: `Pass ${flagName} explicitly.` },
+  );
+}
+
+/**
+ * Confirmation gate for destructive actions.
+ *   - --yes            → proceed without asking
+ *   - --json or no TTY → refuse (UsageError, exit 2) instead of silently
+ *                        proceeding: automation must opt in with --yes
+ *   - otherwise        → ask; returns false if the user declines or cancels
+ */
+export async function confirmDestructive(opts: {
+  yes?: boolean;
+  json?: boolean;
+  message: string;
+}): Promise<boolean> {
+  if (opts.yes) return true;
+  if (opts.json || !isInteractive()) {
+    const reason = opts.json ? '--json is set' : nonInteractiveReason();
+    throw new UsageError(`Refusing to continue without confirmation (${reason}): ${opts.message}`, {
+      hint: 'Re-run with --yes to confirm.',
+    });
+  }
+  const answer = await clack.confirm({ message: opts.message, initialValue: false });
+  if (clack.isCancel(answer)) return false;
+  return answer === true;
+}
+
 
 export interface RegistrationData {
   userType: UserType;

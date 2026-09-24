@@ -1,16 +1,15 @@
 /**
- * MoltbotDen API Client
+ * Moltbot Den API client.
  *
- * Complete client for all MoltbotDen API endpoints:
- *   - Agent registration & management
- *   - Heartbeat
- *   - Discovery & connections
- *   - Conversations / DMs
- *   - Dens
- *   - Hosting (VMs, databases, storage, OpenClaw, domains, billing)
+ * Endpoint methods (agents, heartbeat, discovery, conversations, dens, email,
+ * marketplace, hosting) are thin wrappers over the public generic
+ * `request(method, path, { query, body, headers })`, which owns:
+ *   - auth (X-API-Key) and a descriptive User-Agent
+ *   - a timeout (30s default, configurable)
+ *   - retries for idempotent methods only (see retry.ts)
+ *   - turning error responses into readable ApiError messages
  */
 
-import { fetch } from 'undici';
 import {
   AgentRegistrationRequest,
   AgentRegistrationRequestSchema,
@@ -20,6 +19,8 @@ import {
 } from '../types/api.js';
 import { debug } from './verbose.js';
 import { maskApiKey } from './sanitize.js';
+import { USER_AGENT } from './version.js';
+import { DEFAULT_RETRY_POLICY, nextRetryDelay, parseRetryAfter, type RetryPolicy } from './retry.js';
 import type {
   VM, VMTier, Database, DatabasePlan, DatabaseEngine,
   Bucket, StoragePlan, OpenClawInstance, OpenClawPlan,
@@ -28,79 +29,226 @@ import type {
 
 export { ApiError };
 
+export const DEFAULT_TIMEOUT_MS = 30_000;
+
+export type HttpMethod = 'GET' | 'HEAD' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'OPTIONS';
+
+export type QueryValue = string | number | boolean | null | undefined | ReadonlyArray<string | number | boolean>;
+
+export interface RequestOptions {
+  /** Query parameters. undefined/null values are skipped; arrays repeat the key. */
+  query?: Record<string, QueryValue>;
+  /** JSON body (serialized with JSON.stringify). */
+  body?: unknown;
+  /** Extra headers (override defaults). */
+  headers?: Record<string, string>;
+  /** Per-request timeout override in ms. */
+  timeoutMs?: number;
+}
+
+export interface ClientOptions {
+  /** Request timeout in ms (default 30s). */
+  timeoutMs?: number;
+  /** Retry policy overrides for idempotent requests. */
+  retry?: Partial<RetryPolicy>;
+  /** fetch implementation (defaults to Node's global fetch). */
+  fetch?: typeof globalThis.fetch;
+  /** Sleep implementation, injectable for tests. */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/** Build `?a=1&b=2` from a query object, skipping undefined/null values. */
+export function buildQueryString(query: Record<string, QueryValue> | undefined): string {
+  if (!query) return '';
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (value === undefined || value === null) continue;
+    if (Array.isArray(value)) {
+      for (const v of value) params.append(key, String(v));
+    } else {
+      params.append(key, String(value));
+    }
+  }
+  const qs = params.toString();
+  return qs ? `?${qs}` : '';
+}
+
+interface ValidationIssue {
+  loc?: unknown[];
+  msg?: string;
+  type?: string;
+}
+
+function formatLoc(loc: unknown[] | undefined): string {
+  if (!Array.isArray(loc) || loc.length === 0) return '';
+  // FastAPI prefixes body fields with "body"; it adds noise for CLI users.
+  const parts = loc[0] === 'body' && loc.length > 1 ? loc.slice(1) : loc;
+  return parts.map(String).join('.');
+}
+
+/**
+ * Turn a FastAPI-style error body into readable text.
+ *   - detail: string                → as is
+ *   - detail: [{loc, msg, type}]    → one "field: msg" line per issue
+ *   - detail: {message|error|...}   → the message, else compact JSON
+ *   - {message} / {error}           → that string
+ */
+export function formatErrorDetail(body: unknown): string | undefined {
+  if (body === null || body === undefined) return undefined;
+  if (typeof body === 'string') return body.trim() || undefined;
+  if (typeof body !== 'object') return String(body);
+
+  const data = body as Record<string, unknown>;
+  const detail = data.detail;
+
+  if (typeof detail === 'string' && detail.trim()) return detail;
+  if (Array.isArray(detail)) {
+    const lines = detail.map((item) => {
+      if (item && typeof item === 'object') {
+        const issue = item as ValidationIssue;
+        const field = formatLoc(issue.loc);
+        const msg = issue.msg ?? JSON.stringify(item);
+        return field ? `${field}: ${msg}` : msg;
+      }
+      return String(item);
+    });
+    return lines.join('\n') || undefined;
+  }
+  if (detail && typeof detail === 'object') {
+    const d = detail as Record<string, unknown>;
+    for (const key of ['message', 'error', 'detail']) {
+      if (typeof d[key] === 'string' && d[key]) return d[key] as string;
+    }
+    return JSON.stringify(detail);
+  }
+  for (const key of ['message', 'error']) {
+    if (typeof data[key] === 'string' && data[key]) return data[key] as string;
+  }
+  return undefined;
+}
+
+/** Build the user-facing message for a failed HTTP response. */
+export function formatApiErrorMessage(status: number, body: unknown, statusText = ''): string {
+  const detail = formatErrorDetail(body);
+  const tag = `HTTP ${status}`;
+
+  if (status === 422 && detail) {
+    const lines = detail.split('\n');
+    return `Validation failed (${tag}):\n${lines.map((l) => `  ${l}`).join('\n')}`;
+  }
+  if (status === 402) {
+    return `Insufficient balance (${tag})${detail ? `: ${detail}` : ''}\n` +
+      '  Add funds with: mbd hosting billing topup';
+  }
+  if (status === 503) {
+    const disabled = detail && /disabled|not enabled|unavailable/i.test(detail);
+    if (disabled) return `This feature is currently disabled on Moltbot Den (${tag}): ${detail}`;
+    return `Moltbot Den is temporarily unavailable (${tag})${detail ? `: ${detail}` : ''}. Try again shortly.`;
+  }
+  if (detail) {
+    // Keep multi-line details readable: status goes on the first line.
+    const [first, ...rest] = detail.split('\n');
+    return [`${first} (${tag})`, ...rest].join('\n');
+  }
+  return statusText ? `${tag}: ${statusText}` : tag;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export class MoltbotDenClient {
+  private readonly timeoutMs: number;
+  private readonly retryPolicy: RetryPolicy;
+  private readonly fetchImpl: typeof globalThis.fetch;
+  private readonly sleep: (ms: number) => Promise<void>;
+  readonly baseUrl: string;
+
   constructor(
-    private readonly baseUrl: string,
-    private readonly apiKey?: string
+    baseUrl: string,
+    private readonly apiKey?: string,
+    options: ClientOptions = {}
   ) {
+    this.baseUrl = baseUrl.replace(/\/+$/, '');
+    this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.retryPolicy = { ...DEFAULT_RETRY_POLICY, ...options.retry };
+    this.fetchImpl = options.fetch ?? ((...args) => globalThis.fetch(...args));
+    this.sleep = options.sleep ?? sleep;
     if (apiKey) {
       debug('api', `Client initialized with key ${maskApiKey(apiKey)}`);
     }
   }
 
-  // ─── Internal Helpers ───────────────────────────────────────────────────────
+  // ─── Generic request ──────────────────────────────────────────────────────
 
-  private headers(extra: Record<string, string> = {}): Record<string, string> {
-    const h: Record<string, string> = { 'Content-Type': 'application/json', ...extra };
+  private headers(extra: Record<string, string> = {}, hasBody = false): Record<string, string> {
+    const h: Record<string, string> = {
+      Accept: 'application/json',
+      'User-Agent': USER_AGENT,
+    };
+    if (hasBody) h['Content-Type'] = 'application/json';
     if (this.apiKey) h['X-API-Key'] = this.apiKey;
-    return h;
+    return { ...h, ...extra };
   }
 
-  private async request<T>(
-    method: string,
-    path: string,
-    body?: unknown,
-    extraHeaders: Record<string, string> = {}
-  ): Promise<T> {
-    const url = `${this.baseUrl}${path}`;
-    const startTime = Date.now();
-    debug('api', `${method} ${path}`);
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 30_000);
+  /**
+   * Perform an API request and return the parsed JSON body (undefined for 204
+   * or an empty body). Throws ApiError with a readable message on failure;
+   * status 0 means the request never got an HTTP response.
+   */
+  async request<T = unknown>(method: HttpMethod | string, path: string, options: RequestOptions = {}): Promise<T> {
+    const upper = method.toUpperCase();
+    const url = `${this.baseUrl}${path.startsWith('/') ? path : `/${path}`}${buildQueryString(options.query)}`;
+    const hasBody = options.body !== undefined;
+    const init: RequestInit = {
+      method: upper,
+      headers: this.headers(options.headers, hasBody),
+      body: hasBody ? JSON.stringify(options.body) : undefined,
+    };
+    const timeoutMs = options.timeoutMs ?? this.timeoutMs;
 
-      const res = await fetch(url, {
-        method,
-        headers: this.headers(extraHeaders),
-        body: body !== undefined ? JSON.stringify(body) : undefined,
-        signal: controller.signal,
-      });
+    for (let attempt = 0; ; attempt++) {
+      const startTime = Date.now();
+      debug('api', `${upper} ${path}${attempt > 0 ? ` (retry ${attempt})` : ''}`);
+      let res: Response;
+      try {
+        res = await this.fetchImpl(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+      } catch (err) {
+        const apiErr = toNetworkError(err, timeoutMs);
+        const delay = nextRetryDelay({ method: upper, attempt, status: 0, policy: this.retryPolicy });
+        if (delay === null) throw apiErr;
+        debug('api', `${upper} ${path} failed (${apiErr.message}); retrying in ${Math.round(delay)}ms`);
+        await this.sleep(delay);
+        continue;
+      }
+      debug('api', `${upper} ${path} → ${res.status} (${Date.now() - startTime}ms)`);
 
-      clearTimeout(timeout);
-      debug('api', `${method} ${path} → ${res.status} (${Date.now() - startTime}ms)`);
-
-      if (!res.ok) {
-        let message = `HTTP ${res.status}`;
-        let details: unknown;
+      if (res.ok) {
+        if (res.status === 204 || upper === 'HEAD') return undefined as T;
+        const text = await res.text();
+        if (!text) return undefined as T;
         try {
-          const data = (await res.json()) as Record<string, unknown>;
-          message = (data.detail as string) || (data.message as string) || message;
-          details = data;
+          return JSON.parse(text) as T;
         } catch {
-          message = `${res.status}: ${res.statusText}`;
+          throw new ApiError(res.status, `Unexpected non-JSON response from ${upper} ${path} (HTTP ${res.status})`, text.slice(0, 500));
         }
-        throw new ApiError(res.status, message, details);
       }
 
-      // 204 No Content
-      if (res.status === 204) return undefined as T;
-      return res.json() as Promise<T>;
-    } catch (err) {
-      if (err instanceof ApiError) throw err;
-      if (err instanceof Error) {
-        if (err.name === 'AbortError') {
-          throw new ApiError(0, 'Request timed out after 30 seconds');
-        }
-        throw new ApiError(0, `Network error: ${err.message}`);
+      const body = await readErrorBody(res);
+      const retryAfterMs = parseRetryAfter(res.headers?.get?.('retry-after'));
+      const delay = nextRetryDelay({ method: upper, attempt, status: res.status, retryAfterMs, policy: this.retryPolicy });
+      if (delay !== null) {
+        debug('api', `${upper} ${path} → ${res.status}; retrying in ${Math.round(delay)}ms`);
+        await this.sleep(delay);
+        continue;
       }
-      throw new ApiError(0, 'Unknown error');
+      throw new ApiError(res.status, formatApiErrorMessage(res.status, body, res.statusText), body, retryAfterMs);
     }
   }
 
-  private get = <T>(path: string) => this.request<T>('GET', path);
-  private post = <T>(path: string, body?: unknown) => this.request<T>('POST', path, body);
-  private patch = <T>(path: string, body?: unknown) => this.request<T>('PATCH', path, body);
-  private put = <T>(path: string, body?: unknown) => this.request<T>('PUT', path, body);
+  private get = <T>(path: string, query?: Record<string, QueryValue>) => this.request<T>('GET', path, { query });
+  private post = <T>(path: string, body?: unknown) => this.request<T>('POST', path, { body });
+  private patch = <T>(path: string, body?: unknown) => this.request<T>('PATCH', path, { body });
   private delete = <T>(path: string) => this.request<T>('DELETE', path);
 
   // ─── Agent Registration ─────────────────────────────────────────────────────
@@ -265,7 +413,7 @@ export class MoltbotDenClient {
     return this.get(`/v1/hosting/databases/${dbId}/connection-string`);
   }
 
-  async getDatabaseMetrics(dbId: string): Promise<Record<string, unknown>> {
+  async getDatabaseMetrics<T = Record<string, unknown>>(dbId: string): Promise<T> {
     return this.get(`/v1/hosting/databases/${dbId}/metrics`);
   }
 
@@ -386,40 +534,40 @@ export class MoltbotDenClient {
 
   // ─── Email ──────────────────────────────────────────────────────────────────
 
-  async emailAccount(): Promise<Record<string, unknown>> {
+  async emailAccount<T = Record<string, unknown>>(): Promise<T> {
     return this.get('/email/account');
   }
 
-  async emailInbox(limit = 20, offset = 0): Promise<Record<string, unknown>> {
+  async emailInbox<T = Record<string, unknown>>(limit = 20, offset = 0): Promise<T> {
     return this.get(`/email/inbox?limit=${limit}&offset=${offset}`);
   }
 
-  async emailSent(limit = 20, offset = 0): Promise<Record<string, unknown>> {
+  async emailSent<T = Record<string, unknown>>(limit = 20, offset = 0): Promise<T> {
     return this.get(`/email/sent?limit=${limit}&offset=${offset}`);
   }
 
-  async emailSend(data: {
+  async emailSend<T = Record<string, unknown>>(data: {
     to: string;
     subject: string;
     body: string;
     reply_to_message_id?: string;
-  }): Promise<Record<string, unknown>> {
+  }): Promise<T> {
     return this.post('/email/send', data);
   }
 
-  async emailThread(threadId: string): Promise<Record<string, unknown>> {
+  async emailThread<T = Record<string, unknown>>(threadId: string): Promise<T> {
     return this.get(`/email/thread/${threadId}`);
   }
 
-  async emailMessage(messageId: string): Promise<Record<string, unknown>> {
+  async emailMessage<T = Record<string, unknown>>(messageId: string): Promise<T> {
     return this.get(`/email/message/${messageId}`);
   }
 
-  async emailMarkRead(messageId: string, unread = false): Promise<Record<string, unknown>> {
+  async emailMarkRead<T = Record<string, unknown>>(messageId: string, unread = false): Promise<T> {
     return this.post(`/email/message/${messageId}/read?unread=${unread}`);
   }
 
-  async emailStar(messageId: string, starred = true): Promise<Record<string, unknown>> {
+  async emailStar<T = Record<string, unknown>>(messageId: string, starred = true): Promise<T> {
     return this.post(`/email/message/${messageId}/star?starred=${starred}`);
   }
 
@@ -429,12 +577,12 @@ export class MoltbotDenClient {
 
   // ─── Skills / Marketplace ───────────────────────────────────────────────────
 
-  async skillsSearch(query: string, opts: {
+  async skillsSearch<T = Record<string, unknown>>(query: string, opts: {
     category?: string;
     sort?: string;
     page?: number;
     per_page?: number;
-  } = {}): Promise<Record<string, unknown>> {
+  } = {}): Promise<T> {
     const params = new URLSearchParams({ q: query });
     if (opts.category) params.set('category', opts.category);
     if (opts.sort) params.set('sort', opts.sort);
@@ -443,23 +591,23 @@ export class MoltbotDenClient {
     return this.get(`/marketplace/search?${params.toString()}`);
   }
 
-  async skillsTrending(): Promise<Record<string, unknown>> {
+  async skillsTrending<T = Record<string, unknown>>(): Promise<T> {
     return this.get('/marketplace/trending');
   }
 
-  async skillsCategories(): Promise<Record<string, unknown>[]> {
+  async skillsCategories<T = Record<string, unknown>[]>(): Promise<T> {
     return this.get('/marketplace/categories');
   }
 
-  async skillsInfo(listingId: string): Promise<Record<string, unknown>> {
+  async skillsInfo<T = Record<string, unknown>>(listingId: string): Promise<T> {
     return this.get(`/marketplace/listings/${listingId}`);
   }
 
-  async skillsFavorites(): Promise<Record<string, unknown>> {
+  async skillsFavorites<T = Record<string, unknown>>(): Promise<T> {
     return this.get('/marketplace/favorites');
   }
 
-  async skillsFavorite(listingId: string): Promise<Record<string, unknown>> {
+  async skillsFavorite<T = Record<string, unknown>>(listingId: string): Promise<T> {
     return this.post(`/marketplace/listings/${listingId}/favorite`);
   }
 
@@ -467,10 +615,10 @@ export class MoltbotDenClient {
     return this.delete(`/marketplace/listings/${listingId}/favorite`);
   }
 
-  async skillsBrowseCategory(slug: string, opts: {
+  async skillsBrowseCategory<T = Record<string, unknown>>(slug: string, opts: {
     page?: number;
     per_page?: number;
-  } = {}): Promise<Record<string, unknown>> {
+  } = {}): Promise<T> {
     const params = new URLSearchParams();
     if (opts.page) params.set('page', String(opts.page));
     if (opts.per_page) params.set('per_page', String(opts.per_page));
@@ -647,4 +795,32 @@ export interface DenMessage {
   content: string;
   created_at?: string;
   timestamp?: string;
+}
+
+// ─── Internal helpers ─────────────────────────────────────────────────────────
+
+async function readErrorBody(res: Response): Promise<unknown> {
+  try {
+    const text = await res.text();
+    if (!text) return undefined;
+    try {
+      return JSON.parse(text);
+    } catch {
+      return text.slice(0, 1000);
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+function toNetworkError(err: unknown, timeoutMs: number): ApiError {
+  if (err instanceof Error) {
+    if (err.name === 'TimeoutError' || err.name === 'AbortError') {
+      return new ApiError(0, `Request timed out after ${Math.round(timeoutMs / 1000)} seconds`);
+    }
+    const cause = (err as Error & { cause?: { code?: string; message?: string } }).cause;
+    const reason = cause?.code ?? cause?.message ?? err.message;
+    return new ApiError(0, `Network error: ${reason}`);
+  }
+  return new ApiError(0, 'Network error: unknown failure');
 }
