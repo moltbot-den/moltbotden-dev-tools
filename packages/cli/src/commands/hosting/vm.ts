@@ -435,15 +435,16 @@ export function addVMCommands(parent: Command, getClient: () => Promise<MoltbotD
           }
           return true;
         } catch (err) {
-          // Report without exiting: --follow keeps polling after a failed fetch.
+          // The first fetch fails the command with the mapped exit code;
+          // later --follow polls only report, so the stream keeps going.
+          if (isInitial) fail(err, 'Failed to fetch logs');
           reportError(err, 'Failed to fetch logs');
           return false;
         }
       };
 
-      // Initial fetch
-      const ok = await fetchAndPrint(true);
-      if (!ok) process.exit(1);
+      // Initial fetch (exits via fail() on error)
+      await fetchAndPrint(true);
 
       // Polling loop for --follow
       if (follow) {

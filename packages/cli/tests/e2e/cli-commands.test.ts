@@ -170,6 +170,14 @@ describe('--json output contract', () => {
     expect(parseEnvelope(stderr).error.message).toBe('Validation failed (HTTP 422):\n  status: Field required');
   });
 
+  it('hosting vm logs maps a 404 to exit 4', async () => {
+    api.on('GET', '/v1/hosting/compute/vms/vm-missing/console', { status: 404, body: { detail: 'VM not found' } });
+    const { code, stdout, stderr } = await runApi(['--json', 'hosting', 'vm', 'logs', 'vm-missing', '--api-key', 'k']);
+    expect(code).toBe(4);
+    expect(stdout).toBe('');
+    expect(parseEnvelope(stderr).error).toMatchObject({ status: 404, message: 'VM not found (HTTP 404)' });
+  });
+
   it('missing credentials is an auth error (exit 3)', async () => {
     const { code, stderr } = await runApi(['--json', 'dens', 'list']);
     expect(code).toBe(3);
