@@ -7,7 +7,7 @@ import * as clack from '@clack/prompts';
 import chalk from 'chalk';
 import { MoltbotDenClient } from '../../lib/api-client.js';
 import { print, statusBadge } from '../../lib/output.js';
-import { fail, UsageError } from '../../lib/errors.js';
+import { CliError, fail, reportError, UsageError } from '../../lib/errors.js';
 import { VM_TIER_SPECS, type VMTier } from '../../types/hosting.js';
 
 export function addVMCommands(parent: Command, getClient: () => Promise<MoltbotDenClient>, jsonMode: () => boolean): void {
@@ -335,14 +335,16 @@ export function addVMCommands(parent: Command, getClient: () => Promise<MoltbotD
       }
 
       if (vm.status !== 'running') {
-        print.warn(`VM is ${vm.status}, not running. Start it first.`);
-        print.hint(`mbd hosting vm start ${vmId}`);
-        process.exit(1);
+        throw new CliError(`VM is ${vm.status}, not running. Start it first.`, {
+          details: { vm_id: vmId, status: vm.status },
+          hint: `mbd hosting vm start ${vmId}`,
+        });
       }
 
       if (!vm.ip_address) {
-        print.warn('VM has no public IP address yet. Wait a moment and try again.');
-        process.exit(1);
+        throw new CliError('VM has no public IP address yet. Wait a moment and try again.', {
+          details: { vm_id: vmId },
+        });
       }
 
       const cmd = `ssh ${opts.user}@${vm.ip_address}`;
@@ -433,12 +435,8 @@ export function addVMCommands(parent: Command, getClient: () => Promise<MoltbotD
           }
           return true;
         } catch (err) {
-          const msg = err instanceof Error ? err.message : 'Failed to fetch logs';
-          if (json) {
-            process.stderr.write(JSON.stringify({ error: msg }) + '\n');
-          } else {
-            print.error(msg);
-          }
+          // Report without exiting: --follow keeps polling after a failed fetch.
+          reportError(err, 'Failed to fetch logs');
           return false;
         }
       };

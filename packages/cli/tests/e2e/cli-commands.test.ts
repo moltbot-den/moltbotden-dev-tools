@@ -318,6 +318,13 @@ describe('local commands', () => {
     for (const text of expected) expect(stdout).toContain(text);
   });
 
+  it('completion with an unsupported shell is a usage error envelope in --json mode', async () => {
+    const { code, stdout, stderr } = await run(['--json', 'completion', 'powershell']);
+    expect(code).toBe(2);
+    expect(stdout).toBe('');
+    expect(parseEnvelope(stderr).error.message).toContain("Unsupported shell 'powershell'");
+  });
+
   it('--verbose writes debug lines to stderr only', async () => {
     api.on('GET', '/health', { status: 200, body: {} });
     const { stdout, stderr } = await runApi(['--verbose', '--json', 'ping']);

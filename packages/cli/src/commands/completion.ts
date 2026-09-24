@@ -10,6 +10,7 @@
  */
 
 import { Command } from 'commander';
+import { UsageError } from '../lib/errors.js';
 
 // ─── Bash ─────────────────────────────────────────────────────────────────────
 
@@ -851,8 +852,7 @@ Examples:
 
       const script = scripts[shell];
       if (!script) {
-        process.stderr.write(`Error: Unsupported shell '${shell}'. Use bash, zsh, or fish.\n`);
-        process.exit(1);
+        throw new UsageError(`Unsupported shell '${shell}'. Use bash, zsh, or fish.`);
       }
 
       if (jsonMode) {
