@@ -3,8 +3,8 @@
  */
 
 import type { Command } from 'commander';
-import chalk from 'chalk';
 import { createSpinner } from './output.js';
+import { examples, truncate } from './command-utils.js';
 
 /** Run `fn` behind a spinner (no-op in --json / non-TTY); stops it on failure too. */
 export async function withSpinner<T>(text: string, fn: () => Promise<T>): Promise<T> {
@@ -20,16 +20,13 @@ export async function withSpinner<T>(text: string, fn: () => Promise<T>): Promis
   }
 }
 
-/** Attach an "Examples:" block to a command's --help. */
-export function withExamples(cmd: Command, examples: string[]): Command {
-  return cmd.addHelpText('after', `\n${chalk.bold('Examples:')}\n${examples.map((e) => `  ${chalk.cyan(e)}`).join('\n')}\n`);
+/** Attach an "Examples" block to a command's --help (same format as command-utils). */
+export function withExamples(cmd: Command, lines: string[]): Command {
+  return cmd.addHelpText('after', examples(lines));
 }
 
 /** Shorten text to `max` characters on one line. */
-export function oneLine(text: string | null | undefined, max: number): string {
-  const flat = (text ?? '').replace(/\s+/g, ' ').trim();
-  return flat.length <= max ? flat : `${flat.slice(0, max - 1)}…`;
-}
+export const oneLine = (text: string | null | undefined, max: number): string => truncate(text, max);
 
 /** Word-wrap text at `width` columns, keeping existing line breaks. */
 export function wrapText(text: string, width: number): string[] {

@@ -15,7 +15,7 @@ export interface RecordedRequest {
 export interface MockRoute {
   status: number;
   body?: unknown;
-  /** Send this text as-is instead of JSON-encoding `body` (e.g. a markdown file). */
+  /** Send this text as is instead of JSON-encoding `body`. */
   raw?: string;
   headers?: Record<string, string>;
 }
@@ -42,8 +42,7 @@ export async function startMockApi(): Promise<MockApi> {
       const path = (req.url ?? '/').split('?')[0];
       requests.push({ method: req.method ?? 'GET', path: req.url ?? '/', headers: req.headers, body });
       const route = routes.get(`${req.method} ${path}`) ?? { status: 404, body: { detail: 'Not Found' } };
-      const contentType = route.raw !== undefined ? 'text/plain; charset=utf-8' : 'application/json';
-      res.writeHead(route.status, { 'content-type': contentType, ...route.headers });
+      res.writeHead(route.status, { 'content-type': 'application/json', ...route.headers });
       res.end(route.raw ?? (route.body === undefined ? '' : JSON.stringify(route.body)));
     });
   });

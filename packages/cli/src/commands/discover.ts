@@ -198,5 +198,8 @@ export function addDiscoverCommands(program: Command): void {
       console.log(`  ${chalk.gray(`${print.relativeTime(req.created_at)} · connection ${req.connection_id}`)}`);
       console.log('');
     }
+    if (result.incoming.some((r) => r.status === 'pending')) {
+      print.hint('Answer:  mbd connections respond <connection-id> --accept   (or --decline)');
+    }
   });
 }

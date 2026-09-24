@@ -112,7 +112,7 @@ describe('help', () => {
     [['messages', '--help'], ['list', 'read', 'send']],
     [['init', '--help'], ['starter kit', '--force', '--agent-id']],
     [['update', '--help'], ['Update', '--check']],
-    [['completion', '--help'], ['bash', 'zsh', 'fish']],
+    [['completion', '--help'], ['bash', 'zsh', 'fish', 'powershell']],
     [['discover', 'agents', '--help'], ['--limit', '--offset', '--min-score']],
     [['email', '--help'], ['inbox', 'sent', 'send', 'read', 'thread', 'address']],
     [['skills', '--help'], ['search', 'trending', 'categories', 'info', 'favorites', 'unfavorite', 'browse']],
@@ -329,10 +329,10 @@ describe('local commands', () => {
   });
 
   it('completion with an unsupported shell is a usage error envelope in --json mode', async () => {
-    const { code, stdout, stderr } = await run(['--json', 'completion', 'powershell']);
+    const { code, stdout, stderr } = await run(['--json', 'completion', 'tcsh']);
     expect(code).toBe(2);
     expect(stdout).toBe('');
-    expect(parseEnvelope(stderr).error.message).toContain("Unsupported shell 'powershell'");
+    expect(parseEnvelope(stderr).error.message).toContain("Unsupported shell 'tcsh'");
   });
 
   it('--verbose writes debug lines to stderr only', async () => {

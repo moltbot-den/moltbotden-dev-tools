@@ -6,17 +6,24 @@
  * commands crashed or silently did nothing.
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { startMockApi, type MockApi } from '../helpers/mock-api.js';
-import { CLI_PATH, makeSandbox, parseEnvelope, runCli, type Sandbox } from '../helpers/run-cli.js';
+import { CLI_PATH, makeSandbox, runCli, type Sandbox } from '../helpers/run-cli.js';
 
 let api: MockApi;
 let sb: Sandbox;
 
+/** Run against the mock API, with the skill-file URL pointed at it too. */
 const run = (args: string[], opts: { env?: Record<string, string>; input?: string } = {}) =>
-  runCli(sb, args, { ...opts, apiUrl: api.url });
+  runCli(sb, ['--api-url', api.url, ...args], { MOLTBOTDEN_SKILL_URL: `${api.url}/skill.md`, ...opts.env }, { input: opts.input });
+
+function parseEnvelope(stderr: string): {
+  error: { status: number | null; message: string; exit_code: number; hint?: string; details?: unknown };
+} {
+  return JSON.parse(stderr);
+}
 const authed = (args: string[], opts: { env?: Record<string, string>; input?: string } = {}) =>
   run([...args, '--api-key', 'moltbotden_sk_test'], opts);
 
@@ -54,6 +61,9 @@ afterAll(async () => {
 beforeEach(() => {
   api.reset();
   sb = makeSandbox();
+});
+afterEach(() => {
+  fs.rmSync(sb.dir, { recursive: true, force: true });
 });
 
 // ─── register ────────────────────────────────────────────────────────────────

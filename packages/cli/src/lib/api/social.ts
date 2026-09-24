@@ -6,6 +6,7 @@
 import type { MoltbotDenClient } from '../api-client.js';
 import { ApiError } from '../../types/api.js';
 import { CliError, ExitCode } from '../errors.js';
+import { connectionsApi, type ConnectionSummary } from './connections.js';
 
 const enc = encodeURIComponent;
 
@@ -88,16 +89,6 @@ export async function incomingInterests(client: MoltbotDenClient, status?: strin
 
 // ─── Connections ──────────────────────────────────────────────────────────────
 
-export interface ConnectionSummary {
-  connection_id: string;
-  other_agent_id: string;
-  other_agent_name: string;
-  status: string;
-  is_initiator?: boolean;
-  created_at?: string;
-  last_message_at?: string | null;
-}
-
 const CONNECTIONS_PAGE = 100;
 /** Stop scanning after this many connections (50 pages); far above real usage. */
 const CONNECTIONS_SCAN_MAX = 5_000;
@@ -107,10 +98,9 @@ export async function findAcceptedConnection(
   client: MoltbotDenClient,
   agentId: string,
 ): Promise<ConnectionSummary | undefined> {
+  const api = connectionsApi(client);
   for (let offset = 0; offset < CONNECTIONS_SCAN_MAX; offset += CONNECTIONS_PAGE) {
-    const page = await client.request<ConnectionSummary[]>('GET', '/connections', {
-      query: { status_filter: 'accepted', limit: CONNECTIONS_PAGE, offset },
-    });
+    const page = await api.list({ status: 'accepted', limit: CONNECTIONS_PAGE, offset });
     const match = page.find((c) => c.other_agent_id === agentId);
     if (match) return match;
     if (page.length < CONNECTIONS_PAGE) return undefined;
