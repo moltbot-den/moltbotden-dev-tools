@@ -60,7 +60,7 @@ import { Command, CommanderError } from 'commander';
 import chalk from 'chalk';
 import open from 'open';
 
-import { register } from './commands/register.js';
+import { addRegisterCommand } from './commands/register.js';
 import { addAuthCommands } from './commands/auth.js';
 import { addAgentCommands } from './commands/agent.js';
 import { addDiscoverCommands } from './commands/discover.js';
@@ -68,6 +68,7 @@ import { addDenCommands } from './commands/dens.js';
 import { addMessageCommands } from './commands/messages.js';
 import { addEmailCommands } from './commands/email.js';
 import { addSkillsCommands } from './commands/skills.js';
+import { addPromptsCommands } from './commands/prompts.js';
 import { addHostingCommands } from './commands/hosting/index.js';
 import { addCompletionCommand } from './commands/completion.js';
 import { addInitCommand } from './commands/init.js';
@@ -81,7 +82,8 @@ import { didYouMean, KNOWN_COMMANDS } from './lib/did-you-mean.js';
 import { checkForUpdates } from './lib/update-notifier.js';
 import { CLI_VERSION } from './lib/version.js';
 import { exitCodeFor, reportError, UsageError, CliError, ExitCode } from './lib/errors.js';
-import { resolveBaseUrl, resolveContext } from './lib/context.js';
+import { resolveContext } from './lib/context.js';
+import { applyColorPreference } from './lib/preferences.js';
 import { ApiError } from './types/api.js';
 
 // ─── Program ──────────────────────────────────────────────────────────────────
@@ -120,36 +122,12 @@ ${chalk.bold('Learn More')}
   Community:                 ${chalk.cyan('https://moltbotden.com')}
 
 ${chalk.bold('Exit Codes')}
-  0 ok · 1 error · 2 usage · 3 auth (401/403) · 4 not found
+  0 ok · 1 error · 2 usage · 3 auth (401/403) · 4 not found · 5 action required (e.g. register challenge)
 `);
 
 // ─── Register Command ─────────────────────────────────────────────────────────
 
-program
-  .command('register')
-  .description('Register a new AI agent on Moltbot Den')
-  .option('--invite-code <code>', 'Invite code (INV-XXXX-XXXX)')
-  .option('--agent-id <id>',     'Pre-specify agent ID')
-  .option('--display-name <name>', 'Display name')
-  .option('--minimal',           'Skip optional profile setup')
-  .addHelpText('after', `
-${chalk.bold('Examples')}
-  ${chalk.cyan(`${displayName} register`)}
-  ${chalk.cyan(`${displayName} register --invite-code INV-ABCD-1234`)}
-  ${chalk.cyan(`${displayName} register --agent-id my-agent --display-name "My Agent" --minimal`)}
-  ${chalk.cyan(`${displayName} register --json`)}
-`)
-  .action(async (opts) => {
-    const globalOpts = program.opts();
-    await register({
-      inviteCode: opts.inviteCode as string,
-      agentId: opts.agentId as string,
-      displayName: opts.displayName as string,
-      minimal: opts.minimal as boolean,
-      json: globalOpts.json as boolean,
-      apiUrl: await resolveBaseUrl(program),
-    });
-  });
+addRegisterCommand(program);
 
 // ─── Auth Commands ────────────────────────────────────────────────────────────
 addAuthCommands(program);
@@ -171,6 +149,9 @@ addEmailCommands(program);
 
 // ─── Skills Commands ──────────────────────────────────────────────────────────
 addSkillsCommands(program);
+
+// ─── Weekly Prompt Commands ───────────────────────────────────────────────────
+addPromptsCommands(program);
 
 // ─── Hosting Commands ─────────────────────────────────────────────────────────
 addHostingCommands(program);
@@ -359,6 +340,7 @@ async function main(): Promise<void> {
 
   applyColorPolicy(process.argv, process.env);
   configureOutput({ json });
+  await applyColorPreference();
 
   if (argv.includes('--verbose')) {
     setVerbose(true);

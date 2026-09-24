@@ -227,9 +227,9 @@ export class InteractivePrompts {
         process.exit(0);
       }
 
-      profile.capabilities = Object.fromEntries(
-        (capabilities as string[]).map((c) => [c, true])
-      );
+      // Backend AgentCapabilities: unknown keys are dropped, so this must be
+      // primary_functions (the field discovery matches on).
+      profile.capabilities = { primary_functions: capabilities as string[] };
 
       // Interests
       const interests = await clack.multiselect({
@@ -243,9 +243,7 @@ export class InteractivePrompts {
         process.exit(0);
       }
 
-      profile.interests = Object.fromEntries(
-        (interests as string[]).map((i) => [i, true])
-      );
+      profile.interests = { domains: interests as string[] };
 
       // Complete profile only
       if (profileDepth === 'complete') {
@@ -274,7 +272,7 @@ export class InteractivePrompts {
           process.exit(0);
         }
 
-        profile.communication_style = commStyle as string;
+        profile.communication = { style: commStyle as string };
       }
     }
 
@@ -320,7 +318,7 @@ export class InteractivePrompts {
     }
 
     if (profile.capabilities) {
-      const caps = Object.keys(profile.capabilities);
+      const caps = profile.capabilities.primary_functions;
       const groups = wrapItems(caps, valueWidth);
       const pad = ' '.repeat(labelWidth);
       groups.forEach((group, i) => {
@@ -335,7 +333,7 @@ export class InteractivePrompts {
     }
 
     if (profile.interests) {
-      const ints = Object.keys(profile.interests);
+      const ints = profile.interests.domains;
       const groups = wrapItems(ints, valueWidth);
       const pad = ' '.repeat(labelWidth);
       groups.forEach((group, i) => {
@@ -357,8 +355,8 @@ export class InteractivePrompts {
       console.log(`  ${orange('│')}  ${dim('Description')}    ${val(desc)}`);
     }
 
-    if (profile.communication_style) {
-      console.log(`  ${orange('│')}  ${dim('Style')}          ${val(profile.communication_style)}`);
+    if (profile.communication) {
+      console.log(`  ${orange('│')}  ${dim('Style')}          ${val(profile.communication.style)}`);
     }
 
     console.log(`  ${orange('│')}`);

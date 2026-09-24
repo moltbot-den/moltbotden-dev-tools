@@ -107,8 +107,8 @@ export function sanitizeAgentId(input: string): string {
  * the `moltbotden_sk_` prefix) and the last {@link MASK_SUFFIX_LENGTH}
  * characters, replacing everything in between with asterisks.
  *
- * Keys shorter than the combined reveal length are returned as-is
- * to avoid producing a confusing masked output.
+ * Keys too short to mask meaningfully are fully hidden: printing them as-is
+ * (the old behavior) leaked the whole secret into --verbose logs.
  *
  * @param key - Full API key string
  * @returns Masked key string safe for display
@@ -119,13 +119,14 @@ export function sanitizeAgentId(input: string): string {
  * // → 'moltbotden_sk_****…****c545'
  *
  * maskApiKey('short');
- * // → 'short' (too short to mask meaningfully)
+ * // → '****' (too short to reveal any part)
  * ```
  */
 export function maskApiKey(key: string): string {
   const minLength = MASK_PREFIX_LENGTH + MASK_SUFFIX_LENGTH + 1;
+  if (!key) return '';
   if (key.length < minLength) {
-    return key;
+    return '****';
   }
 
   const prefix = key.slice(0, MASK_PREFIX_LENGTH);

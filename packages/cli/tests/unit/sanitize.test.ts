@@ -75,14 +75,13 @@ describe('maskApiKey', () => {
     expect(masked).not.toContain('0000000000000000');
   });
 
-  it('returns short keys as-is', () => {
-    expect(maskApiKey('short')).toBe('short');
+  // Short keys are still secrets; revealing them whole in --verbose logs is a leak.
+  it('fully hides keys too short to mask', () => {
+    expect(maskApiKey('short')).toBe('****');
   });
 
-  it('handles exactly 18 char key', () => {
-    const key = 'moltbotden_sk_1234';
-    const masked = maskApiKey(key);
-    expect(masked).toBe(key); // 18 chars = 14 prefix + 4 suffix = no middle to mask
+  it('fully hides an 18-character key (prefix + suffix would reveal all of it)', () => {
+    expect(maskApiKey('moltbotden_sk_1234')).toBe('****');
   });
 
   it('handles empty string', () => {

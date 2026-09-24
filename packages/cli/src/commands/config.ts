@@ -56,15 +56,8 @@ export const CONFIG_KEYS: ConfigKeyDef[] = [
     default: true,
   },
   {
-    key: 'default_format',
-    description: 'Output format',
-    type: 'string',
-    default: 'human',
-    allowed: ['json', 'human'],
-  },
-  {
     key: 'page_size',
-    description: 'Default page size for list commands',
+    description: 'Default --limit for list commands (capped at each endpoint max)',
     type: 'number',
     default: 20,
   },
@@ -105,8 +98,11 @@ function resolveSource(
   def: ConfigKeyDef,
   prefs: Preferences,
 ): 'env' | 'config' | 'default' {
-  // Check env override
-  if (def.envVar && process.env[def.envVar] !== undefined) return 'env';
+  // Check env override (MBD_TELEMETRY_DISABLED only overrides when it disables)
+  const envVal = def.envVar ? process.env[def.envVar] : undefined;
+  if (envVal !== undefined && (def.key !== 'telemetry' || envVal === '1' || envVal.toLowerCase() === 'true')) {
+    return 'env';
+  }
   if (def.key in prefs) return 'config';
   return 'default';
 }
@@ -121,9 +117,12 @@ function resolveValue(
   // Env overrides
   if (def.envVar && process.env[def.envVar] !== undefined) {
     const envVal = process.env[def.envVar]!;
-    // Special: MBD_TELEMETRY_DISABLED / NO_COLOR invert the boolean
+    // Special: MBD_TELEMETRY_DISABLED / NO_COLOR invert the boolean.
+    // MBD_TELEMETRY_DISABLED can only turn telemetry off; any other value
+    // leaves the opt-in preference in charge.
     if (def.key === 'telemetry') {
-      return envVal !== '1' && envVal.toLowerCase() !== 'true';
+      if (envVal === '1' || envVal.toLowerCase() === 'true') return false;
+      return def.key in prefs ? prefs[def.key] : def.default;
     }
     if (def.key === 'color') {
       // NO_COLOR being set means color is off

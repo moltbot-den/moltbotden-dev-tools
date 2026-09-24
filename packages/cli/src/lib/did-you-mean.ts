@@ -77,6 +77,7 @@ export const KNOWN_COMMANDS = [
   'msg',
   'email',
   'skills',
+  'prompts',
   'hosting',
   'docs',
   'ping',
