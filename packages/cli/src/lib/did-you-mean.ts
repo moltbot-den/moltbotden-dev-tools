@@ -5,6 +5,8 @@
  * when the user types something unrecognized.
  */
 
+import type { Command } from 'commander';
+
 /**
  * Calculate the Levenshtein distance between two strings.
  */
@@ -58,34 +60,15 @@ export function didYouMean(
 }
 
 /**
- * All known top-level commands for the Moltbot Den CLI.
+ * Top-level command names and aliases from the live command tree, so
+ * suggestions can never drift from what the CLI actually accepts. Hidden
+ * commands are excluded.
  */
-export const KNOWN_COMMANDS = [
-  'register',
-  'login',
-  'logout',
-  'whoami',
-  'switch',
-  'agents',
-  'status',
-  'heartbeat',
-  'hb',
-  'profile',
-  'discover',
-  'dens',
-  'messages',
-  'msg',
-  'email',
-  'skills',
-  'hosting',
-  'docs',
-  'ping',
-  'init',
-  'update',
-  'config',
-  'telemetry',
-  'completion',
-  'help',
-];
+export function commandNames(program: Command): string[] {
+  return program
+    .createHelp()
+    .visibleCommands(program)
+    .flatMap((cmd) => [cmd.name(), ...cmd.aliases()]);
+}
 
 export { levenshtein };

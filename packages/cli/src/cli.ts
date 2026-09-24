@@ -74,10 +74,23 @@ import { addInitCommand } from './commands/init.js';
 import { addUpdateCommand } from './commands/update.js';
 import { addConfigCommand } from './commands/config.js';
 import { addTelemetryCommand } from './commands/telemetry.js';
+import { addApiCommand } from './commands/api.js';
+import { addMcpCommands } from './commands/mcp.js';
+import { addDoctorCommand } from './commands/doctor.js';
+import { addNotificationCommands } from './commands/notifications.js';
+import { addConnectionCommands } from './commands/connections.js';
+import { addWalletCommands } from './commands/wallet.js';
+import { addShowcaseCommands } from './commands/showcase.js';
+import { addArticleCommands } from './commands/articles.js';
+import { addInviteCommands } from './commands/invites.js';
+import { addKeysCommands } from './commands/keys.js';
+import { addAgentDataCommands } from './commands/agent-data.js';
+import { addOpenCommand } from './commands/open.js';
+import { COMPLETE_COMMAND, runCompletion } from './commands/completion.js';
 import { applyColorPolicy, configureOutput, isJsonMode, print } from './lib/output.js';
 import { setVerbose, debug } from './lib/verbose.js';
 import { recordEvent, commandPath, flagNames } from './lib/telemetry.js';
-import { didYouMean, KNOWN_COMMANDS } from './lib/did-you-mean.js';
+import { didYouMean, commandNames } from './lib/did-you-mean.js';
 import { checkForUpdates } from './lib/update-notifier.js';
 import { CLI_VERSION } from './lib/version.js';
 import { exitCodeFor, reportError, UsageError, CliError, ExitCode } from './lib/errors.js';
@@ -190,6 +203,20 @@ addTelemetryCommand(program);
 // ─── Completion Command ───────────────────────────────────────────────────────
 addCompletionCommand(program);
 
+// ─── New command groups ───────────────────────────────────────────────────────
+addApiCommand(program);
+addMcpCommands(program);
+addDoctorCommand(program);
+addNotificationCommands(program);
+addConnectionCommands(program);
+addWalletCommands(program);
+addShowcaseCommands(program);
+addArticleCommands(program);
+addInviteCommands(program);
+addKeysCommands(program);
+addAgentDataCommands(program);
+addOpenCommand(program);
+
 // ─── Docs Command ─────────────────────────────────────────────────────────────
 
 const DOCS_URLS: Record<string, string> = {
@@ -280,7 +307,7 @@ program
     // Commander hands unknown commands to the root action as operands.
     const maybeCommand = cmd.args[0];
     if (maybeCommand !== undefined) {
-      const suggestions = didYouMean(maybeCommand, KNOWN_COMMANDS);
+      const suggestions = didYouMean(maybeCommand, commandNames(program));
       throw new UsageError(`Unknown command: ${maybeCommand}`, {
         hint: suggestions.length > 0
           ? `Did you mean ${suggestions.map((s) => `${displayName} ${s}`).join(', ')}?`
@@ -355,6 +382,9 @@ program.hook('preAction', (_thisCommand, actionCommand) => {
 async function main(): Promise<void> {
   const startTime = Date.now();
   const argv = process.argv.slice(2);
+
+  // Shell completion: must see raw words (e.g. "--json") and print nothing else.
+  if (argv[0] === COMPLETE_COMMAND) return runCompletion(program, argv.slice(1));
   const json = argv.includes('--json');
 
   applyColorPolicy(process.argv, process.env);

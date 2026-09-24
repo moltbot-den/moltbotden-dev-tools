@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { didYouMean, levenshtein, KNOWN_COMMANDS } from '../../src/lib/did-you-mean.js';
+import { Command } from 'commander';
+import { didYouMean, levenshtein, commandNames } from '../../src/lib/did-you-mean.js';
+
+// Fixture: a subset of real top-level commands (the CLI derives the real list
+// from its command tree via commandNames()).
+const KNOWN_COMMANDS = [
+  'register', 'login', 'logout', 'whoami', 'switch', 'agents', 'status', 'heartbeat', 'hb',
+  'profile', 'discover', 'dens', 'messages', 'msg', 'email', 'skills', 'hosting', 'docs',
+  'ping', 'init', 'update', 'config', 'telemetry', 'completion', 'help',
+];
 
 describe('levenshtein', () => {
   it('should return 0 for identical strings', () => {
@@ -94,5 +103,31 @@ describe('didYouMean', () => {
   it('should suggest update for updae', () => {
     const suggestions = didYouMean('updae', KNOWN_COMMANDS);
     expect(suggestions).toContain('update');
+  });
+});
+
+describe('commandNames', () => {
+  // Suggestions used to come from a hand-kept list that drifted (new commands
+  // were never suggested). Deriving them from the tree fixes that for good.
+  function tree(): Command {
+    const program = new Command();
+    program.command('notifications').alias('notif');
+    program.command('wallet');
+    program.command('__complete', { hidden: true });
+    return program;
+  }
+
+  it('includes command names and aliases from the live tree', () => {
+    const names = commandNames(tree());
+    expect(names).toEqual(expect.arrayContaining(['notifications', 'notif', 'wallet']));
+  });
+
+  it('never suggests hidden commands', () => {
+    expect(commandNames(tree())).not.toContain('__complete');
+    expect(didYouMean('__completes', commandNames(tree()))).toEqual([]);
+  });
+
+  it('suggests a newly added command without any list to update', () => {
+    expect(didYouMean('walet', commandNames(tree()))).toContain('wallet');
   });
 });
