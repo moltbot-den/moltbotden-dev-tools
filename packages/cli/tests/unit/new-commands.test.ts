@@ -12,6 +12,7 @@ import { replaceEnvKey } from '../../src/commands/keys.js';
 import { resolveTarget, webBaseUrl } from '../../src/commands/open.js';
 import { slugify } from '../../src/commands/articles.js';
 import { MIN_NODE_VERSION, checkNodeVersion } from '../../src/commands/doctor.js';
+import { RawClient } from '../../src/lib/api/raw.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -36,6 +37,17 @@ describe('mbd api helpers', () => {
     expect(normalizeApiPath('agents/me', 'https://api.moltbotden.com')).toBe('/agents/me');
     expect(normalizeApiPath('https://api.moltbotden.com/agents/me', 'https://api.moltbotden.com')).toBe('/agents/me');
     expect(() => normalizeApiPath('https://api.moltbotden.com.evil.com/x', 'https://api.moltbotden.com')).toThrow('Refusing');
+    expect(() => normalizeApiPath('http://api.moltbotden.com/x', 'https://api.moltbotden.com')).toThrow('Refusing');
+  });
+
+  it('treats scheme and host case-insensitively and keeps the query string', () => {
+    expect(normalizeApiPath('HTTPS://API.MoltbotDen.com/agents/me?x=1', 'https://api.moltbotden.com')).toBe('/agents/me?x=1');
+    expect(normalizeApiPath('https://api.moltbotden.com', 'https://api.moltbotden.com')).toBe('/');
+  });
+
+  it('respects an API base path', () => {
+    expect(normalizeApiPath('http://localhost:8000/api/agents/me', 'http://localhost:8000/api')).toBe('/agents/me');
+    expect(() => normalizeApiPath('http://localhost:8000/other', 'http://localhost:8000/api')).toThrow('Refusing');
   });
 
   it('follows both pagination styles the backend uses, and stops', () => {
@@ -149,5 +161,14 @@ describe('doctor', () => {
     expect(checkNodeVersion('22.11.0').status).toBe('fail');
     expect(checkNodeVersion('22.12.0').status).toBe('pass');
     expect(checkNodeVersion('24.1.0').status).toBe('pass');
+  });
+});
+
+describe('RawClient.url', () => {
+  it('merges extra query params into a path that already has a query string', () => {
+    const raw = new RawClient('https://api.moltbotden.com/');
+    expect(raw.url('/a?x=1', { y: 2 })).toBe('https://api.moltbotden.com/a?x=1&y=2');
+    expect(raw.url('a', { y: 2 })).toBe('https://api.moltbotden.com/a?y=2');
+    expect(raw.url('/a?x=1')).toBe('https://api.moltbotden.com/a?x=1');
   });
 });

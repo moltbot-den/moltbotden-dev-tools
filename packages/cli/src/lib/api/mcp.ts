@@ -57,8 +57,13 @@ export class McpSession {
 
   constructor(private readonly raw: RawClient) {}
 
-  health(): Promise<McpHealth> {
-    return this.raw.request('GET', '/mcp/health', { anonymous: true }).then((r) => JSON.parse(r.text) as McpHealth);
+  async health(): Promise<McpHealth> {
+    const res = await this.raw.request('GET', '/mcp/health', { anonymous: true });
+    const body = parseJsonOr(res.text, undefined) as McpHealth | undefined;
+    if (!body || typeof body !== 'object') {
+      throw new ApiError(res.status, `Unexpected non-JSON response from GET /mcp/health (HTTP ${res.status})`, res.text.slice(0, 500));
+    }
+    return body;
   }
 
   private async rpc<T>(method: string, params?: Record<string, unknown>, notification = false): Promise<T | undefined> {

@@ -55,7 +55,10 @@ export class RawClient {
 
   /** Build the absolute URL for an API path (leading slash optional). */
   url(path: string, query?: Record<string, QueryValue>): string {
-    return `${this.baseUrl}${path.startsWith('/') ? path : `/${path}`}${buildQueryString(query)}`;
+    let qs = buildQueryString(query);
+    // A path may already carry a query string (e.g. a full URL given to `mbd api`).
+    if (qs && path.includes('?')) qs = `&${qs.slice(1)}`;
+    return `${this.baseUrl}${path.startsWith('/') ? path : `/${path}`}${qs}`;
   }
 
   async request(method: string, path: string, opts: RawRequestOptions = {}): Promise<RawResponse> {

@@ -94,13 +94,22 @@ export function parseHeaders(specs: string[]): Record<string, string> {
 /** Normalize the path argument; full URLs must point at the configured API. */
 export function normalizeApiPath(input: string, apiUrl: string): string {
   if (/^https?:\/\//i.test(input)) {
-    const base = apiUrl.replace(/\/+$/, '');
-    if (input !== base && !input.startsWith(`${base}/`) && !input.startsWith(`${base}?`)) {
-      throw new UsageError(`Refusing to send your API key to ${new URL(input).origin}`, {
-        hint: `mbd api only talks to ${base}. Pass a path like /agents/me, or change --api-url.`,
+    let target: URL;
+    try {
+      target = new URL(input);
+    } catch {
+      throw new UsageError(`Invalid URL: ${input}`);
+    }
+    const base = new URL(apiUrl);
+    const basePath = base.pathname.replace(/\/+$/, '');
+    // Compare origins (case-insensitive host/scheme), then require the path to
+    // sit under the API base path.
+    if (target.origin !== base.origin || (basePath && target.pathname !== basePath && !target.pathname.startsWith(`${basePath}/`))) {
+      throw new UsageError(`Refusing to send your API key to ${target.origin}${target.origin === base.origin ? target.pathname : ''}`, {
+        hint: `mbd api only talks to ${apiUrl.replace(/\/+$/, '')}. Pass a path like /agents/me, or change --api-url.`,
       });
     }
-    return input.slice(base.length) || '/';
+    return (target.pathname.slice(basePath.length) || '/') + target.search;
   }
   return input.startsWith('/') ? input : `/${input}`;
 }
@@ -221,7 +230,7 @@ the error body is still printed to stdout.
         body = JSON.stringify(fields);
         headers['Content-Type'] = 'application/json';
       }
-      if (opts.paginate && !bodyless) throw new UsageError('--paginate only works with GET requests');
+      if (opts.paginate && method !== 'GET') throw new UsageError('--paginate only works with GET requests');
 
       const client = RawClient.from(ctx);
       for (let page = 0; page < MAX_PAGES; page++) {

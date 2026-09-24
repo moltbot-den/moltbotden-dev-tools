@@ -80,6 +80,9 @@ With Claude Code installed, "claude mcp add" is used instead of editing files.
           // add fails if the name exists; remove first (ignore "not found").
           spawnSync(claude, ['mcp', 'remove', MCP_SERVER_NAME, '--scope', cliScope], { stdio: 'ignore' });
           const args = ['mcp', 'add', '--transport', 'http', '--scope', cliScope, MCP_SERVER_NAME, url];
+          // claude mcp add only takes the header as an argument, so the key is
+          // briefly visible in the local process list; accepted because this is
+          // Claude Code's own interface and the child exits immediately.
           if (apiKey) args.push('--header', `Authorization: Bearer ${apiKey}`);
           const res = spawnSync(claude, args, { encoding: 'utf-8' });
           if (res.status !== 0) {

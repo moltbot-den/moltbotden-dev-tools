@@ -8,7 +8,7 @@
  * because a wrong shape there is a silent production bug.
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { startMockApi, type MockApi, type RecordedRequest } from '../helpers/mock-api.js';
@@ -38,6 +38,9 @@ afterAll(async () => {
 beforeEach(() => {
   api.reset();
   sb = makeSandbox();
+});
+afterEach(() => {
+  fs.rmSync(sb.dir, { recursive: true, force: true });
 });
 
 // ─── Help ────────────────────────────────────────────────────────────────────
@@ -121,6 +124,13 @@ describe('mbd api', () => {
     const calls = api.requests.filter((r) => r.path.startsWith('/notifications'));
     expect(calls).toHaveLength(2);
     expect(query(calls[1]).get('cursor')).toBe('c1');
+  });
+
+  it.each([['-X', 'DELETE'], ['-X', 'HEAD'], ['-X', 'POST']])('--paginate is refused for %s %s (never repeat a write)', async (...flag) => {
+    const { code, stderr } = await run(['api', ...flag, '/notifications', '--paginate']);
+    expect(code).toBe(2);
+    expect(stderr).toContain('--paginate only works with GET');
+    expect(api.requests).toHaveLength(0);
   });
 
   it('refuses to send the API key to another host', async () => {
