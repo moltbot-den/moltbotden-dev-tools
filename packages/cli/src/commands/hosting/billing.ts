@@ -8,6 +8,7 @@ import chalk from 'chalk';
 import open from 'open';
 import { MoltbotDenClient } from '../../lib/api-client.js';
 import { print } from '../../lib/output.js';
+import { fail, UsageError } from '../../lib/errors.js';
 
 export function addBillingCommands(parent: Command, getClient: () => Promise<MoltbotDenClient>, jsonMode: () => boolean): void {
 
@@ -36,8 +37,7 @@ export function addBillingCommands(parent: Command, getClient: () => Promise<Mol
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to fetch balance');
-        process.exit(1);
+        fail(err, 'Failed to fetch balance');
       }
 
       if (json) {
@@ -97,8 +97,7 @@ export function addBillingCommands(parent: Command, getClient: () => Promise<Mol
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to fetch usage');
-        process.exit(1);
+        fail(err, 'Failed to fetch usage');
       }
 
       if (json) { console.log(JSON.stringify(usage)); return; }
@@ -123,7 +122,7 @@ export function addBillingCommands(parent: Command, getClient: () => Promise<Mol
           { header: 'AMOUNT',     key: 'amount_cents',  align: 'right',
             format: (v) => chalk.white('$' + (Number(v) / 100).toFixed(2)) },
         ],
-        usage.breakdown as Record<string, unknown>[]
+        usage.breakdown
       );
 
       console.log('');
@@ -146,8 +145,7 @@ export function addBillingCommands(parent: Command, getClient: () => Promise<Mol
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to fetch history');
-        process.exit(1);
+        fail(err, 'Failed to fetch history');
       }
 
       if (json) { console.log(JSON.stringify(history)); return; }
@@ -174,7 +172,7 @@ export function addBillingCommands(parent: Command, getClient: () => Promise<Mol
             }
           },
           { header: 'AMOUNT',      key: 'amount_cents', align: 'right', width: 12,
-            format: (v, row) => {
+            format: (_v, row) => {
               const r = row as { type: string; amount_cents: number };
               const dollars = r.amount_cents / 100;
               if (r.type === 'credit' || r.type === 'refund') {
@@ -185,7 +183,7 @@ export function addBillingCommands(parent: Command, getClient: () => Promise<Mol
           },
           { header: 'DESCRIPTION', key: 'description',  width: 40, format: (v) => chalk.gray(String(v)) },
         ],
-        transactions as Record<string, unknown>[]
+        transactions
       );
 
       console.log('');
@@ -222,8 +220,7 @@ export function addBillingCommands(parent: Command, getClient: () => Promise<Mol
         if (clack.isCancel(amt)) { clack.cancel('Cancelled'); process.exit(0); }
         amountDollars = parseFloat(amt as string);
       } else {
-        print.error('--amount is required in JSON mode');
-        process.exit(1);
+        fail(new UsageError('--amount is required in --json mode'));
       }
 
       const amountCents = Math.round(amountDollars * 100);
@@ -253,8 +250,7 @@ export function addBillingCommands(parent: Command, getClient: () => Promise<Mol
         }
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to create checkout session');
-        process.exit(1);
+        fail(err, 'Failed to create checkout session');
       }
     });
 }

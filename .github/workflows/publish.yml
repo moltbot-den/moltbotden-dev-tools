@@ -1,72 +1,105 @@
-name: Publish to NPM
+name: Publish CLI
+
+# Release flow: bump packages/cli/package.json + CHANGELOG in a PR, merge,
+# then push a tag `cli-vX.Y.Z` on that commit. This workflow never edits the
+# version; it fails if the tag and package.json disagree.
+#
+# npm auth uses Trusted Publishing (OIDC, no long-lived token). The trusted
+# publisher must be configured on npmjs.com for @moltbotden/cli with:
+#   repository: moltbot-den/moltbotden-dev-tools
+#   workflow:   publish.yml
+#   environment: release
+# Until that is configured, the NPM_TOKEN repository secret (if present) is
+# used as a fallback via NODE_AUTH_TOKEN.
 
 on:
   push:
     tags:
       - 'cli-v*.*.*'
-      - 'sdk-v*.*.*'
-      - 'v*.*.*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    environment: release
     permissions:
-      contents: read
-      id-token: write # Required for npm provenance
-
+      contents: write # gh release create
+      id-token: write # npm provenance + trusted publishing
+    defaults:
+      run:
+        shell: bash
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: '20.x'
-          registry-url: 'https://registry.npmjs.org'
-          cache: 'npm'
+          node-version: 24.x
+          registry-url: https://registry.npmjs.org
+          cache: npm
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build packages
-        run: npm run build
-
-      - name: Run tests
-        run: npm test
-
-      - name: Determine package to publish
-        id: package
+      - name: Verify tag matches package version
+        id: version
         run: |
-          TAG=${GITHUB_REF#refs/tags/}
-          if [[ $TAG == cli-v* ]]; then
-            echo "package=cli" >> $GITHUB_OUTPUT
-            echo "version=${TAG#cli-v}" >> $GITHUB_OUTPUT
-          elif [[ $TAG == sdk-v* ]]; then
-            echo "package=sdk" >> $GITHUB_OUTPUT
-            echo "version=${TAG#sdk-v}" >> $GITHUB_OUTPUT
-          else
-            echo "package=cli" >> $GITHUB_OUTPUT
-            echo "version=${TAG#v}" >> $GITHUB_OUTPUT
+          TAG="${GITHUB_REF_NAME}"
+          TAG_VERSION="${TAG#cli-v}"
+          PKG_VERSION="$(node -p "require('./packages/cli/package.json').version")"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag $TAG does not match packages/cli/package.json version $PKG_VERSION. Bump the version in a PR first; CI never rewrites it."
+            exit 1
+          fi
+          echo "version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Extract release notes from CHANGELOG
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          awk -v v="$VERSION" '
+            index($0, "## [" v "]") == 1 { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' packages/cli/CHANGELOG.md > release-notes.md
+          if ! grep -q '[^[:space:]]' release-notes.md; then
+            echo "::error::packages/cli/CHANGELOG.md has no '## [$VERSION]' section."
+            exit 1
           fi
 
-      - name: Update package version
-        run: |
-          cd packages/${{ steps.package.outputs.package }}
-          npm version ${{ steps.package.outputs.version }} --no-git-tag-version
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: Upgrade npm (trusted publishing needs npm >= 11.5.1)
+        run: npm install -g npm@11
+        # Pinned to a major so releases use a known npm line; bump deliberately.
 
       - name: Publish to npm
-        run: |
-          cd packages/${{ steps.package.outputs.package }}
-          npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          # npm >= 11.5.1 tries OIDC trusted publishing first and only falls back
+          # to NODE_AUTH_TOKEN (empty when the NPM_TOKEN secret is absent). Do not
+          # unset it: setup-node's .npmrc references ${NODE_AUTH_TOKEN}.
+          npm --version
+          npm publish -w packages/cli --provenance --access public
 
-      - name: Create GitHub Release
-        uses: actions/create-release@v1
+      - name: Create GitHub release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref }}
-          draft: false
-          prerelease: false
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "@moltbotden/cli ${{ steps.version.outputs.version }}" \
+            --notes-file release-notes.md \
+            --verify-tag

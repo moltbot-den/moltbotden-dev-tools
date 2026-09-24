@@ -8,16 +8,17 @@ import chalk from 'chalk';
 import { AuthManager } from '../lib/auth-manager.js';
 import { MoltbotDenClient } from '../lib/api-client.js';
 import { print, renderBanner } from '../lib/output.js';
-import { API_BASE_URL } from '../constants/defaults.js';
+import { CliError, ExitCode, fail, UsageError } from '../lib/errors.js';
+import { ApiError } from '../types/api.js';
+import { resolveBaseUrl } from '../lib/context.js';
 
 export function addAuthCommands(program: Command): void {
 
   // ─── login ─────────────────────────────────────────────────────────────────
   program
     .command('login')
-    .description('Authenticate with a MoltbotDen API key')
+    .description('Authenticate with a Moltbot Den API key')
     .option('--api-key <key>', 'API key (skips interactive prompt)')
-    .option('--api-url <url>', 'API URL override', API_BASE_URL)
     .action(async (opts) => {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
@@ -28,19 +29,19 @@ export function addAuthCommands(program: Command): void {
 
       if (isInteractive) {
         renderBanner();
-        clack.intro(chalk.bold('Sign in to MoltbotDen'));
+        clack.intro(chalk.bold('Sign in to Moltbot Den'));
       }
 
       if (!apiKey) {
         if (jsonMode) {
-          print.error('--api-key is required in JSON mode');
-          process.exit(1);
+          fail(new UsageError('--api-key is required in --json mode'));
         }
 
         const key = await clack.password({
           message: 'Paste your API key:',
           validate: (v) => {
             if (!v || v.trim().length < 20) return 'API key must be at least 20 characters';
+            return undefined;
           },
         });
 
@@ -51,7 +52,7 @@ export function addAuthCommands(program: Command): void {
         apiKey = (key as string).trim();
       }
 
-      const apiUrl = (opts.apiUrl as string) ?? API_BASE_URL;
+      const apiUrl = await resolveBaseUrl(program);
 
       // Verify the key by calling the API
       const spinner = jsonMode ? null : clack.spinner();
@@ -63,18 +64,17 @@ export function addAuthCommands(program: Command): void {
       try {
         profile = await client.getMe();
         if (spinner) spinner.stop('API key verified ✓');
-      } catch {
+      } catch (err) {
         if (spinner) spinner.stop('Verification failed');
-        if (jsonMode) {
-          console.log(JSON.stringify({ success: false, error: 'Invalid API key' }));
-        } else {
-          print.error('Invalid API key — could not authenticate');
-          print.hint(
-            'Check that your key starts with  moltbotden_sk_\n' +
-            'and was copied in full from your registration output.'
-          );
+        // Only 401/403 mean a bad key; network errors and 5xx keep their own message.
+        if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+          fail(new CliError('Invalid API key — could not authenticate', {
+            exitCode: ExitCode.AUTH,
+            status: err.status,
+            hint: 'Check that your key starts with  moltbotden_sk_\nand was copied in full from your registration output.',
+          }));
         }
-        process.exit(1);
+        fail(err, 'Could not verify API key');
       }
 
       // Save to global config
@@ -222,8 +222,7 @@ export function addAuthCommands(program: Command): void {
 
       if (!targetId) {
         if (jsonMode) {
-          print.error('agent-id argument required in JSON mode');
-          process.exit(1);
+          fail(new UsageError('agent-id argument required in --json mode'));
         }
 
         const chosen = await clack.select({
@@ -250,8 +249,7 @@ export function addAuthCommands(program: Command): void {
           print.success(`Switched to ${chalk.cyan(targetId)}`);
         }
       } catch (err) {
-        print.error(err instanceof Error ? err.message : 'Failed to switch agent');
-        process.exit(1);
+        fail(err, 'Failed to switch agent');
       }
     });
 

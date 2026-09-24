@@ -1,7 +1,7 @@
 /**
  * Skills discovery and management commands
  *
- * Browse, search, and manage skills from the MoltbotDen marketplace:
+ * Browse, search, and manage skills from the Moltbot Den marketplace:
  *   skills search <query>       Search the skills directory
  *   skills trending              Show trending/popular skills
  *   skills categories            List all skill categories
@@ -14,9 +14,9 @@
 import { Command } from 'commander';
 import * as clack from '@clack/prompts';
 import chalk from 'chalk';
-import { AuthManager } from '../lib/auth-manager.js';
-import { MoltbotDenClient } from '../lib/api-client.js';
 import { print } from '../lib/output.js';
+import { fail } from '../lib/errors.js';
+import { resolveContext } from '../lib/context.js';
 
 // ─── Local Types ────────────────────────────────────────────────────────────
 
@@ -216,7 +216,7 @@ export function addSkillsCommands(program: Command): void {
 
   const skillsCmd = program
     .command('skills')
-    .description('Discover and manage skills from the MoltbotDen marketplace');
+    .description('Discover and manage skills from the Moltbot Den marketplace');
 
   // ─── search ─────────────────────────────────────────────────────────────────
   skillsCmd
@@ -230,12 +230,9 @@ export function addSkillsCommands(program: Command): void {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
 
-      const auth = await AuthManager.requireAuth(
-        globalOpts.apiKey as string,
-        globalOpts.apiUrl as string,
-      );
+      const ctx = await resolveContext(program, { requireAuth: true });
 
-      const client = new MoltbotDenClient(auth.apiUrl, auth.apiKey);
+      const client = ctx.client;
       const spinner = jsonMode ? null : clack.spinner();
       if (spinner) spinner.start(`Searching skills for "${query}"...`);
 
@@ -253,8 +250,7 @@ export function addSkillsCommands(program: Command): void {
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Search failed');
-        process.exit(1);
+        fail(err, 'Search failed');
       }
 
       if (jsonMode) {
@@ -282,7 +278,7 @@ export function addSkillsCommands(program: Command): void {
 
       print.table(
         listingTableColumns(),
-        result.results as unknown as Record<string, unknown>[],
+        result.results,
       );
 
       console.log('');
@@ -303,12 +299,9 @@ export function addSkillsCommands(program: Command): void {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
 
-      const auth = await AuthManager.requireAuth(
-        globalOpts.apiKey as string,
-        globalOpts.apiUrl as string,
-      );
+      const ctx = await resolveContext(program, { requireAuth: true });
 
-      const client = new MoltbotDenClient(auth.apiUrl, auth.apiKey);
+      const client = ctx.client;
       const spinner = jsonMode ? null : clack.spinner();
       if (spinner) spinner.start('Loading trending skills...');
 
@@ -318,8 +311,7 @@ export function addSkillsCommands(program: Command): void {
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to load trending skills');
-        process.exit(1);
+        fail(err, 'Failed to load trending skills');
       }
 
       if (jsonMode) {
@@ -339,7 +331,7 @@ export function addSkillsCommands(program: Command): void {
 
       print.header(
         `🔥  Trending Skills  ${chalk.gray(`(${result.listings.length}${periodLabel})`)}`,
-        'Most popular skills on MoltbotDen right now',
+        'Most popular skills on Moltbot Den right now',
       );
       console.log('');
 
@@ -357,7 +349,7 @@ export function addSkillsCommands(program: Command): void {
           },
           ...listingTableColumnsWithInstalls(),
         ],
-        result.listings as unknown as Record<string, unknown>[],
+        result.listings,
       );
 
       console.log('');
@@ -374,12 +366,9 @@ export function addSkillsCommands(program: Command): void {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
 
-      const auth = await AuthManager.requireAuth(
-        globalOpts.apiKey as string,
-        globalOpts.apiUrl as string,
-      );
+      const ctx = await resolveContext(program, { requireAuth: true });
 
-      const client = new MoltbotDenClient(auth.apiUrl, auth.apiKey);
+      const client = ctx.client;
       const spinner = jsonMode ? null : clack.spinner();
       if (spinner) spinner.start('Loading categories...');
 
@@ -389,8 +378,7 @@ export function addSkillsCommands(program: Command): void {
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to load categories');
-        process.exit(1);
+        fail(err, 'Failed to load categories');
       }
 
       if (jsonMode) {
@@ -445,7 +433,7 @@ export function addSkillsCommands(program: Command): void {
             format: (v: unknown) => v ? chalk.gray(truncate(String(v), 40)) : '',
           },
         ],
-        categories as unknown as Record<string, unknown>[],
+        categories,
       );
 
       console.log('');
@@ -462,12 +450,9 @@ export function addSkillsCommands(program: Command): void {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
 
-      const auth = await AuthManager.requireAuth(
-        globalOpts.apiKey as string,
-        globalOpts.apiUrl as string,
-      );
+      const ctx = await resolveContext(program, { requireAuth: true });
 
-      const client = new MoltbotDenClient(auth.apiUrl, auth.apiKey);
+      const client = ctx.client;
       const spinner = jsonMode ? null : clack.spinner();
       if (spinner) spinner.start('Loading skill details...');
 
@@ -477,8 +462,7 @@ export function addSkillsCommands(program: Command): void {
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Skill not found');
-        process.exit(1);
+        fail(err, 'Skill not found');
       }
 
       if (jsonMode) {
@@ -609,12 +593,9 @@ export function addSkillsCommands(program: Command): void {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
 
-      const auth = await AuthManager.requireAuth(
-        globalOpts.apiKey as string,
-        globalOpts.apiUrl as string,
-      );
+      const ctx = await resolveContext(program, { requireAuth: true });
 
-      const client = new MoltbotDenClient(auth.apiUrl, auth.apiKey);
+      const client = ctx.client;
       const spinner = jsonMode ? null : clack.spinner();
       if (spinner) spinner.start('Loading favorites...');
 
@@ -624,8 +605,7 @@ export function addSkillsCommands(program: Command): void {
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to load favorites');
-        process.exit(1);
+        fail(err, 'Failed to load favorites');
       }
 
       if (jsonMode) {
@@ -649,7 +629,7 @@ export function addSkillsCommands(program: Command): void {
 
       print.table(
         listingTableColumns(),
-        result.listings as unknown as Record<string, unknown>[],
+        result.listings,
       );
 
       console.log('');
@@ -666,12 +646,9 @@ export function addSkillsCommands(program: Command): void {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
 
-      const auth = await AuthManager.requireAuth(
-        globalOpts.apiKey as string,
-        globalOpts.apiUrl as string,
-      );
+      const ctx = await resolveContext(program, { requireAuth: true });
 
-      const client = new MoltbotDenClient(auth.apiUrl, auth.apiKey);
+      const client = ctx.client;
       const spinner = jsonMode ? null : clack.spinner();
 
       // Fetch current listing to determine current favorite state
@@ -683,8 +660,7 @@ export function addSkillsCommands(program: Command): void {
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Skill not found');
-        process.exit(1);
+        fail(err, 'Skill not found');
         return;
       }
 
@@ -695,15 +671,15 @@ export function addSkillsCommands(program: Command): void {
       let result: SkillFavoriteResult;
       try {
         if (isCurrentlyFavorited) {
-          result = await client.skillsUnfavorite(listingId);
+          await client.skillsUnfavorite(listingId);
+          result = { listing_id: listingId, favorited: false };
         } else {
           result = await client.skillsFavorite(listingId);
         }
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to update favorite');
-        process.exit(1);
+        fail(err, 'Failed to update favorite');
         return;
       }
 
@@ -732,12 +708,9 @@ export function addSkillsCommands(program: Command): void {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
 
-      const auth = await AuthManager.requireAuth(
-        globalOpts.apiKey as string,
-        globalOpts.apiUrl as string,
-      );
+      const ctx = await resolveContext(program, { requireAuth: true });
 
-      const client = new MoltbotDenClient(auth.apiUrl, auth.apiKey);
+      const client = ctx.client;
       const spinner = jsonMode ? null : clack.spinner();
       if (spinner) spinner.start(`Browsing "${categorySlug}" skills...`);
 
@@ -788,7 +761,7 @@ export function addSkillsCommands(program: Command): void {
 
       print.table(
         listingTableColumns(),
-        listings as unknown as Record<string, unknown>[],
+        listings,
       );
 
       console.log('');

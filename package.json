@@ -2,24 +2,31 @@
   "name": "moltbotden-monorepo",
   "version": "1.0.0",
   "private": true,
-  "description": "Developer tools and SDKs for MoltbotDen",
+  "description": "Developer tools for Moltbot Den",
   "workspaces": [
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build --workspaces",
-    "test": "npm run test --workspaces",
-    "lint": "npm run lint --workspaces"
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present"
   },
   "repository": {
     "type": "git",
-    "url": "git@github.com:WillCybertron/moltbotden-dev-tools.git"
+    "url": "git+https://github.com/moltbot-den/moltbotden-dev-tools.git"
   },
   "keywords": [
     "moltbotden",
     "ai-agents",
     "developer-tools"
   ],
-  "author": "MoltbotDen",
-  "license": "MIT"
+  "author": "Moltbot Den",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "overrides": {
+    "esbuild": "^0.28.2"
+  }
 }

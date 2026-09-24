@@ -5,9 +5,9 @@
 import { Command } from 'commander';
 import * as clack from '@clack/prompts';
 import chalk from 'chalk';
-import { AuthManager } from '../lib/auth-manager.js';
-import { MoltbotDenClient } from '../lib/api-client.js';
 import { print } from '../lib/output.js';
+import { fail, UsageError } from '../lib/errors.js';
+import { resolveContext } from '../lib/context.js';
 
 export function addMessageCommands(program: Command): void {
 
@@ -25,12 +25,10 @@ export function addMessageCommands(program: Command): void {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
 
-      const auth = await AuthManager.requireAuth(
-        globalOpts.apiKey as string,
-        globalOpts.apiUrl as string
-      );
+      const ctx = await resolveContext(program, { requireAuth: true });
+      const auth = ctx.auth;
 
-      const client = new MoltbotDenClient(auth.apiUrl, auth.apiKey);
+      const client = ctx.client;
       const spinner = jsonMode ? null : clack.spinner();
       if (spinner) spinner.start('Loading conversations...');
 
@@ -40,8 +38,7 @@ export function addMessageCommands(program: Command): void {
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to load conversations');
-        process.exit(1);
+        fail(err, 'Failed to load conversations');
       }
 
       if (jsonMode) {
@@ -67,7 +64,7 @@ export function addMessageCommands(program: Command): void {
       print.table(
         [
           { header: 'CONVERSATION',  key: 'conversation_id', width: 20, format: (v) => chalk.gray(String(v).slice(0, 20)) },
-          { header: 'WITH',          key: 'participant_ids', width: 20, format: (v, row) => {
+          { header: 'WITH',          key: 'participant_ids', width: 20, format: (_v, row) => {
             const r = row as { participant_ids: string[] };
             // Filter out self — show the other participant
             const others = r.participant_ids.filter(id => id !== auth.agentId);
@@ -84,7 +81,7 @@ export function addMessageCommands(program: Command): void {
             return v ? chalk.gray(print.relativeTime(String(v))) : '';
           }},
         ],
-        conversations as Record<string, unknown>[]
+        conversations
       );
 
       console.log('');
@@ -104,12 +101,10 @@ export function addMessageCommands(program: Command): void {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
 
-      const auth = await AuthManager.requireAuth(
-        globalOpts.apiKey as string,
-        globalOpts.apiUrl as string
-      );
+      const ctx = await resolveContext(program, { requireAuth: true });
+      const auth = ctx.auth;
 
-      const client = new MoltbotDenClient(auth.apiUrl, auth.apiKey);
+      const client = ctx.client;
       const spinner = jsonMode ? null : clack.spinner();
       if (spinner) spinner.start('Loading messages...');
 
@@ -121,8 +116,7 @@ export function addMessageCommands(program: Command): void {
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to load messages');
-        process.exit(1);
+        fail(err, 'Failed to load messages');
       }
 
       if (jsonMode) {
@@ -165,19 +159,16 @@ export function addMessageCommands(program: Command): void {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
 
-      const auth = await AuthManager.requireAuth(
-        globalOpts.apiKey as string,
-        globalOpts.apiUrl as string
-      );
+      const ctx = await resolveContext(program, { requireAuth: true });
+      const auth = ctx.auth;
 
-      const client = new MoltbotDenClient(auth.apiUrl, auth.apiKey);
+      const client = ctx.client;
       let agentId = agentIdArg;
 
       // If no agent-id provided, show conversation picker (interactive only)
       if (!agentId) {
         if (jsonMode) {
-          print.error('agent-id argument is required in JSON mode');
-          process.exit(1);
+          fail(new UsageError('agent-id argument is required in --json mode'));
         }
 
         const spinner = clack.spinner();
@@ -189,8 +180,7 @@ export function addMessageCommands(program: Command): void {
           spinner.stop('');
         } catch (err) {
           spinner.stop('Failed');
-          print.error(err instanceof Error ? err.message : 'Failed to load conversations');
-          process.exit(1);
+          fail(err, 'Failed to load conversations');
         }
 
         if (conversations.length === 0) {
@@ -230,8 +220,7 @@ export function addMessageCommands(program: Command): void {
 
       if (!content) {
         if (jsonMode) {
-          print.error('--message is required in JSON mode');
-          process.exit(1);
+          fail(new UsageError('--message is required in --json mode'));
         }
 
         const msg = await clack.text({
@@ -240,6 +229,7 @@ export function addMessageCommands(program: Command): void {
           validate: (v) => {
             if (!v || v.trim().length === 0) return 'Message cannot be empty';
             if (v.length > 2000) return 'Message must be at most 2000 characters';
+            return undefined;
           },
         });
 
@@ -284,8 +274,7 @@ export function addMessageCommands(program: Command): void {
         }
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to send message');
-        process.exit(1);
+        fail(err, 'Failed to send message');
       }
     });
 }

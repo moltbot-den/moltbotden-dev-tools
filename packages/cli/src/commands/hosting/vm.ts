@@ -7,6 +7,7 @@ import * as clack from '@clack/prompts';
 import chalk from 'chalk';
 import { MoltbotDenClient } from '../../lib/api-client.js';
 import { print, statusBadge } from '../../lib/output.js';
+import { CliError, fail, reportError, UsageError } from '../../lib/errors.js';
 import { VM_TIER_SPECS, type VMTier } from '../../types/hosting.js';
 
 export function addVMCommands(parent: Command, getClient: () => Promise<MoltbotDenClient>, jsonMode: () => boolean): void {
@@ -35,8 +36,7 @@ export function addVMCommands(parent: Command, getClient: () => Promise<MoltbotD
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to list VMs');
-        process.exit(1);
+        fail(err, 'Failed to list VMs');
       }
 
       if (json) { console.log(JSON.stringify(result)); return; }
@@ -64,7 +64,7 @@ export function addVMCommands(parent: Command, getClient: () => Promise<MoltbotD
           { header: 'ZONE',       key: 'gcp_zone',   width: 16, format: (v) => chalk.gray(String(v)) },
           { header: 'CREATED',    key: 'created_at',            format: (v) => chalk.gray(print.relativeTime(String(v))) },
         ],
-        result.vms as Record<string, unknown>[]
+        result.vms
       );
 
       console.log('');
@@ -98,6 +98,7 @@ export function addVMCommands(parent: Command, getClient: () => Promise<MoltbotD
               if (!v || v.trim().length < 2) return 'Name must be at least 2 characters';
               if (!/^[a-z0-9][a-z0-9-]*[a-z0-9]?$/.test(v)) return 'Use lowercase letters, numbers, and hyphens';
               if (v.length > 30) return 'Name must be at most 30 characters';
+              return undefined;
             },
           });
           if (clack.isCancel(n)) { clack.cancel('Cancelled'); process.exit(0); }
@@ -140,8 +141,7 @@ export function addVMCommands(parent: Command, getClient: () => Promise<MoltbotD
       } else {
         // JSON mode — require all options
         if (!name || !tier) {
-          print.error('--name and --tier are required in JSON mode');
-          process.exit(1);
+          fail(new UsageError('--name and --tier are required in --json mode'));
         }
       }
 
@@ -196,8 +196,7 @@ export function addVMCommands(parent: Command, getClient: () => Promise<MoltbotD
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'VM not found');
-        process.exit(1);
+        fail(err, 'VM not found');
       }
 
       if (json) { console.log(JSON.stringify(vm)); return; }
@@ -312,8 +311,7 @@ export function addVMCommands(parent: Command, getClient: () => Promise<MoltbotD
         }
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Delete failed');
-        process.exit(1);
+        fail(err, 'Delete failed');
       }
     });
 
@@ -333,19 +331,20 @@ export function addVMCommands(parent: Command, getClient: () => Promise<MoltbotD
         spinner.stop('');
       } catch (err) {
         spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'VM not found');
-        process.exit(1);
+        fail(err, 'VM not found');
       }
 
       if (vm.status !== 'running') {
-        print.warn(`VM is ${vm.status}, not running. Start it first.`);
-        print.hint(`mbd hosting vm start ${vmId}`);
-        process.exit(1);
+        throw new CliError(`VM is ${vm.status}, not running. Start it first.`, {
+          details: { vm_id: vmId, status: vm.status },
+          hint: `mbd hosting vm start ${vmId}`,
+        });
       }
 
       if (!vm.ip_address) {
-        print.warn('VM has no public IP address yet. Wait a moment and try again.');
-        process.exit(1);
+        throw new CliError('VM has no public IP address yet. Wait a moment and try again.', {
+          details: { vm_id: vmId },
+        });
       }
 
       const cmd = `ssh ${opts.user}@${vm.ip_address}`;
@@ -380,8 +379,7 @@ export function addVMCommands(parent: Command, getClient: () => Promise<MoltbotD
         }
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to get console output');
-        process.exit(1);
+        fail(err, 'Failed to get console output');
       }
     });
 
@@ -437,19 +435,16 @@ export function addVMCommands(parent: Command, getClient: () => Promise<MoltbotD
           }
           return true;
         } catch (err) {
-          const msg = err instanceof Error ? err.message : 'Failed to fetch logs';
-          if (json) {
-            process.stderr.write(JSON.stringify({ error: msg }) + '\n');
-          } else {
-            print.error(msg);
-          }
+          // The first fetch fails the command with the mapped exit code;
+          // later --follow polls only report, so the stream keeps going.
+          if (isInitial) fail(err, 'Failed to fetch logs');
+          reportError(err, 'Failed to fetch logs');
           return false;
         }
       };
 
-      // Initial fetch
-      const ok = await fetchAndPrint(true);
-      if (!ok) process.exit(1);
+      // Initial fetch (exits via fail() on error)
+      await fetchAndPrint(true);
 
       // Polling loop for --follow
       if (follow) {
@@ -469,7 +464,7 @@ export function addVMCommands(parent: Command, getClient: () => Promise<MoltbotD
 
 // ─── Log Helpers ──────────────────────────────────────────────────────────────
 
-function printLogLines(text: string, prefix?: string, dimTimestamps = false): void {
+function printLogLines(text: string, _prefix?: string, _dimTimestamps = false): void {
   const lines = text.split('\n').filter(Boolean);
   for (const line of lines) {
     // Detect log levels for color coding
@@ -533,8 +528,7 @@ async function vmAction(
     }
   } catch (err) {
     if (spinner) spinner.stop('Failed');
-    print.error(err instanceof Error ? err.message : 'Operation failed');
-    process.exit(1);
+    fail(err, 'Operation failed');
   }
 }
 

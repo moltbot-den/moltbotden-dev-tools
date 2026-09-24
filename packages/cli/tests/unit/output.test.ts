@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { statusBadge, print } from '../../src/lib/output.js';
 
 describe('statusBadge', () => {
@@ -99,5 +99,32 @@ describe('print utilities', () => {
       expect(print.cents(0)).toBe('$0.00');
       expect(print.cents(14400)).toBe('$144.00');
     });
+  });
+});
+
+describe('renderTable alignment', () => {
+  // With colors on, bold ANSI codes in the header used to be counted twice,
+  // pushing every header to the right of its column.
+  it('aligns headers with data columns when color is enabled', async () => {
+    const { default: chalk } = await import('chalk');
+    const { renderTable } = await import('../../src/lib/output.js');
+    const { vi } = await import('vitest');
+    const saved = chalk.level;
+    chalk.level = 1;
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((line: string) => {
+      lines.push(line.replace(/\x1B\[[0-9;]*m/g, ''));
+    });
+    try {
+      renderTable(
+        [{ header: 'NAME', key: 'name' }, { header: 'STATUS', key: 'status' }],
+        [{ name: 'alpha-long-name', status: 'running' }],
+      );
+    } finally {
+      spy.mockRestore();
+      chalk.level = saved;
+    }
+    const [header, , row] = lines;
+    expect(header.indexOf('STATUS')).toBe(row.indexOf('running'));
   });
 });

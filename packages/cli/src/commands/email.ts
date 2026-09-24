@@ -1,7 +1,7 @@
 /**
  * Email commands: inbox, sent, read, send, thread, address, star, delete
  *
- * Every registered MoltbotDen agent gets a permanent email address:
+ * Every registered Moltbot Den agent gets a permanent email address:
  *   {agent_id}@agents.moltbotden.com
  *
  * Subcommands:
@@ -19,9 +19,9 @@
 import { Command } from 'commander';
 import * as clack from '@clack/prompts';
 import chalk from 'chalk';
-import { AuthManager } from '../lib/auth-manager.js';
-import { MoltbotDenClient } from '../lib/api-client.js';
 import { print } from '../lib/output.js';
+import { fail, UsageError } from '../lib/errors.js';
+import { resolveContext } from '../lib/context.js';
 import { sanitizeMessage } from '../lib/sanitize.js';
 
 // ─── Response Types ─────────────────────────────────────────────────────────
@@ -164,12 +164,9 @@ export function addEmailCommands(program: Command): void {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
 
-      const auth = await AuthManager.requireAuth(
-        globalOpts.apiKey as string,
-        globalOpts.apiUrl as string
-      );
+      const ctx = await resolveContext(program, { requireAuth: true });
 
-      const client = new MoltbotDenClient(auth.apiUrl, auth.apiKey);
+      const client = ctx.client;
       const spinner = jsonMode ? null : clack.spinner();
       if (spinner) spinner.start('Loading inbox...');
 
@@ -183,8 +180,7 @@ export function addEmailCommands(program: Command): void {
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to load inbox');
-        process.exit(1);
+        fail(err, 'Failed to load inbox');
       }
 
       if (jsonMode) {
@@ -246,7 +242,7 @@ export function addEmailCommands(program: Command): void {
             format: (_v, row) => formatStatus(row as EmailMessage),
           },
         ],
-        inbox.messages as unknown as Record<string, unknown>[],
+        inbox.messages,
       );
 
       console.log('');
@@ -268,12 +264,9 @@ export function addEmailCommands(program: Command): void {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
 
-      const auth = await AuthManager.requireAuth(
-        globalOpts.apiKey as string,
-        globalOpts.apiUrl as string
-      );
+      const ctx = await resolveContext(program, { requireAuth: true });
 
-      const client = new MoltbotDenClient(auth.apiUrl, auth.apiKey);
+      const client = ctx.client;
       const spinner = jsonMode ? null : clack.spinner();
       if (spinner) spinner.start('Loading sent messages...');
 
@@ -287,8 +280,7 @@ export function addEmailCommands(program: Command): void {
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to load sent messages');
-        process.exit(1);
+        fail(err, 'Failed to load sent messages');
       }
 
       if (jsonMode) {
@@ -342,7 +334,7 @@ export function addEmailCommands(program: Command): void {
             format: () => chalk.green('sent'),
           },
         ],
-        sent.messages as unknown as Record<string, unknown>[],
+        sent.messages,
       );
 
       console.log('');
@@ -360,12 +352,9 @@ export function addEmailCommands(program: Command): void {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
 
-      const auth = await AuthManager.requireAuth(
-        globalOpts.apiKey as string,
-        globalOpts.apiUrl as string
-      );
+      const ctx = await resolveContext(program, { requireAuth: true });
 
-      const client = new MoltbotDenClient(auth.apiUrl, auth.apiKey);
+      const client = ctx.client;
       const spinner = jsonMode ? null : clack.spinner();
       if (spinner) spinner.start('Loading message...');
 
@@ -385,8 +374,7 @@ export function addEmailCommands(program: Command): void {
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Message not found');
-        process.exit(1);
+        fail(err, 'Message not found');
       }
 
       if (jsonMode) {
@@ -458,10 +446,7 @@ export function addEmailCommands(program: Command): void {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
 
-      const auth = await AuthManager.requireAuth(
-        globalOpts.apiKey as string,
-        globalOpts.apiUrl as string
-      );
+      const ctx = await resolveContext(program, { requireAuth: true });
 
       let to: string = (opts.to as string) ?? '';
       let subject: string = (opts.subject as string) ?? '';
@@ -471,16 +456,13 @@ export function addEmailCommands(program: Command): void {
       // ── JSON mode: require --to and --subject ─────────────────────────────
       if (jsonMode) {
         if (!to) {
-          print.error('--to is required in JSON mode');
-          process.exit(1);
+          fail(new UsageError('--to is required in --json mode'));
         }
         if (!subject) {
-          print.error('--subject is required in JSON mode');
-          process.exit(1);
+          fail(new UsageError('--subject is required in --json mode'));
         }
         if (!body) {
-          print.error('--body is required in JSON mode');
-          process.exit(1);
+          fail(new UsageError('--body is required in --json mode'));
         }
       }
 
@@ -492,6 +474,7 @@ export function addEmailCommands(program: Command): void {
           validate: (v) => {
             if (!v || v.trim().length === 0) return 'Recipient is required';
             if (!v.includes('@')) return 'Please enter a valid email address';
+            return undefined;
           },
         });
 
@@ -509,6 +492,7 @@ export function addEmailCommands(program: Command): void {
           validate: (v) => {
             if (!v || v.trim().length === 0) return 'Subject is required';
             if (v.length > 200) return 'Subject must be at most 200 characters';
+            return undefined;
           },
         });
 
@@ -526,6 +510,7 @@ export function addEmailCommands(program: Command): void {
           validate: (v) => {
             if (!v || v.trim().length === 0) return 'Message body cannot be empty';
             if (v.length > 10000) return 'Message body must be at most 10,000 characters';
+            return undefined;
           },
         });
 
@@ -564,7 +549,7 @@ export function addEmailCommands(program: Command): void {
         }
       }
 
-      const client = new MoltbotDenClient(auth.apiUrl, auth.apiKey);
+      const client = ctx.client;
       const spinner = jsonMode ? null : clack.spinner();
       if (spinner) spinner.start('Sending email...');
 
@@ -577,8 +562,7 @@ export function addEmailCommands(program: Command): void {
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to send email');
-        process.exit(1);
+        fail(err, 'Failed to send email');
       }
 
       if (jsonMode) {
@@ -605,12 +589,10 @@ export function addEmailCommands(program: Command): void {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
 
-      const auth = await AuthManager.requireAuth(
-        globalOpts.apiKey as string,
-        globalOpts.apiUrl as string
-      );
+      const ctx = await resolveContext(program, { requireAuth: true });
+      const auth = ctx.auth;
 
-      const client = new MoltbotDenClient(auth.apiUrl, auth.apiKey);
+      const client = ctx.client;
       const spinner = jsonMode ? null : clack.spinner();
       if (spinner) spinner.start('Loading thread...');
 
@@ -620,8 +602,7 @@ export function addEmailCommands(program: Command): void {
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Thread not found');
-        process.exit(1);
+        fail(err, 'Thread not found');
       }
 
       if (jsonMode) {
@@ -691,12 +672,9 @@ export function addEmailCommands(program: Command): void {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
 
-      const auth = await AuthManager.requireAuth(
-        globalOpts.apiKey as string,
-        globalOpts.apiUrl as string
-      );
+      const ctx = await resolveContext(program, { requireAuth: true });
 
-      const client = new MoltbotDenClient(auth.apiUrl, auth.apiKey);
+      const client = ctx.client;
       const spinner = jsonMode ? null : clack.spinner();
       if (spinner) spinner.start('Fetching email account...');
 
@@ -706,8 +684,7 @@ export function addEmailCommands(program: Command): void {
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to fetch email account');
-        process.exit(1);
+        fail(err, 'Failed to fetch email account');
       }
 
       if (jsonMode) {
@@ -750,12 +727,9 @@ export function addEmailCommands(program: Command): void {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
 
-      const auth = await AuthManager.requireAuth(
-        globalOpts.apiKey as string,
-        globalOpts.apiUrl as string
-      );
+      const ctx = await resolveContext(program, { requireAuth: true });
 
-      const client = new MoltbotDenClient(auth.apiUrl, auth.apiKey);
+      const client = ctx.client;
       const spinner = jsonMode ? null : clack.spinner();
 
       // First, fetch the message to determine current star state
@@ -774,8 +748,7 @@ export function addEmailCommands(program: Command): void {
           if (spinner) spinner.stop('');
         } catch (err) {
           if (spinner) spinner.stop('Failed');
-          print.error(err instanceof Error ? err.message : 'Message not found');
-          process.exit(1);
+          fail(err, 'Message not found');
           return; // TypeScript: unreachable, but helps narrowing
         }
       }
@@ -787,8 +760,7 @@ export function addEmailCommands(program: Command): void {
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to update star');
-        process.exit(1);
+        fail(err, 'Failed to update star');
       }
 
       if (jsonMode) {
@@ -812,12 +784,9 @@ export function addEmailCommands(program: Command): void {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
 
-      const auth = await AuthManager.requireAuth(
-        globalOpts.apiKey as string,
-        globalOpts.apiUrl as string
-      );
+      const ctx = await resolveContext(program, { requireAuth: true });
 
-      const client = new MoltbotDenClient(auth.apiUrl, auth.apiKey);
+      const client = ctx.client;
       const skipConfirm = opts.yes as boolean || jsonMode;
 
       // Fetch message details for confirmation
@@ -826,7 +795,7 @@ export function addEmailCommands(program: Command): void {
         preSpinner.start('Loading message...');
 
         try {
-          const msg = await client.emailMessage(messageId);
+          const msg = await client.emailMessage<EmailMessage>(messageId);
           preSpinner.stop('');
 
           console.log('');
@@ -860,8 +829,7 @@ export function addEmailCommands(program: Command): void {
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to delete message');
-        process.exit(1);
+        fail(err, 'Failed to delete message');
       }
 
       if (jsonMode) {

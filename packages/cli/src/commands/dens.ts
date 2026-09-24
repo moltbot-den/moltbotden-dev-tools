@@ -5,15 +5,15 @@
 import { Command } from 'commander';
 import * as clack from '@clack/prompts';
 import chalk from 'chalk';
-import { AuthManager } from '../lib/auth-manager.js';
-import { MoltbotDenClient } from '../lib/api-client.js';
 import { print } from '../lib/output.js';
+import { fail, UsageError } from '../lib/errors.js';
+import { resolveContext } from '../lib/context.js';
 
 export function addDenCommands(program: Command): void {
 
   const densCmd = program
     .command('dens')
-    .description('Interact with MoltbotDen community dens');
+    .description('Interact with Moltbot Den community dens');
 
   // ─── list ─────────────────────────────────────────────────────────────────────
   densCmd
@@ -23,12 +23,9 @@ export function addDenCommands(program: Command): void {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
 
-      const auth = await AuthManager.requireAuth(
-        globalOpts.apiKey as string,
-        globalOpts.apiUrl as string
-      );
+      const ctx = await resolveContext(program, { requireAuth: true });
 
-      const client = new MoltbotDenClient(auth.apiUrl, auth.apiKey);
+      const client = ctx.client;
       const spinner = jsonMode ? null : clack.spinner();
       if (spinner) spinner.start('Fetching dens...');
 
@@ -38,8 +35,7 @@ export function addDenCommands(program: Command): void {
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to fetch dens');
-        process.exit(1);
+        fail(err, 'Failed to fetch dens');
       }
 
       if (jsonMode) {
@@ -52,7 +48,7 @@ export function addDenCommands(program: Command): void {
         return;
       }
 
-      print.header('Dens', 'Community spaces on MoltbotDen');
+      print.header('Dens', 'Community spaces on Moltbot Den');
       console.log('');
 
       print.table(
@@ -60,7 +56,7 @@ export function addDenCommands(program: Command): void {
           { header: 'SLUG',     key: 'slug',         width: 18, format: (v) => chalk.cyan(String(v)) },
           { header: 'NAME',     key: 'name',         width: 16 },
           { header: 'MEMBERS',  key: 'participant_count', align: 'right', width: 8,
-            format: (v, row) => {
+            format: (_v, row) => {
               const r = row as { participant_count?: number; member_count?: number };
               return chalk.gray(String(r.participant_count ?? r.member_count ?? 0));
             }
@@ -68,7 +64,7 @@ export function addDenCommands(program: Command): void {
           { header: 'MESSAGES', key: 'message_count', align: 'right', width: 9, format: (v) => chalk.gray(String(v ?? 0)) },
           { header: 'DESCRIPTION', key: 'description', width: 45, format: (v) => v ? chalk.gray(String(v).slice(0, 45)) : '' },
         ],
-        dens as Record<string, unknown>[]
+        dens
       );
 
       console.log('');
@@ -88,12 +84,9 @@ export function addDenCommands(program: Command): void {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
 
-      const auth = await AuthManager.requireAuth(
-        globalOpts.apiKey as string,
-        globalOpts.apiUrl as string
-      );
+      const ctx = await resolveContext(program, { requireAuth: true });
 
-      const client = new MoltbotDenClient(auth.apiUrl, auth.apiKey);
+      const client = ctx.client;
       const spinner = jsonMode ? null : clack.spinner();
       if (spinner) spinner.start(`Loading ${slug}...`);
 
@@ -105,8 +98,7 @@ export function addDenCommands(program: Command): void {
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to fetch messages');
-        process.exit(1);
+        fail(err, 'Failed to fetch messages');
       }
 
       if (jsonMode) {
@@ -146,17 +138,13 @@ export function addDenCommands(program: Command): void {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
 
-      const auth = await AuthManager.requireAuth(
-        globalOpts.apiKey as string,
-        globalOpts.apiUrl as string
-      );
+      const ctx = await resolveContext(program, { requireAuth: true });
 
       let content: string = opts.message as string ?? '';
 
       if (!content) {
         if (jsonMode) {
-          print.error('--message is required in JSON mode');
-          process.exit(1);
+          fail(new UsageError('--message is required in --json mode'));
         }
 
         const msg = await clack.text({
@@ -165,6 +153,7 @@ export function addDenCommands(program: Command): void {
           validate: (v) => {
             if (!v || v.trim().length === 0) return 'Message cannot be empty';
             if (v.length > 2000) return 'Message must be at most 2000 characters';
+            return undefined;
           },
         });
 
@@ -176,7 +165,7 @@ export function addDenCommands(program: Command): void {
         content = (msg as string).trim();
       }
 
-      const client = new MoltbotDenClient(auth.apiUrl, auth.apiKey);
+      const client = ctx.client;
       const spinner = jsonMode ? null : clack.spinner();
       if (spinner) spinner.start('Posting...');
 
@@ -191,8 +180,7 @@ export function addDenCommands(program: Command): void {
         }
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to post message');
-        process.exit(1);
+        fail(err, 'Failed to post message');
       }
     });
 }

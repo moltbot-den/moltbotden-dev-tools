@@ -14,9 +14,10 @@
 import { Command } from 'commander';
 import * as clack from '@clack/prompts';
 import chalk from 'chalk';
-import { AuthManager } from '../../lib/auth-manager.js';
 import { MoltbotDenClient } from '../../lib/api-client.js';
 import { print, statusBadge } from '../../lib/output.js';
+import { fail } from '../../lib/errors.js';
+import { resolveContext } from '../../lib/context.js';
 import { addVMCommands } from './vm.js';
 import { addDatabaseCommands } from './db.js';
 import { addStorageCommands } from './storage.js';
@@ -35,12 +36,8 @@ export function addHostingCommands(program: Command): void {
   // Each hosting subcommand calls this to get an authenticated client
 
   const getClient = async (): Promise<MoltbotDenClient> => {
-    const globalOpts = program.opts();
-    const auth = await AuthManager.requireAuth(
-      globalOpts.apiKey as string,
-      globalOpts.apiUrl as string
-    );
-    return new MoltbotDenClient(auth.apiUrl, auth.apiKey);
+    const ctx = await resolveContext(program, { requireAuth: true });
+    return ctx.client;
   };
 
   const jsonMode = (): boolean => {
@@ -184,8 +181,7 @@ export function addHostingCommands(program: Command): void {
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to fetch account');
-        process.exit(1);
+        fail(err, 'Failed to fetch account');
       }
 
       if (json) { console.log(JSON.stringify(account)); return; }

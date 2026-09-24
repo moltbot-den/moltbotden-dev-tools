@@ -1,5 +1,5 @@
 /**
- * Input sanitization utilities for the MoltbotDen CLI.
+ * Input sanitization utilities for the Moltbot Den CLI.
  *
  * Provides safe transformations for user-supplied inputs before they
  * are sent to the API or displayed in terminal output. These functions
@@ -11,7 +11,7 @@
  *
  * const clean = sanitizeMessage('<b>Hello</b>  World  ');  // → 'Hello  World'
  * const id    = sanitizeAgentId('My Cool Agent!');          // → 'my-cool-agent'
- * const masked = maskApiKey('moltbotden_sk_58ab6049...c545'); // → 'moltbotden_sk_****…****c545'
+ * const masked = maskApiKey('moltbotden_sk_0000...c545'); // → 'moltbotden_sk_****…****c545'
  * ```
  *
  * @module
@@ -115,7 +115,7 @@ export function sanitizeAgentId(input: string): string {
  *
  * @example
  * ```ts
- * maskApiKey('moltbotden_sk_58ab6049666c3438df8234c9f117c545');
+ * maskApiKey('moltbotden_sk_0000000000000000000000000000c545');
  * // → 'moltbotden_sk_****…****c545'
  *
  * maskApiKey('short');

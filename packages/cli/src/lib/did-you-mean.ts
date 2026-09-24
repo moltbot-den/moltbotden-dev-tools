@@ -58,7 +58,7 @@ export function didYouMean(
 }
 
 /**
- * All known top-level commands for the MoltbotDen CLI.
+ * All known top-level commands for the Moltbot Den CLI.
  */
 export const KNOWN_COMMANDS = [
   'register',

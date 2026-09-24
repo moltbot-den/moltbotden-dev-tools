@@ -1,371 +1,358 @@
 /**
- * E2E tests for the MoltbotDen CLI.
+ * End-to-end tests for the built CLI (dist/cli.js).
  *
- * These tests execute the actual built CLI binary and verify:
- *   - Command output format
- *   - Exit codes
- *   - JSON mode output
- *   - Error handling
- *   - Help text
- *   - Version output
+ * Hermetic by design: every run gets a temp config dir, temp HOME and temp
+ * cwd, and all HTTP goes to a local mock server (API and npm registry). No
+ * test reads real credentials or depends on production being up.
  *
- * NOTE: These test against the REAL API (api.moltbotden.com) for read-only
- * operations (ping, version, help). Mutating operations (register, etc.)
- * use --json mode with intentionally invalid data to test error paths.
+ * The CLI is spawned asynchronously (execFile) so the in-process mock server
+ * can answer while the child runs; args are passed as an array, so paths with
+ * spaces work on Windows too.
  */
 
-import { describe, it, expect, beforeAll } from 'vitest';
-import { execSync, ExecSyncOptions } from 'child_process';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { execFile } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { startMockApi, type MockApi } from '../helpers/mock-api.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = path.resolve(__dirname, '../../dist/cli.js');
+const PKG_VERSION = (
+  JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../package.json'), 'utf-8')) as { version: string }
+).version;
 
-const exec = (args: string, opts: ExecSyncOptions = {}): string => {
-  try {
-    return execSync(`node ${CLI_PATH} ${args}`, {
-      encoding: 'utf-8',
-      timeout: 30_000,
-      env: { ...process.env, NO_COLOR: '1', MBD_NO_UPDATE_CHECK: '1' },
-      ...opts,
-    }).trim();
-  } catch (err: unknown) {
-    const e = err as { stdout?: string; stderr?: string; status?: number };
-    // Return combined output for assertion
-    return (e.stdout ?? '') + (e.stderr ?? '');
+interface RunResult {
+  stdout: string;
+  stderr: string;
+  code: number;
+}
+
+let api: MockApi;
+let sandbox: string;
+let configDir: string;
+
+function run(args: string[], env: Record<string, string> = {}): Promise<RunResult> {
+  const childEnv: Record<string, string> = {};
+  // Keep PATH/SystemRoot etc. but drop anything that could leak credentials.
+  for (const [k, v] of Object.entries(process.env)) {
+    if (v === undefined || k.startsWith('MOLTBOTDEN_') || k.startsWith('MBD_')) continue;
+    childEnv[k] = v;
   }
-};
+  Object.assign(childEnv, {
+    HOME: sandbox,
+    USERPROFILE: sandbox,
+    MOLTBOTDEN_CONFIG_DIR: configDir,
+    MBD_NPM_REGISTRY: api.url,
+    MBD_NO_UPDATE_CHECK: '1',
+    NO_COLOR: '1',
+    CI: '1',
+    ...env,
+  });
+  return new Promise((resolve) => {
+    execFile(
+      process.execPath,
+      [CLI_PATH, ...args],
+      { cwd: sandbox, env: childEnv, timeout: 15_000, encoding: 'utf-8' },
+      (error, stdout, stderr) => {
+        const code = error ? (typeof error.code === 'number' ? error.code : 1) : 0;
+        resolve({ stdout: stdout.trim(), stderr: stderr.trim(), code });
+      },
+    );
+  });
+}
 
-const execWithCode = (args: string): { output: string; code: number } => {
-  try {
-    const output = execSync(`node ${CLI_PATH} ${args}`, {
-      encoding: 'utf-8',
-      timeout: 30_000,
-      env: { ...process.env, NO_COLOR: '1', MBD_NO_UPDATE_CHECK: '1' },
-    }).trim();
-    return { output, code: 0 };
-  } catch (err: unknown) {
-    const e = err as { stdout?: string; stderr?: string; status?: number };
-    return {
-      output: ((e.stdout ?? '') + (e.stderr ?? '')).trim(),
-      code: e.status ?? 1,
-    };
-  }
-};
+/** Run with the mock API as --api-url. */
+const runApi = (args: string[], env?: Record<string, string>) => run(['--api-url', api.url, ...args], env);
 
-const execJson = (args: string): Record<string, unknown> => {
-  const output = exec(`--json ${args}`);
-  return JSON.parse(output) as Record<string, unknown>;
-};
+function parseEnvelope(stderr: string): { error: { status: number | null; message: string; exit_code: number } } {
+  return JSON.parse(stderr) as { error: { status: number | null; message: string; exit_code: number } };
+}
 
-// ─── Tests ──────────────────────────────────────────────────────────────────
+beforeAll(async () => {
+  if (!fs.existsSync(CLI_PATH)) throw new Error('CLI not built. Run `npm run build` first.');
+  api = await startMockApi();
+});
 
-describe('CLI E2E', () => {
-  beforeAll(() => {
-    // Verify the CLI is built
-    try {
-      execSync(`node ${CLI_PATH} --version`, { encoding: 'utf-8', timeout: 5000 });
-    } catch {
-      throw new Error('CLI not built. Run `npm run build` first.');
+afterAll(async () => {
+  await api.close();
+});
+
+beforeEach(() => {
+  api.reset();
+  sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'mbd-e2e-'));
+  configDir = path.join(sandbox, 'config');
+});
+
+// ─── Version & help ──────────────────────────────────────────────────────────
+
+describe('version', () => {
+  it.each([['-v'], ['--version']])('%s prints the package version (not 0.0.0)', async (flag) => {
+    const { stdout, code } = await run([flag]);
+    expect(code).toBe(0);
+    expect(stdout).toBe(PKG_VERSION);
+  });
+});
+
+describe('help', () => {
+  it('lists the core commands with the two-word brand', async () => {
+    const { stdout, code } = await run(['--help']);
+    expect(code).toBe(0);
+    expect(stdout).toContain('Moltbot Den CLI');
+    for (const cmd of ['register', 'login', 'heartbeat', 'hosting', 'messages', 'init', 'update', 'ping']) {
+      expect(stdout).toContain(cmd);
     }
   });
 
-  // ─── Version & Help ──────────────────────────────────────────────────────
+  it.each([
+    [['register', '--help'], ['Register a new AI agent', '--invite-code', '--agent-id', '--display-name', '--minimal']],
+    [['hosting', '--help'], ['vm', 'db', 'storage', 'openclaw', 'domains', 'billing']],
+    [['messages', '--help'], ['list', 'read', 'send']],
+    [['init', '--help'], ['Initialize', '--force']],
+    [['update', '--help'], ['Update', '--check']],
+    [['completion', '--help'], ['bash', 'zsh', 'fish']],
+    [['discover', 'agents', '--help'], ['--limit', '--page', '--per-page']],
+    [['email', '--help'], ['inbox', 'sent', 'send', 'read', 'thread', 'address']],
+    [['skills', '--help'], ['search', 'trending', 'categories', 'info', 'favorites', 'browse']],
+    [['config', '--help'], ['list', 'get', 'set', 'reset', 'path']],
+    [['telemetry', '--help'], ['enable', 'disable', 'status']],
+  ])('%j shows its subcommands and flags', async (args, expected) => {
+    const { stdout, code } = await run(args);
+    expect(code).toBe(0);
+    for (const text of expected) expect(stdout).toContain(text);
+  });
+});
 
-  describe('version', () => {
-    it('should output version number with -v', () => {
-      const output = exec('-v');
-      expect(output).toMatch(/^\d+\.\d+\.\d+$/);
-    });
+// ─── --json contract ─────────────────────────────────────────────────────────
 
-    it('should output version number with --version', () => {
-      const output = exec('--version');
-      expect(output).toMatch(/^\d+\.\d+\.\d+$/);
-    });
+describe('--json output contract', () => {
+  it('ping prints pure JSON on stdout', async () => {
+    api.on('GET', '/health', { status: 200, body: { status: 'healthy' } });
+    const { stdout, stderr, code } = await runApi(['--json', 'ping']);
+    expect(code).toBe(0);
+    expect(stderr).toBe('');
+    const result = JSON.parse(stdout) as Record<string, unknown>;
+    expect(result).toMatchObject({ ok: true, status: 200, api_url: api.url, health: { status: 'healthy' } });
+    expect(typeof result.latency_ms).toBe('number');
   });
 
-  describe('help', () => {
-    it('should show help with --help', () => {
-      const output = exec('--help');
-      expect(output).toContain('MoltbotDen CLI');
-      expect(output).toContain('register');
-      expect(output).toContain('login');
-      expect(output).toContain('heartbeat');
-      expect(output).toContain('hosting');
-      expect(output).toContain('messages');
-      expect(output).toContain('init');
-      expect(output).toContain('update');
-      expect(output).toContain('ping');
-    });
-
-    it('should show register help', () => {
-      const output = exec('register --help');
-      expect(output).toContain('Register a new AI agent');
-      expect(output).toContain('--invite-code');
-      expect(output).toContain('--agent-id');
-      expect(output).toContain('--display-name');
-      expect(output).toContain('--minimal');
-    });
-
-    it('should show hosting help', () => {
-      const output = exec('hosting --help');
-      expect(output).toContain('vm');
-      expect(output).toContain('db');
-      expect(output).toContain('storage');
-      expect(output).toContain('openclaw');
-      expect(output).toContain('domains');
-      expect(output).toContain('billing');
-    });
-
-    it('should show messages help', () => {
-      const output = exec('messages --help');
-      expect(output).toContain('list');
-      expect(output).toContain('read');
-      expect(output).toContain('send');
-    });
-
-    it('should show init help', () => {
-      const output = exec('init --help');
-      expect(output).toContain('Initialize');
-      expect(output).toContain('--force');
-    });
-
-    it('should show update help', () => {
-      const output = exec('update --help');
-      expect(output).toContain('Update');
-      expect(output).toContain('--check');
-    });
-
-    it('should show completion help', () => {
-      const output = exec('completion --help');
-      expect(output).toContain('bash');
-      expect(output).toContain('zsh');
-      expect(output).toContain('fish');
-    });
-
-    it('should show discover subcommand help', () => {
-      const output = exec('discover agents --help');
-      expect(output).toContain('--limit');
-      expect(output).toContain('--page');
-      expect(output).toContain('--per-page');
-    });
+  it('network failure: empty stdout, JSON error envelope on stderr, exit 1', async () => {
+    const { stdout, stderr, code } = await run(['--json', 'ping', '--api-url', 'http://127.0.0.1:1']);
+    expect(code).toBe(1);
+    expect(stdout).toBe('');
+    expect(parseEnvelope(stderr).error).toMatchObject({ status: 0, exit_code: 1 });
   });
 
-  // ─── Ping ────────────────────────────────────────────────────────────────
-
-  describe('ping', () => {
-    it('should return JSON with ok=true for healthy API', () => {
-      const result = execJson('ping');
-      expect(result.ok).toBe(true);
-      expect(result.latency_ms).toBeDefined();
-      expect(typeof result.latency_ms).toBe('number');
-    });
-
-    it('should include status in response', () => {
-      const result = execJson('ping');
-      expect(result.status).toBeDefined();
-    });
+  it('auth failure maps to exit 3 with the HTTP status in the envelope', async () => {
+    api.on('GET', '/agents/me', { status: 401, body: { detail: 'Invalid API key' } });
+    const { stdout, stderr, code } = await runApi(['--json', 'status', '--api-key', 'moltbotden_sk_fake']);
+    expect(code).toBe(3);
+    expect(stdout).toBe('');
+    expect(parseEnvelope(stderr).error).toMatchObject({ status: 401, message: 'Invalid API key (HTTP 401)' });
   });
 
-  // ─── JSON Mode Error Paths ───────────────────────────────────────────────
-
-  describe('json mode', () => {
-    it('should require --agent-id and --display-name for register', () => {
-      const result = execJson('register');
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('--agent-id');
-    });
-
-    it('should return valid JSON for whoami', () => {
-      const result = execJson('whoami');
-      // May be authenticated (if ~/.moltbotden/config.json exists) or not
-      expect(typeof result.authenticated).toBe('boolean');
-      if (result.authenticated) {
-        expect(result.agent_id).toBeDefined();
-        expect(result.source).toBeDefined();
-      }
-    });
+  it('not found maps to exit 4', async () => {
+    api.on('GET', '/agents/me', { status: 404, body: { detail: 'Agent not found' } });
+    const { code, stderr } = await runApi(['--json', 'status', '--api-key', 'k']);
+    expect(code).toBe(4);
+    expect(parseEnvelope(stderr).error.status).toBe(404);
   });
 
-  // ─── Update Check ────────────────────────────────────────────────────────
-
-  describe('update', () => {
-    it('should check for updates with --check', () => {
-      const result = execJson('update --check');
-      expect(result.current_version).toBeDefined();
-      expect(result.latest_version).toBeDefined();
-      expect(typeof result.up_to_date).toBe('boolean');
+  it('formats FastAPI 422 lists as readable field: msg lines', async () => {
+    api.on('POST', '/heartbeat', {
+      status: 422,
+      body: { detail: [{ loc: ['body', 'status'], msg: 'Field required', type: 'missing' }] },
     });
+    const { code, stderr } = await runApi(['--json', 'heartbeat', '--api-key', 'k']);
+    expect(code).toBe(1);
+    expect(parseEnvelope(stderr).error.message).toBe('Validation failed (HTTP 422):\n  status: Field required');
   });
 
-  // ─── Completion ──────────────────────────────────────────────────────────
-
-  describe('completion', () => {
-    it('should output bash completion script', () => {
-      const output = exec('completion bash');
-      expect(output).toContain('_mbd_completions');
-      expect(output).toContain('complete -F');
-    });
-
-    it('should output zsh completion script', () => {
-      const output = exec('completion zsh');
-      expect(output).toContain('compdef');
-      expect(output).toContain('_mbd');
-    });
-
-    it('should output fish completion script', () => {
-      const output = exec('completion fish');
-      expect(output).toContain('complete -c mbd');
-    });
+  it('hosting vm logs maps a 404 to exit 4', async () => {
+    api.on('GET', '/v1/hosting/compute/vms/vm-missing/console', { status: 404, body: { detail: 'VM not found' } });
+    const { code, stdout, stderr } = await runApi(['--json', 'hosting', 'vm', 'logs', 'vm-missing', '--api-key', 'k']);
+    expect(code).toBe(4);
+    expect(stdout).toBe('');
+    expect(parseEnvelope(stderr).error).toMatchObject({ status: 404, message: 'VM not found (HTTP 404)' });
   });
 
-  // ─── Verbose Mode ─────────────────────────────────────────────────────────
-
-  describe('verbose', () => {
-    it('should include debug output in stderr with --verbose', () => {
-      // Verbose output goes to stderr, command output to stdout
-      try {
-        const output = execSync(`node ${CLI_PATH} --verbose --json ping 2>&1`, {
-          encoding: 'utf-8',
-          timeout: 30_000,
-          env: { ...process.env, NO_COLOR: '1', MBD_NO_UPDATE_CHECK: '1' },
-        });
-        // Should contain debug prefix
-        expect(output).toContain('cli');
-      } catch (err: unknown) {
-        // Even if it exits non-zero, check the output
-        const e = err as { stdout?: string; stderr?: string };
-        const combined = (e.stdout ?? '') + (e.stderr ?? '');
-        expect(combined).toContain('cli');
-      }
-    });
+  it('missing credentials is an auth error (exit 3)', async () => {
+    const { code, stderr } = await runApi(['--json', 'dens', 'list']);
+    expect(code).toBe(3);
+    expect(parseEnvelope(stderr).error.message).toBe('Not authenticated');
   });
 
-  // ─── Error Handling ──────────────────────────────────────────────────────
-
-  describe('error handling', () => {
-    it('should show auth error for status without credentials', () => {
-      const { output, code } = execWithCode('--json status --api-key invalid_key_123');
-      // Should fail with auth error or network error
-      expect(code).not.toBe(0);
-    });
-
-    it('should handle invalid API URL gracefully', () => {
-      const { output, code } = execWithCode('--json ping --api-url http://localhost:1');
-      expect(code).not.toBe(0);
-      const parsed = JSON.parse(output);
-      expect(parsed.ok).toBe(false);
-    });
+  it('usage errors exit 2: register without required flags in --json mode', async () => {
+    const { code, stdout, stderr } = await runApi(['--json', 'register']);
+    expect(code).toBe(2);
+    expect(stdout).toBe('');
+    expect(parseEnvelope(stderr).error.message).toContain('--agent-id');
   });
 
-  // ─── Email Command ─────────────────────────────────────────────────────────
-
-  describe('email', () => {
-    it('should show help for email command', () => {
-      const output = exec('email --help');
-      expect(output).toContain('inbox');
-      expect(output).toContain('sent');
-      expect(output).toContain('send');
-      expect(output).toContain('read');
-      expect(output).toContain('thread');
-      expect(output).toContain('address');
-    });
-
-    it('should require auth for email inbox in JSON mode', () => {
-      const { code } = execWithCode('--json email inbox --api-key invalid_key_here');
-      expect(code).not.toBe(0);
-    });
+  it('unknown options exit 2 with a JSON envelope', async () => {
+    const { code, stderr } = await run(['--json', 'ping', '--bogus']);
+    expect(code).toBe(2);
+    expect(parseEnvelope(stderr).error.message).toContain("unknown option '--bogus'");
   });
 
-  // ─── Skills Command ────────────────────────────────────────────────────────
+  it('whoami reports unauthenticated without touching the network', async () => {
+    const { stdout, code } = await runApi(['--json', 'whoami']);
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout)).toEqual({ authenticated: false });
+    expect(api.requests).toHaveLength(0);
+  });
+});
 
-  describe('skills', () => {
-    it('should show help for skills command', () => {
-      const output = exec('skills --help');
-      expect(output).toContain('search');
-      expect(output).toContain('trending');
-      expect(output).toContain('categories');
-      expect(output).toContain('info');
-      expect(output).toContain('favorites');
-      expect(output).toContain('browse');
-    });
+// ─── API URL + credentials ───────────────────────────────────────────────────
 
-    it('should return results for skills search in JSON mode', () => {
-      const output = exec('--json skills search "test" --api-key invalid_key_here');
-      const parsed = JSON.parse(output);
-      // Marketplace search is public — should return results
-      expect(parsed).toHaveProperty('total_results');
-    });
+describe('API URL resolution', () => {
+  it('honors MOLTBOTDEN_API_URL (previously ignored because --api-url had a default)', async () => {
+    api.on('GET', '/health', { status: 200, body: {} });
+    const { code, stdout } = await run(['--json', 'ping'], { MOLTBOTDEN_API_URL: api.url });
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout).api_url).toBe(api.url);
+    expect(api.requests.map((r) => r.path)).toEqual(['/health']);
   });
 
-  // ─── Config Command ────────────────────────────────────────────────────────
-
-  describe('config', () => {
-    it('should show help for config command', () => {
-      const output = exec('config --help');
-      expect(output).toContain('list');
-      expect(output).toContain('get');
-      expect(output).toContain('set');
-      expect(output).toContain('reset');
-      expect(output).toContain('path');
-    });
-
-    it('should show config path in JSON mode', () => {
-      const output = exec('--json config path');
-      const parsed = JSON.parse(output);
-      expect(parsed.config_file).toContain('.moltbotden');
-      expect(parsed.config_file).toContain('config.json');
-    });
-
-    it('should reject unknown config keys', () => {
-      const { code } = execWithCode('--json config set unknown_key value');
-      expect(code).not.toBe(0);
-    });
+  it('sends X-API-Key and the CLI User-Agent', async () => {
+    api.on('POST', '/heartbeat', { status: 200, body: {} });
+    await runApi(['--json', 'heartbeat', '--api-key', 'moltbotden_sk_test']);
+    const req = api.requests.find((r) => r.path === '/heartbeat');
+    expect(req?.headers['x-api-key']).toBe('moltbotden_sk_test');
+    expect(req?.headers['user-agent']).toBe(`moltbotden-cli/${PKG_VERSION} node/${process.versions.node} ${process.platform}`);
   });
 
-  // ─── Telemetry Command ─────────────────────────────────────────────────────
-
-  describe('telemetry', () => {
-    it('should show help for telemetry command', () => {
-      const output = exec('telemetry --help');
-      expect(output).toContain('enable');
-      expect(output).toContain('disable');
-      expect(output).toContain('status');
+  it('login stores the key privately with the URL it was verified against', async () => {
+    api.on('GET', '/agents/me', {
+      status: 200,
+      body: { agent_id: 'test-agent', profile: { display_name: 'Test' }, status: 'active' },
     });
+    const { code, stdout } = await runApi(['--json', 'login', '--api-key', 'moltbotden_sk_0000000000000000']);
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout)).toMatchObject({ success: true, agent_id: 'test-agent' });
 
-    it('should show telemetry status in JSON mode', () => {
-      const output = exec('--json telemetry status');
-      const parsed = JSON.parse(output);
-      expect(typeof parsed.enabled).toBe('boolean');
-    });
+    const configFile = path.join(configDir, 'config.json');
+    const config = JSON.parse(fs.readFileSync(configFile, 'utf-8'));
+    expect(config.agents['test-agent']).toMatchObject({ apiKey: 'moltbotden_sk_0000000000000000', apiUrl: api.url });
+    if (process.platform !== 'win32') expect(fs.statSync(configFile).mode & 0o777).toBe(0o600);
+
+    // The stored URL is used by later commands without any flag.
+    api.on('POST', '/heartbeat', { status: 200, body: {} });
+    const hb = await run(['--json', 'heartbeat']);
+    expect(hb.code).toBe(0);
+    expect(api.requests.some((r) => r.path === '/heartbeat')).toBe(true);
   });
 
-  // ─── Did You Mean — new commands ───────────────────────────────────────────
+  it('login with a rejected key exits 3 and stores nothing', async () => {
+    api.on('GET', '/agents/me', { status: 401, body: { detail: 'Invalid API key' } });
+    const { code, stdout, stderr } = await runApi(['--json', 'login', '--api-key', 'moltbotden_sk_bad00000000000000']);
+    expect(code).toBe(3);
+    expect(stdout).toBe('');
+    expect(parseEnvelope(stderr).error.message).toContain('Invalid API key');
+    expect(fs.existsSync(path.join(configDir, 'config.json'))).toBe(false);
+  });
 
-  describe('did you mean — new commands', () => {
-    it('should suggest email for emal', () => {
-      const { output, code } = execWithCode('emal');
-      expect(code).toBe(1);
-      expect(output).toContain('email');
-    });
+  it('login reports a server outage as such, not as a bad key', async () => {
+    api.on('GET', '/agents/me', { status: 500, body: { detail: 'boom' } });
+    const { code, stderr } = await runApi(['--json', 'login', '--api-key', 'moltbotden_sk_x0000000000000000']);
+    expect(code).toBe(1);
+    expect(parseEnvelope(stderr).error.message).toBe('boom (HTTP 500)');
+  });
 
-    it('should suggest skills for skils', () => {
-      const { output, code } = execWithCode('skils');
-      expect(code).toBe(1);
-      expect(output).toContain('skills');
-    });
+  it('refuses to use a corrupt config and backs it up instead of wiping keys', async () => {
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(path.join(configDir, 'config.json'), '{"agents": {', 'utf-8');
+    const { code, stderr } = await runApi(['--json', 'whoami']);
+    expect(code).toBe(1);
+    expect(parseEnvelope(stderr).error.message).toContain('could not be parsed');
+    expect(fs.readdirSync(configDir).some((f) => f.startsWith('config.json.corrupt-'))).toBe(true);
+  });
+});
 
-    it('should suggest config for conifg', () => {
-      const { output, code } = execWithCode('conifg');
-      expect(code).toBe(1);
-      expect(output).toContain('config');
-    });
+// ─── Update check (mock npm registry) ────────────────────────────────────────
 
-    it('should suggest telemetry for telmetry', () => {
-      const { output, code } = execWithCode('telmetry');
-      expect(code).toBe(1);
-      expect(output).toContain('telemetry');
-    });
+describe('update --check', () => {
+  it('compares the real installed version with the registry', async () => {
+    api.on('GET', '/@moltbotden/cli/latest', { status: 200, body: { version: '99.0.0' } });
+    const { stdout, code } = await run(['--json', 'update', '--check']);
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout)).toEqual({ current_version: PKG_VERSION, latest_version: '99.0.0', up_to_date: false });
+  });
+
+  it('registry failure is a JSON error on stderr, not ad-hoc JSON on stdout', async () => {
+    api.on('GET', '/@moltbotden/cli/latest', { status: 500, body: {} });
+    const { stdout, stderr, code } = await run(['--json', 'update', '--check']);
+    expect(code).toBe(1);
+    expect(stdout).toBe('');
+    expect(parseEnvelope(stderr).error.message).toContain('npm registry');
+  });
+
+  it('reports up to date when the registry matches', async () => {
+    api.on('GET', '/@moltbotden/cli/latest', { status: 200, body: { version: PKG_VERSION } });
+    const { stdout } = await run(['--json', 'update', '--check']);
+    expect(JSON.parse(stdout).up_to_date).toBe(true);
+  });
+});
+
+// ─── Local commands ──────────────────────────────────────────────────────────
+
+describe('local commands', () => {
+  it('config path points at MOLTBOTDEN_CONFIG_DIR', async () => {
+    const { stdout } = await run(['--json', 'config', 'path']);
+    expect(JSON.parse(stdout).config_file).toBe(path.join(configDir, 'config.json'));
+  });
+
+  it('config set rejects unknown keys as a usage error with a JSON envelope', async () => {
+    const { code, stdout, stderr } = await run(['--json', 'config', 'set', 'unknown_key', 'value']);
+    expect(code).toBe(2);
+    expect(stdout).toBe('');
+    expect(parseEnvelope(stderr).error.message).toBe('Unknown config key: unknown_key');
+  });
+
+  it('telemetry is off by default', async () => {
+    const { stdout } = await run(['--json', 'telemetry', 'status']);
+    expect(JSON.parse(stdout).enabled).toBe(false);
+  });
+
+  it.each([
+    ['bash', ['_mbd_completions', 'complete -F']],
+    ['zsh', ['compdef', '_mbd']],
+    ['fish', ['complete -c mbd']],
+  ])('completion %s', async (shell, expected) => {
+    const { stdout, code } = await run(['completion', shell]);
+    expect(code).toBe(0);
+    for (const text of expected) expect(stdout).toContain(text);
+  });
+
+  it('completion with an unsupported shell is a usage error envelope in --json mode', async () => {
+    const { code, stdout, stderr } = await run(['--json', 'completion', 'powershell']);
+    expect(code).toBe(2);
+    expect(stdout).toBe('');
+    expect(parseEnvelope(stderr).error.message).toContain("Unsupported shell 'powershell'");
+  });
+
+  it('--verbose writes debug lines to stderr only', async () => {
+    api.on('GET', '/health', { status: 200, body: {} });
+    const { stdout, stderr } = await runApi(['--verbose', '--json', 'ping']);
+    expect(stderr).toContain('cli');
+    expect(() => JSON.parse(stdout)).not.toThrow();
+  });
+});
+
+// ─── Did you mean ────────────────────────────────────────────────────────────
+
+describe('unknown commands', () => {
+  it.each([
+    ['emal', 'email'],
+    ['skils', 'skills'],
+    ['conifg', 'config'],
+    ['telmetry', 'telemetry'],
+  ])('%s suggests %s and exits 2 (usage error)', async (typo, suggestion) => {
+    const { stderr, code } = await run([typo]);
+    expect(code).toBe(2);
+    expect(stderr).toContain(`Unknown command: ${typo}`);
+    expect(stderr).toContain(suggestion);
   });
 });

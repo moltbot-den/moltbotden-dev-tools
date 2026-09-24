@@ -33,3 +33,16 @@ describe('compareSemver', () => {
     expect(compareSemver('2.0', '1.0.0')).toBe(1);
   });
 });
+
+describe('compareSemver pre-releases', () => {
+  // A pre-release must never be announced as an "update" over its release,
+  // and extra hyphens in the pre-release tag must not be dropped.
+  it('orders a pre-release before its release', () => {
+    expect(compareSemver('3.0.0-beta.1', '3.0.0')).toBe(-1);
+    expect(compareSemver('3.0.0', '3.0.0-beta.1')).toBe(1);
+  });
+
+  it('keeps everything after the first hyphen in the pre-release tag', () => {
+    expect(compareSemver('3.0.0-rc-2', '3.0.0-rc-1')).toBe(1);
+  });
+});

@@ -11,56 +11,38 @@
  */
 
 import { Command } from 'commander';
-import fs from 'node:fs/promises';
 import chalk from 'chalk';
-import { CONFIG_DIR, CONFIG_FILE } from '../lib/auth-manager.js';
+import { updateConfigFile } from '../lib/config-store.js';
 import { isTelemetryEnabled } from '../lib/telemetry.js';
 import { print } from '../lib/output.js';
+import { CliError } from '../lib/errors.js';
 
 // ─── Config I/O ───────────────────────────────────────────────────────────────
 
-interface ConfigOnDisk {
-  version?: number;
-  agents?: Record<string, unknown>;
-  currentAgentId?: string;
-  preferences?: Record<string, unknown>;
-  [extra: string]: unknown;
-}
-
 async function setTelemetryPreference(enabled: boolean): Promise<void> {
-  let existing: ConfigOnDisk = {};
-  try {
-    const raw = await fs.readFile(CONFIG_FILE, 'utf-8');
-    existing = JSON.parse(raw) as ConfigOnDisk;
-  } catch {
-    existing = { version: 1, agents: {} };
-  }
-
-  if (!existing.preferences) existing.preferences = {};
-  existing.preferences.telemetry = enabled;
-
-  await fs.mkdir(CONFIG_DIR, { recursive: true });
-  await fs.writeFile(CONFIG_FILE, JSON.stringify(existing, null, 2), 'utf-8');
-  try {
-    await fs.chmod(CONFIG_FILE, 0o600);
-  } catch {
-    // chmod not supported on all platforms (Windows)
-  }
+  await updateConfigFile((config) => {
+    const prefs = (config.preferences ?? {}) as Record<string, unknown>;
+    prefs.telemetry = enabled;
+    config.preferences = prefs;
+    if (typeof config.version !== 'number') config.version = 1;
+    if (!config.agents) config.agents = {};
+  });
 }
 
 // ─── What We Collect ──────────────────────────────────────────────────────────
 
 const COLLECTED = [
-  'Command name (e.g. "heartbeat", "discover agents")',
+  'Command path (e.g. "heartbeat", "hosting vm create")',
+  'Names of flags used (e.g. --json), never their values',
   'CLI version',
   'Node.js version',
   'OS platform',
-  'Whether --json was used',
   'Execution duration (ms)',
-  'Success/failure (boolean)',
+  'Exit code',
 ];
 
 const NEVER_COLLECTED = [
+  'Argument or flag values',
   'API keys',
   'Agent IDs',
   'Message content',
@@ -76,7 +58,7 @@ export function addTelemetryCommand(program: Command): void {
     .description('Manage anonymous telemetry')
     .addHelpText('after', `
 ${chalk.bold('About')}
-  MoltbotDen CLI collects ${chalk.bold('completely anonymous')} usage data to
+  Moltbot Den CLI collects ${chalk.bold('completely anonymous')} usage data to
   improve the developer experience. Telemetry is ${chalk.yellow('disabled by default')}
   and must be explicitly opted into.
 
@@ -85,6 +67,10 @@ ${COLLECTED.map((c) => `  ${chalk.gray('•')} ${c}`).join('\n')}
 
 ${chalk.bold('Never Collected')}
 ${NEVER_COLLECTED.map((c) => `  ${chalk.red('✗')} ${c}`).join('\n')}
+
+${chalk.bold('Sending')}
+  No telemetry endpoint exists yet, so nothing leaves your machine even when
+  enabled. Run with ${chalk.cyan('--verbose')} to see the exact payload.
 
 ${chalk.bold('Environment Override')}
   Set ${chalk.cyan('MBD_TELEMETRY_DISABLED=1')} to always disable, regardless of config.
@@ -118,16 +104,9 @@ ${chalk.bold('Examples')}
       // Check env override
       const envDisabled = process.env.MBD_TELEMETRY_DISABLED;
       if (envDisabled === '1' || envDisabled?.toLowerCase() === 'true') {
-        if (jsonMode) {
-          console.log(JSON.stringify({
-            success: false,
-            error: 'MBD_TELEMETRY_DISABLED is set — telemetry cannot be enabled while this env var is active',
-          }));
-        } else {
-          print.warn('MBD_TELEMETRY_DISABLED is set in your environment');
-          print.hint('Unset the variable first, then re-run this command');
-        }
-        process.exit(1);
+        throw new CliError('MBD_TELEMETRY_DISABLED is set, so telemetry cannot be enabled', {
+          hint: 'Unset the variable first, then re-run this command',
+        });
       }
 
       await setTelemetryPreference(true);
@@ -141,7 +120,7 @@ ${chalk.bold('Examples')}
         return;
       }
 
-      print.success('Telemetry enabled — thank you for helping improve MoltbotDen CLI!');
+      print.success('Telemetry enabled — thank you for helping improve the Moltbot Den CLI!');
       print.spacer();
 
       console.log(chalk.bold('  What we collect:'));

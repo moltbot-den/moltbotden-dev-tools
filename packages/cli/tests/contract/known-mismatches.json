@@ -1,0 +1,60 @@
+{
+  "$comment": "Endpoints the CLI calls that do not exist (path+method) in openapi.snapshot.json. Owned by the hosting/core fix PRs: delete an entry in the same PR that fixes it. check-endpoints fails on new mismatches AND on entries that start passing.",
+  "mismatches": [
+    {
+      "endpoint": "DELETE /v1/hosting/openclaw/instances/{param}",
+      "reason": "path not in spec",
+      "source": "src/lib/api-client.ts:484"
+    },
+    {
+      "endpoint": "GET /v1/hosting/billing/balance",
+      "reason": "path not in spec",
+      "source": "src/lib/api-client.ts:520"
+    },
+    {
+      "endpoint": "GET /v1/hosting/billing/usage",
+      "reason": "path not in spec",
+      "source": "src/lib/api-client.ts:524"
+    },
+    {
+      "endpoint": "GET /v1/hosting/databases/{param}/connection-string",
+      "reason": "path not in spec",
+      "source": "src/lib/api-client.ts:413"
+    },
+    {
+      "endpoint": "GET /v1/hosting/openclaw/instances",
+      "reason": "path not in spec",
+      "source": "src/lib/api-client.ts:456"
+    },
+    {
+      "endpoint": "GET /v1/hosting/openclaw/instances/{param}",
+      "reason": "path not in spec",
+      "source": "src/lib/api-client.ts:460"
+    },
+    {
+      "endpoint": "GET /v1/hosting/openclaw/instances/{param}/logs",
+      "reason": "path not in spec",
+      "source": "src/lib/api-client.ts:480"
+    },
+    {
+      "endpoint": "POST /v1/hosting/billing/checkout",
+      "reason": "path not in spec",
+      "source": "src/lib/api-client.ts:532"
+    },
+    {
+      "endpoint": "POST /v1/hosting/domains/{param}/dns",
+      "reason": "path not in spec",
+      "source": "src/lib/api-client.ts:507"
+    },
+    {
+      "endpoint": "POST /v1/hosting/openclaw/instances",
+      "reason": "path not in spec",
+      "source": "src/lib/api-client.ts:469"
+    },
+    {
+      "endpoint": "POST /v1/hosting/openclaw/instances/{param}/restart",
+      "reason": "path not in spec",
+      "source": "src/lib/api-client.ts:476"
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 /**
  * Configuration management command.
  *
- * Manages CLI preferences stored at ~/.moltbotden/config.json under a
+ * Manages CLI preferences stored in config.json (see lib/config-store.ts) under a
  * `preferences` key. Supports get/set/list/reset/path subcommands with
  * type validation and environment variable override detection.
  *
@@ -15,11 +15,11 @@
  */
 
 import { Command } from 'commander';
-import fs from 'node:fs/promises';
 import chalk from 'chalk';
 import * as clack from '@clack/prompts';
-import { CONFIG_DIR, CONFIG_FILE } from '../lib/auth-manager.js';
+import { getConfigDir, getConfigFile, readConfigFile, updateConfigFile } from '../lib/config-store.js';
 import { print } from '../lib/output.js';
+import { UsageError } from '../lib/errors.js';
 
 // ─── Config Key Definitions ───────────────────────────────────────────────────
 
@@ -83,43 +83,17 @@ const CONFIG_KEY_MAP = new Map(CONFIG_KEYS.map((k) => [k.key, k]));
 
 type Preferences = Record<string, string | boolean | number>;
 
-interface ConfigOnDisk {
-  version?: number;
-  agents?: Record<string, unknown>;
-  currentAgentId?: string;
-  preferences?: Preferences;
-  [extra: string]: unknown;
-}
-
 async function readPreferences(): Promise<Preferences> {
-  try {
-    const raw = await fs.readFile(CONFIG_FILE, 'utf-8');
-    const parsed = JSON.parse(raw) as ConfigOnDisk;
-    return parsed.preferences ?? {};
-  } catch {
-    return {};
-  }
+  const config = await readConfigFile();
+  return (config.preferences as Preferences | undefined) ?? {};
 }
 
 async function writePreferences(prefs: Preferences): Promise<void> {
-  let existing: ConfigOnDisk = {};
-  try {
-    const raw = await fs.readFile(CONFIG_FILE, 'utf-8');
-    existing = JSON.parse(raw) as ConfigOnDisk;
-  } catch {
-    // File doesn't exist yet — start fresh
-    existing = { version: 1, agents: {} };
-  }
-
-  existing.preferences = prefs;
-
-  await fs.mkdir(CONFIG_DIR, { recursive: true });
-  await fs.writeFile(CONFIG_FILE, JSON.stringify(existing, null, 2), 'utf-8');
-  try {
-    await fs.chmod(CONFIG_FILE, 0o600);
-  } catch {
-    // chmod not supported on all platforms (Windows)
-  }
+  await updateConfigFile((config) => {
+    config.preferences = prefs;
+    if (typeof config.version !== 'number') config.version = 1;
+    if (!config.agents) config.agents = {};
+  });
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -261,13 +235,10 @@ ${CONFIG_KEYS.map((k) => `  ${chalk.cyan(k.key.padEnd(16))} ${chalk.gray(k.descr
 
       const def = CONFIG_KEY_MAP.get(key);
       if (!def) {
-        if (jsonMode) {
-          console.log(JSON.stringify({ error: `Unknown config key: ${key}`, known_keys: CONFIG_KEYS.map((k) => k.key) }));
-        } else {
-          print.error(`Unknown config key: ${chalk.cyan(key)}`);
-          print.hint(`Valid keys: ${CONFIG_KEYS.map((k) => chalk.cyan(k.key)).join(', ')}`);
-        }
-        process.exit(1);
+        throw new UsageError(`Unknown config key: ${key}`, {
+          details: { known_keys: CONFIG_KEYS.map((k) => k.key) },
+          hint: `Valid keys: ${CONFIG_KEYS.map((k) => k.key).join(', ')}`,
+        });
       }
 
       const prefs = await readPreferences();
@@ -304,26 +275,18 @@ ${CONFIG_KEYS.map((k) => `  ${chalk.cyan(k.key.padEnd(16))} ${chalk.gray(k.descr
 
       const def = CONFIG_KEY_MAP.get(key);
       if (!def) {
-        if (jsonMode) {
-          console.log(JSON.stringify({ success: false, error: `Unknown config key: ${key}`, known_keys: CONFIG_KEYS.map((k) => k.key) }));
-        } else {
-          print.error(`Unknown config key: ${chalk.cyan(key)}`);
-          print.hint(`Valid keys: ${CONFIG_KEYS.map((k) => chalk.cyan(k.key)).join(', ')}`);
-        }
-        process.exit(1);
+        throw new UsageError(`Unknown config key: ${key}`, {
+          details: { known_keys: CONFIG_KEYS.map((k) => k.key) },
+          hint: `Valid keys: ${CONFIG_KEYS.map((k) => k.key).join(', ')}`,
+        });
       }
 
       const result = validateValue(def, rawValue);
       if (!result.ok) {
-        if (jsonMode) {
-          console.log(JSON.stringify({ success: false, error: result.error, key }));
-        } else {
-          print.error(`Invalid value for ${chalk.cyan(key)}: ${result.error}`);
-          if (def.allowed) {
-            print.hint(`Allowed values: ${def.allowed.join(', ')}`);
-          }
-        }
-        process.exit(1);
+        throw new UsageError(`Invalid value for ${key}: ${result.error}`, {
+          details: { key },
+          hint: def.allowed ? `Allowed values: ${def.allowed.join(', ')}` : undefined,
+        });
       }
 
       const prefs = await readPreferences();
@@ -383,11 +346,11 @@ ${CONFIG_KEYS.map((k) => `  ${chalk.cyan(k.key.padEnd(16))} ${chalk.gray(k.descr
       const jsonMode: boolean = globalOpts.json || false;
 
       if (jsonMode) {
-        console.log(JSON.stringify({ config_file: CONFIG_FILE, config_dir: CONFIG_DIR }));
+        console.log(JSON.stringify({ config_file: getConfigFile(), config_dir: getConfigDir() }));
       } else {
         print.keyValue([
-          { label: 'Config file', value: chalk.cyan(CONFIG_FILE) },
-          { label: 'Config dir',  value: chalk.gray(CONFIG_DIR) },
+          { label: 'Config file', value: chalk.cyan(getConfigFile()) },
+          { label: 'Config dir',  value: chalk.gray(getConfigDir()) },
         ]);
       }
     });
@@ -413,7 +376,7 @@ async function listConfig(program: Command): Promise<void> {
     return;
   }
 
-  print.header('Configuration', `${CONFIG_FILE}`);
+  print.header('Configuration', getConfigFile());
   print.spacer();
 
   print.table(

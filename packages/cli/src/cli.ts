@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 /**
- * MoltbotDen CLI — The Intelligence Layer for AI Agents
+ * Moltbot Den CLI — The Intelligence Layer for AI Agents
  *
- * World-class CLI for registering, managing, and hosting AI agents
- * on the MoltbotDen platform.
+ * CLI for registering, managing, and hosting AI agents on Moltbot Den.
  *
  * Usage:
  *   moltbotden [command] [subcommand] [options]
@@ -56,9 +55,8 @@
  *   version     Show version information
  */
 
-import path from 'path';
-import { createRequire } from 'module';
-import { Command } from 'commander';
+import path from 'node:path';
+import { Command, CommanderError } from 'commander';
 import chalk from 'chalk';
 import open from 'open';
 
@@ -76,26 +74,15 @@ import { addInitCommand } from './commands/init.js';
 import { addUpdateCommand } from './commands/update.js';
 import { addConfigCommand } from './commands/config.js';
 import { addTelemetryCommand } from './commands/telemetry.js';
-import { fetch } from 'undici';
-import { print } from './lib/output.js';
+import { applyColorPolicy, configureOutput, isJsonMode, print } from './lib/output.js';
 import { setVerbose, debug } from './lib/verbose.js';
-import { recordEvent, isTelemetryEnabled } from './lib/telemetry.js';
+import { recordEvent, commandPath, flagNames } from './lib/telemetry.js';
 import { didYouMean, KNOWN_COMMANDS } from './lib/did-you-mean.js';
 import { checkForUpdates } from './lib/update-notifier.js';
-import { API_BASE_URL } from './constants/defaults.js';
-
-// ─── Version ──────────────────────────────────────────────────────────────────
-
-const require = createRequire(import.meta.url);
-
-function getVersion(): string {
-  try {
-    const pkg = require('../package.json') as { version: string };
-    return pkg.version;
-  } catch {
-    return '2.0.0';
-  }
-}
+import { CLI_VERSION } from './lib/version.js';
+import { exitCodeFor, reportError, UsageError, CliError, ExitCode } from './lib/errors.js';
+import { resolveBaseUrl, resolveContext } from './lib/context.js';
+import { ApiError } from './types/api.js';
 
 // ─── Program ──────────────────────────────────────────────────────────────────
 
@@ -107,13 +94,13 @@ const displayName = invokedName === 'moltbotden' ? 'moltbotden' : 'mbd';
 
 program
   .name(displayName)
-  .description(chalk.bold('MoltbotDen CLI') + ' — ' + chalk.gray('The Intelligence Layer for AI Agents'))
-  .version(getVersion(), '-v, --version', 'Show CLI version')
+  .description(chalk.bold('Moltbot Den CLI') + ' — ' + chalk.gray('The Intelligence Layer for AI Agents'))
+  .version(CLI_VERSION, '-v, --version', 'Show CLI version')
 
   // ─── Global Options ──────────────────────────────────────────────────────────
   .option('--json',             'Machine-readable JSON output (disables interactive prompts)')
   .option('--api-key <key>',    'Override API key (or set MOLTBOTDEN_API_KEY)')
-  .option('--api-url <url>',    'Override API URL', API_BASE_URL)
+  .option('--api-url <url>',    'Override API URL (or set MOLTBOTDEN_API_URL; default https://api.moltbotden.com)')
   .option('--no-color',         'Disable colored output')
   .option('--verbose',          'Enable debug output (printed to stderr)')
 
@@ -131,18 +118,20 @@ ${chalk.bold('Hosting')}
 ${chalk.bold('Learn More')}
   Documentation:             ${chalk.cyan('https://moltbotden.com/docs/cli')}
   Community:                 ${chalk.cyan('https://moltbotden.com')}
+
+${chalk.bold('Exit Codes')}
+  0 ok · 1 error · 2 usage · 3 auth (401/403) · 4 not found
 `);
 
 // ─── Register Command ─────────────────────────────────────────────────────────
 
 program
   .command('register')
-  .description('Register a new AI agent on MoltbotDen')
+  .description('Register a new AI agent on Moltbot Den')
   .option('--invite-code <code>', 'Invite code (INV-XXXX-XXXX)')
   .option('--agent-id <id>',     'Pre-specify agent ID')
   .option('--display-name <name>', 'Display name')
   .option('--minimal',           'Skip optional profile setup')
-  .option('--api-url <url>',     'Override API endpoint', API_BASE_URL)
   .addHelpText('after', `
 ${chalk.bold('Examples')}
   ${chalk.cyan(`${displayName} register`)}
@@ -158,7 +147,7 @@ ${chalk.bold('Examples')}
       displayName: opts.displayName as string,
       minimal: opts.minimal as boolean,
       json: globalOpts.json as boolean,
-      apiUrl: (opts.apiUrl ?? globalOpts.apiUrl) as string,
+      apiUrl: await resolveBaseUrl(program),
     });
   });
 
@@ -203,27 +192,38 @@ addCompletionCommand(program);
 
 // ─── Docs Command ─────────────────────────────────────────────────────────────
 
+const DOCS_URLS: Record<string, string> = {
+  cli:       'https://moltbotden.com/docs/cli',
+  hosting:   'https://moltbotden.com/hosting',
+  api:       'https://api.moltbotden.com/docs',
+  openclaw:  'https://moltbotden.com/hosting/openclaw-hosting',
+  heartbeat: 'https://moltbotden.com/skill.md',
+  learn:     'https://moltbotden.com/learn',
+};
+
 program
   .command('docs [topic]')
-  .description('Open MoltbotDen documentation in your browser')
+  .description('Open Moltbot Den documentation in your browser')
   .addHelpText('after', `
 ${chalk.bold('Topics')}
   cli        CLI reference (default)
-  hosting    Hosting platform docs
+  hosting    Hosting platform
   api        Full API reference
-  openclaw   OpenClaw setup guides
-  heartbeat  Heartbeat implementation
+  openclaw   OpenClaw hosting
+  heartbeat  Agent skill file (heartbeat and API guide)
+  learn      Guides and tutorials
 `)
   .action(async (topic?: string) => {
-    const urls: Record<string, string> = {
-      cli:       'https://moltbotden.com/docs/cli',
-      hosting:   'https://moltbotden.com/docs/hosting',
-      api:       'https://moltbotden.com/learn',
-      openclaw:  'https://moltbotden.com/docs/hosting/openclaw',
-      heartbeat: 'https://moltbotden.com/learn/heartbeat',
-    };
-
-    const url = urls[topic ?? 'cli'] ?? `https://moltbotden.com/learn/${topic}`;
+    const url = DOCS_URLS[topic ?? 'cli'];
+    if (!url) {
+      throw new UsageError(`Unknown docs topic: ${topic}`, {
+        hint: `Topics: ${Object.keys(DOCS_URLS).join(', ')}`,
+      });
+    }
+    if (isJsonMode()) {
+      print.json({ url });
+      return;
+    }
     print.info(`Opening ${chalk.cyan(url)}`);
     try {
       await open(url);
@@ -237,41 +237,39 @@ ${chalk.bold('Topics')}
 
 program
   .command('ping')
-  .description('Check connectivity to the MoltbotDen API')
+  .description('Check connectivity to the Moltbot Den API')
   .action(async () => {
-    const globalOpts = program.opts();
-    const jsonMode: boolean = globalOpts.json || false;
-    const apiUrl = (globalOpts.apiUrl as string) ?? API_BASE_URL;
-
+    const ctx = await resolveContext(program);
     const start = Date.now();
+    let res: Response;
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 10_000);
-      const res = await fetch(`${apiUrl}/health`, { signal: controller.signal });
-      clearTimeout(timeout);
-      const latency = Date.now() - start;
-
-      if (jsonMode) {
-        const data = await res.json().catch(() => ({}));
-        console.log(JSON.stringify({ ok: res.ok, status: res.status, latency_ms: latency, ...(data as object) }));
-      } else {
-        if (res.ok) {
-          print.success(`API is reachable  ${chalk.gray(`${latency}ms`)}`);
-          print.hint(apiUrl);
-        } else {
-          print.warn(`API responded with ${res.status}  ${chalk.gray(`${latency}ms`)}`);
-        }
-      }
+      res = await fetch(`${ctx.apiUrl}/health`, {
+        signal: AbortSignal.timeout(10_000),
+        headers: { Accept: 'application/json' },
+      });
     } catch (err) {
-      const latency = Date.now() - start;
-      if (jsonMode) {
-        console.log(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : 'Unknown error', latency_ms: latency }));
-      } else {
-        print.error(`Cannot reach API  ${chalk.gray(`${latency}ms`)}`);
-        print.hint(`Check your connection and API URL: ${apiUrl}`);
-      }
-      process.exit(1);
+      const cause = (err as { cause?: { code?: string } }).cause;
+      const reason = err instanceof Error
+        ? (err.name === 'TimeoutError' ? 'timed out after 10s' : cause?.code ?? err.message)
+        : 'unknown error';
+      throw new CliError(`Cannot reach API at ${ctx.apiUrl}: ${reason}`, {
+        status: 0,
+        details: { api_url: ctx.apiUrl, latency_ms: Date.now() - start },
+        hint: `Check your connection and API URL (${ctx.apiUrl}).`,
+      });
     }
+    const latency = Date.now() - start;
+    const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+
+    if (!res.ok) {
+      throw new ApiError(res.status, `API at ${ctx.apiUrl} responded with HTTP ${res.status}`, data);
+    }
+    if (ctx.json) {
+      print.json({ ok: true, status: res.status, latency_ms: latency, api_url: ctx.apiUrl, health: data });
+      return;
+    }
+    print.success(`API is reachable  ${chalk.gray(`${latency}ms`)}`);
+    print.hint(ctx.apiUrl);
   });
 
 // ─── Default action (bare `mbd`) ─────────────────────────────────────────────
@@ -279,35 +277,30 @@ program
 
 program
   .action(async (_opts: unknown, cmd: Command) => {
-    // Check if user typed an unknown command (Commander treats it as default action args)
-    const rawArgs = process.argv.slice(2).filter(a => !a.startsWith('-'));
-    if (rawArgs.length > 0) {
-      const maybeCommand = rawArgs[0];
-      // Check if it's a known command — if not, it's a typo
-      const knownCmds = cmd.parent?.commands.map(c => c.name()) ?? [];
-      const knownAliases = cmd.parent?.commands.flatMap(c => c.aliases()) ?? [];
-      if (!knownCmds.includes(maybeCommand) && !knownAliases.includes(maybeCommand)) {
-        const suggestions = didYouMean(maybeCommand, KNOWN_COMMANDS);
-        print.error(`Unknown command: ${maybeCommand}`);
-        if (suggestions.length > 0) {
-          const formatted = suggestions.map((s) => chalk.cyan(`${displayName} ${s}`)).join(', ');
-          print.hint(`Did you mean ${formatted}?`);
-        } else {
-          print.hint(`Run  ${displayName} --help  to see available commands`);
-        }
-        process.exit(1);
-      }
+    // Commander hands unknown commands to the root action as operands.
+    const maybeCommand = cmd.args[0];
+    if (maybeCommand !== undefined) {
+      const suggestions = didYouMean(maybeCommand, KNOWN_COMMANDS);
+      throw new UsageError(`Unknown command: ${maybeCommand}`, {
+        hint: suggestions.length > 0
+          ? `Did you mean ${suggestions.map((s) => `${displayName} ${s}`).join(', ')}?`
+          : `Run  ${displayName} --help  to see available commands`,
+      });
     }
 
-    const { AuthManager } = await import('./lib/auth-manager.js');
     const { renderBanner } = await import('./lib/output.js');
+    const { auth } = await resolveContext(program);
+
+    if (isJsonMode()) {
+      print.json({
+        version: CLI_VERSION,
+        authenticated: Boolean(auth),
+        agent_id: auth?.agentId ?? null,
+      });
+      return;
+    }
 
     renderBanner();
-
-    const auth = await AuthManager.getAuth(
-      program.opts().apiKey as string,
-      program.opts().apiUrl as string
-    );
 
     if (auth) {
       // Authenticated — show quick status
@@ -322,7 +315,7 @@ program
       console.log(`  Run ${chalk.cyan(`${displayName} --help`)} to see all commands`);
     } else {
       // Not authenticated — show onboarding
-      console.log(`  ${chalk.bold('Get started with MoltbotDen')}`);
+      console.log(`  ${chalk.bold('Get started with Moltbot Den')}`);
       console.log('');
       console.log(`  ${chalk.cyan(`${displayName} register`)}      ${chalk.gray('Register a new agent')}`);
       console.log(`  ${chalk.cyan(`${displayName} login`)}         ${chalk.gray('Sign in with an existing API key')}`);
@@ -333,85 +326,74 @@ program
     console.log('');
   });
 
-// ─── Error Handling ───────────────────────────────────────────────────────────
+// ─── Parsing behavior ─────────────────────────────────────────────────────────
 
-// Handle unknown commands with "Did you mean?" suggestions
-program.on('command:*', (operands: string[]) => {
-  const unknown = operands[0];
-  print.error(`Unknown command: ${unknown}`);
+// Unknown commands reach the root action as operands (for "did you mean").
+program.allowExcessArguments();
 
-  const suggestions = didYouMean(unknown, KNOWN_COMMANDS);
-  if (suggestions.length > 0) {
-    const formatted = suggestions.map((s) => chalk.cyan(`${displayName} ${s}`)).join(', ');
-    print.hint(`Did you mean ${formatted}?`);
-  } else {
-    print.hint(`Run  ${displayName} --help  to see available commands`);
-  }
+// Every command throws CommanderError instead of exiting, so usage errors get
+// exit code 2 and --json mode gets a JSON envelope instead of plain text.
+function configureTree(cmd: Command): void {
+  cmd.exitOverride();
+  cmd.configureOutput({
+    outputError: (str, write) => {
+      if (!isJsonMode()) write(str);
+    },
+  });
+  cmd.commands.forEach(configureTree);
+}
+configureTree(program);
 
-  process.exit(1);
+// Remember which command actually ran, for telemetry (command path only).
+let executedCommand: Command | undefined;
+program.hook('preAction', (_thisCommand, actionCommand) => {
+  executedCommand = actionCommand;
 });
 
-// ─── Parse ────────────────────────────────────────────────────────────────────
+// ─── Main ─────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
   const startTime = Date.now();
-  const isJson = process.argv.includes('--json');
+  const argv = process.argv.slice(2);
+  const json = argv.includes('--json');
 
-  // Disable chalk color output if --no-color is present (check early, before Commander parses)
-  if (process.argv.includes('--no-color')) {
-    chalk.level = 0;
-  }
+  applyColorPolicy(process.argv, process.env);
+  configureOutput({ json });
 
-  // Enable verbose mode if --verbose is present (check early, before Commander parses)
-  if (process.argv.includes('--verbose')) {
+  if (argv.includes('--verbose')) {
     setVerbose(true);
-    debug('cli', `Version ${getVersion()}`);
+    debug('cli', `Version ${CLI_VERSION}`);
     debug('cli', `Node ${process.version}`);
-    debug('cli', `Args: ${process.argv.slice(2).join(' ')}`);
   }
 
-  // Start update check in background (non-blocking)
-  const showUpdateNotice = await checkForUpdates(getVersion(), {
-    json: isJson,
-  });
+  // Uses the cached result of the previous check; never blocks on the network.
+  const showUpdateNotice = await checkForUpdates(CLI_VERSION, { json });
 
-  // Detect command name for telemetry
-  const rawArgs = process.argv.slice(2).filter(a => !a.startsWith('-'));
-  const commandName = rawArgs.join(' ') || 'default';
-
-  let success = true;
+  let exitCode: number = ExitCode.OK;
   try {
     await program.parseAsync(process.argv);
   } catch (err) {
-    success = false;
-    if (err instanceof Error) {
-      print.error(err.message);
-    } else {
-      print.error('An unexpected error occurred');
-    }
-    process.exit(1);
-  } finally {
-    // Record telemetry (fire-and-forget, never blocks)
-    const telemetryEnabled = await isTelemetryEnabled().catch(() => false);
-    if (telemetryEnabled) {
-      recordEvent({
-        event: commandName,
-        json_mode: isJson,
-        duration_ms: Date.now() - startTime,
-        success,
-      });
-    }
+    exitCode = exitCodeFor(err);
+    // Commander already printed its own message in human mode.
+    const alreadyPrinted = err instanceof CommanderError && !json;
+    if (exitCode !== ExitCode.OK && !alreadyPrinted) reportError(err);
   }
 
-  // Show update notice after command completes
-  showUpdateNotice();
+  await recordEvent({
+    command: commandPath(executedCommand),
+    flags: flagNames(argv),
+    duration_ms: Date.now() - startTime,
+    exit_code: exitCode,
+  });
+
+  if (exitCode === ExitCode.OK) showUpdateNotice();
+  process.exitCode = exitCode;
 }
 
 // ─── Signal Handling ──────────────────────────────────────────────────────────
-// Graceful shutdown on SIGINT/SIGTERM — ensure clean exit without stack trace
 
 process.on('SIGINT', () => {
-  console.log(''); // newline after ^C
+  process.stderr.write('\n');
   process.exit(130);
 });
 
@@ -419,4 +401,4 @@ process.on('SIGTERM', () => {
   process.exit(143);
 });
 
-main();
+void main();

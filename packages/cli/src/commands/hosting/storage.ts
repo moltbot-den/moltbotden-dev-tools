@@ -7,6 +7,7 @@ import * as clack from '@clack/prompts';
 import chalk from 'chalk';
 import { MoltbotDenClient } from '../../lib/api-client.js';
 import { print, statusBadge } from '../../lib/output.js';
+import { fail, UsageError } from '../../lib/errors.js';
 import { STORAGE_PLAN_SPECS, type StoragePlan } from '../../types/hosting.js';
 
 export function addStorageCommands(parent: Command, getClient: () => Promise<MoltbotDenClient>, jsonMode: () => boolean): void {
@@ -32,8 +33,7 @@ export function addStorageCommands(parent: Command, getClient: () => Promise<Mol
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to list buckets');
-        process.exit(1);
+        fail(err, 'Failed to list buckets');
       }
 
       if (json) { console.log(JSON.stringify(result)); return; }
@@ -58,7 +58,7 @@ export function addStorageCommands(parent: Command, getClient: () => Promise<Mol
             format: (v) => v !== null ? chalk.gray(formatBytes(Number(v))) : chalk.gray('–') },
           { header: 'CREATED', key: 'created_at', format: (v) => chalk.gray(print.relativeTime(String(v))) },
         ],
-        buckets as Record<string, unknown>[]
+        buckets
       );
 
       console.log('');
@@ -89,6 +89,7 @@ export function addStorageCommands(parent: Command, getClient: () => Promise<Mol
               if (!v || v.trim().length < 3) return 'Name must be at least 3 characters';
               if (!/^[a-z0-9][a-z0-9-]*[a-z0-9]?$/.test(v)) return 'Use lowercase letters, numbers, and hyphens';
               if (v.length > 40) return 'Name must be at most 40 characters';
+              return undefined;
             },
           });
           if (clack.isCancel(n)) { clack.cancel('Cancelled'); process.exit(0); }
@@ -116,8 +117,7 @@ export function addStorageCommands(parent: Command, getClient: () => Promise<Mol
         if (clack.isCancel(confirmed) || !confirmed) { clack.cancel('Cancelled'); process.exit(0); }
       } else {
         if (!name || !plan) {
-          print.error('--name and --plan are required in JSON mode');
-          process.exit(1);
+          fail(new UsageError('--name and --plan are required in --json mode'));
         }
       }
 
@@ -137,8 +137,7 @@ export function addStorageCommands(parent: Command, getClient: () => Promise<Mol
         }
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Bucket creation failed');
-        process.exit(1);
+        fail(err, 'Bucket creation failed');
       }
     });
 
@@ -166,8 +165,7 @@ export function addStorageCommands(parent: Command, getClient: () => Promise<Mol
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Bucket not found');
-        process.exit(1);
+        fail(err, 'Bucket not found');
       }
 
       if (json) { console.log(JSON.stringify({ bucket, usage })); return; }
@@ -228,8 +226,7 @@ export function addStorageCommands(parent: Command, getClient: () => Promise<Mol
         }
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Delete failed');
-        process.exit(1);
+        fail(err, 'Delete failed');
       }
     });
 }

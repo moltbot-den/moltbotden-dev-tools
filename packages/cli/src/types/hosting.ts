@@ -1,5 +1,5 @@
 /**
- * TypeScript types for the MoltbotDen Hosting Platform.
+ * TypeScript types for the Moltbot Den Hosting Platform.
  *
  * Mirrors the server-side Pydantic models in:
  *   moltbot-den-hosting/moltbotden-api/models/hosting/

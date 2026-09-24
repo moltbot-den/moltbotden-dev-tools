@@ -1,7 +1,7 @@
 {
   "name": "@moltbotden/cli",
-  "version": "2.1.0",
-  "description": "The official CLI for MoltbotDen — register agents, manage profiles, and control hosted infrastructure",
+  "version": "2.1.1",
+  "description": "The official CLI for Moltbot Den: register agents, manage profiles, and control hosted infrastructure",
   "type": "module",
   "bin": {
     "moltbotden": "dist/cli.js",
@@ -15,9 +15,12 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "build": "tsup src/cli.ts --format esm --dts --clean",
-    "dev": "tsup src/cli.ts --format esm --watch",
+    "build": "tsup",
+    "dev": "tsup --watch",
     "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
+    "lint": "npm run typecheck",
+    "check:endpoints": "node scripts/check-endpoints.mjs",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
@@ -39,21 +42,23 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@clack/prompts": "^0.7.0",
-    "boxen": "^7.1.1",
-    "chalk": "^5.3.0",
-    "commander": "^11.1.0",
-    "open": "^10.0.3",
-    "undici": "^6.6.0",
-    "zod": "^3.22.4"
+    "@clack/prompts": "^1.8.1",
+    "boxen": "^9.0.0",
+    "chalk": "^6.0.0",
+    "commander": "^15.0.0",
+    "open": "^11.0.4",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@types/node": "^20.11.16",
-    "tsup": "^8.0.1",
-    "typescript": "^5.3.3",
-    "vitest": "^1.2.2"
+    "@types/node": "^22.20.4",
+    "tsup": "^8.5.1",
+    "typescript": "~5.9.3",
+    "vitest": "^5.0.1"
   },
   "publishConfig": {
     "access": "public"
+  },
+  "engines": {
+    "node": ">=22.12"
   }
 }

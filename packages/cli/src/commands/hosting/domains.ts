@@ -7,6 +7,7 @@ import * as clack from '@clack/prompts';
 import chalk from 'chalk';
 import { MoltbotDenClient } from '../../lib/api-client.js';
 import { print, statusBadge } from '../../lib/output.js';
+import { fail } from '../../lib/errors.js';
 
 export function addDomainCommands(parent: Command, getClient: () => Promise<MoltbotDenClient>, jsonMode: () => boolean): void {
 
@@ -32,8 +33,7 @@ export function addDomainCommands(parent: Command, getClient: () => Promise<Molt
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to list domains');
-        process.exit(1);
+        fail(err, 'Failed to list domains');
       }
 
       if (json) { console.log(JSON.stringify(result)); return; }
@@ -57,7 +57,7 @@ export function addDomainCommands(parent: Command, getClient: () => Promise<Molt
           { header: 'VERIFIED', key: 'verified',    width: 10, format: (v) => v ? chalk.green('✓ yes') : chalk.yellow('✗ no') },
           { header: 'ADDED',    key: 'created_at',             format: (v) => chalk.gray(print.relativeTime(String(v))) },
         ],
-        domains as Record<string, unknown>[]
+        domains
       );
 
       console.log('');
@@ -85,6 +85,7 @@ export function addDomainCommands(parent: Command, getClient: () => Promise<Molt
             if (!/^[a-zA-Z0-9][a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(v.trim())) {
               return 'Must be a valid domain (e.g. api.myagent.com)';
             }
+            return undefined;
           },
         });
         if (clack.isCancel(d)) { clack.cancel('Cancelled'); process.exit(0); }
@@ -130,8 +131,7 @@ export function addDomainCommands(parent: Command, getClient: () => Promise<Molt
         }
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to add domain');
-        process.exit(1);
+        fail(err, 'Failed to add domain');
       }
     });
 
@@ -151,8 +151,7 @@ export function addDomainCommands(parent: Command, getClient: () => Promise<Molt
         if (spinner) spinner.stop('');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Domain not found');
-        process.exit(1);
+        fail(err, 'Domain not found');
       }
 
       if (json) { console.log(JSON.stringify(domain)); return; }
@@ -227,8 +226,7 @@ export function addDomainCommands(parent: Command, getClient: () => Promise<Molt
         }
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to release domain');
-        process.exit(1);
+        fail(err, 'Failed to release domain');
       }
     });
 
@@ -268,8 +266,7 @@ export function addDomainCommands(parent: Command, getClient: () => Promise<Molt
         }
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        print.error(err instanceof Error ? err.message : 'Failed to add DNS record');
-        process.exit(1);
+        fail(err, 'Failed to add DNS record');
       }
     });
 }

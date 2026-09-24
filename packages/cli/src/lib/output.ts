@@ -1,5 +1,11 @@
 /**
- * Unified output formatting for the MoltbotDen CLI.
+ * Unified output formatting for the Moltbot Den CLI.
+ *
+ * Output contract:
+ *   - In --json mode stdout carries only JSON (print.json / print.output).
+ *     Every human-oriented helper below is a no-op, colors are off and
+ *     errors go to stderr as a JSON envelope (see errors.ts).
+ *   - Colors follow --no-color, then FORCE_COLOR, then NO_COLOR.
  *
  * Brand palette:
  *   Primary (orange): #FF8C00
@@ -18,6 +24,56 @@
  */
 
 import chalk from 'chalk';
+import * as clack from '@clack/prompts';
+
+// ─── Output mode ──────────────────────────────────────────────────────────────
+
+let jsonMode = false;
+
+/** Called once by cli.ts after flags are known. */
+export function configureOutput(opts: { json?: boolean }): void {
+  jsonMode = Boolean(opts.json);
+  if (jsonMode) chalk.level = 0;
+}
+
+export function isJsonMode(): boolean {
+  return jsonMode;
+}
+
+/**
+ * Decide whether colors must be forced off. Returns 0 when color is disabled,
+ * or undefined to leave chalk's own detection (which honors FORCE_COLOR).
+ */
+export function resolveColorLevel(input: {
+  argv: readonly string[];
+  env: NodeJS.ProcessEnv;
+  json: boolean;
+}): 0 | undefined {
+  if (input.json) return 0;
+  if (input.argv.includes('--no-color')) return 0;
+  if ('FORCE_COLOR' in input.env) return undefined;
+  if (input.env.NO_COLOR !== undefined && input.env.NO_COLOR !== '') return 0;
+  return undefined;
+}
+
+export function applyColorPolicy(argv: readonly string[] = process.argv, env: NodeJS.ProcessEnv = process.env): void {
+  const level = resolveColorLevel({ argv, env, json: argv.includes('--json') });
+  if (level === 0) chalk.level = 0;
+}
+
+export interface Spinner {
+  start(msg?: string): void;
+  stop(msg?: string): void;
+  message(msg?: string): void;
+}
+
+const NOOP_SPINNER: Spinner = { start() {}, stop() {}, message() {} };
+
+/** A clack spinner, or a no-op in --json mode / when stdout is not a TTY. */
+export function createSpinner(): Spinner {
+  if (jsonMode || !process.stdout.isTTY) return NOOP_SPINNER;
+  return clack.spinner();
+}
 
 // ─── Brand Colors ─────────────────────────────────────────────────────────────
 
@@ -88,7 +144,7 @@ function pad(str: string, width: number, align: 'left' | 'right' = 'left'): stri
 
 export function renderTable(
   columns: TableColumn[],
-  rows: Record<string, unknown>[],
+  rows: readonly object[],
   options: { indent?: number } = {}
 ): void {
   const indent = ' '.repeat(options.indent ?? 2);
@@ -97,7 +153,8 @@ export function renderTable(
   const widths = columns.map((col) => {
     const headerLen = col.header.length;
     let maxLen = col.width ?? headerLen;
-    for (const row of rows) {
+    for (const obj of rows) {
+      const row = obj as Record<string, unknown>;
       const raw = col.format
         ? col.format(col.key ? row[col.key] : row, row)
         : String(col.key ? (row[col.key] ?? '–') : '');
@@ -109,7 +166,7 @@ export function renderTable(
 
   // Header row
   const headerLine = columns
-    .map((col, i) => pad(BOLD(col.header), widths[i] + BOLD(col.header).length - col.header.length))
+    .map((col, i) => pad(BOLD(col.header), widths[i], col.align))
     .join('  ');
   console.log(indent + MUTED(headerLine));
 
@@ -118,7 +175,8 @@ export function renderTable(
   console.log(indent + MUTED(sep));
 
   // Data rows
-  for (const row of rows) {
+  for (const obj of rows) {
+    const row = obj as Record<string, unknown>;
     const cells = columns.map((col, i) => {
       const raw = col.format
         ? col.format(col.key ? row[col.key] : row, row)
@@ -148,6 +206,7 @@ export function renderKeyValue(
 // ─── Banner ───────────────────────────────────────────────────────────────────
 
 export function renderBanner(): void {
+  if (jsonMode) return;
   console.log('');
   console.log(BRAND('═'.repeat(52)));
   console.log('');
@@ -180,36 +239,51 @@ export function renderHeader(title: string, subtitle?: string): void {
 
 export const print = {
   success(msg: string): void {
+    if (jsonMode) return;
     console.log(SUCCESS(`  ✓ ${msg}`));
   },
 
+  /** In --json mode emits a JSON error envelope on stderr instead. */
   error(msg: string): void {
+    if (jsonMode) {
+      process.stderr.write(
+        JSON.stringify({ error: { status: null, message: msg, details: null, exit_code: 1 } }) + '\n',
+      );
+      return;
+    }
     console.error(ERROR(`  ✗ ${msg}`));
   },
 
   warn(msg: string): void {
-    console.log(WARN(`  ⚠ ${msg}`));
+    if (jsonMode) return;
+    console.error(WARN(`  ⚠ ${msg}`));
   },
 
   info(msg: string): void {
+    if (jsonMode) return;
     console.log(INFO(`  → ${msg}`));
   },
 
-  hint(msg: string): void {
+  hint(msg: string, opts: { stderr?: boolean } = {}): void {
+    if (jsonMode) return;
     // Indent each line of a multi-line hint
     const lines = msg.split('\n').map((l) => `    ${l}`).join('\n');
-    console.log(MUTED(lines));
+    if (opts.stderr) console.error(MUTED(lines));
+    else console.log(MUTED(lines));
   },
 
   divider(width = 52): void {
+    if (jsonMode) return;
     console.log(MUTED('  ' + '─'.repeat(width)));
   },
 
   spacer(): void {
+    if (jsonMode) return;
     console.log('');
   },
 
   header(title: string, subtitle?: string): void {
+    if (jsonMode) return;
     renderHeader(title, subtitle);
   },
 
@@ -218,15 +292,17 @@ export const print = {
     pairs: { label: string; value: string | undefined | null }[],
     opts: { indent?: number; labelWidth?: number } = {}
   ): void {
+    if (jsonMode) return;
     renderKeyValue(pairs, opts);
   },
 
   /** Render a clean table */
   table(
     columns: TableColumn[],
-    rows: Record<string, unknown>[],
+    rows: readonly object[],
     opts: { indent?: number; emptyMsg?: string } = {}
   ): void {
+    if (jsonMode) return;
     if (rows.length === 0) {
       console.log(MUTED(`  ${opts.emptyMsg ?? 'No results found.'}`));
       return;
@@ -241,6 +317,7 @@ export const print = {
 
   /** Empty state with optional action hint */
   empty(msg: string, hint?: string): void {
+    if (jsonMode) return;
     console.log('');
     console.log(MUTED(`  ${msg}`));
     if (hint) console.log(INFO(`  → ${hint}`));
