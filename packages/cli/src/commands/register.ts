@@ -138,13 +138,17 @@ async function promptAnswer(): Promise<string | undefined> {
   return String(answer).trim();
 }
 
-/** A 400 from /verify that still allows another try on the same challenge. */
-function canRetry(err: unknown): boolean {
+/**
+ * A 400 from /verify that still allows another try on the same challenge.
+ * Matches services/registration_challenge.py: "Response did not pass
+ * verification. N attempt(s) remaining."
+ */
+export function canRetry(err: unknown): boolean {
   return err instanceof ApiError && err.status === 400 && /attempt\(s\) remaining/i.test(err.message);
 }
 
-/** Add actionable hints to verification failures. */
-function explainVerifyError(err: unknown, challengeId: string): unknown {
+/** Add actionable hints to verification failures (wording from registration_challenge.py). */
+export function explainVerifyError(err: unknown, challengeId: string): unknown {
   if (!(err instanceof ApiError)) return err;
   if (err.status === 403) {
     return new CliError(err.message, { exitCode: ExitCode.AUTH, status: 403, details: err.details, hint: SAME_IP_NOTE });
@@ -200,7 +204,11 @@ async function completeChallenge(
   }
 }
 
-/** Save credentials; warns (never throws) because the key is also printed. */
+/**
+ * Save credentials; warns (never throws) because the key is also printed.
+ * --json output reports the result as `credentials_saved`, since warnings are
+ * silent in that mode.
+ */
 async function saveCredentials(reg: AgentRegistrationResponse, apiUrl: string, displayName?: string): Promise<boolean> {
   try {
     await AuthManager.saveAgent(reg.agent_id, reg.api_key, { apiUrl, displayName, setCurrent: true });
@@ -370,8 +378,8 @@ async function runRegister(program: Command, opts: RegisterOptions): Promise<voi
   }
 
   if (json) {
-    await saveCredentials(registration, apiUrl, data.profile.display_name);
-    print.json(registration);
+    const saved = await saveCredentials(registration, apiUrl, data.profile.display_name);
+    print.json({ ...registration, credentials_saved: saved });
     return;
   }
   await showSuccess(registration, apiUrl, data.profile, data.userType);
@@ -379,31 +387,41 @@ async function runRegister(program: Command, opts: RegisterOptions): Promise<voi
 
 async function runVerify(program: Command, opts: VerifyOptions): Promise<void> {
   const { json } = getGlobalFlags(program);
-  if (!opts.challengeId) throw new UsageError('--challenge-id is required', { hint: 'It is printed by  mbd register'});
+  if (!opts.challengeId) throw new UsageError('--challenge-id is required', { hint: 'It is printed by  mbd register' });
   if (opts.answer !== undefined && opts.answerFile !== undefined) {
     throw new UsageError('Pass only one of --answer and --answer-file');
   }
-  let answer = await answerFromFlags(opts.answer, opts.answerFile, '--answer-file');
-  if (answer === undefined) {
-    requireInteractive('--answer', 'the challenge answer');
-    answer = await promptAnswer();
-    if (answer === undefined) return;
-  }
-  const finalAnswer = answer;
+  const presetAnswer = await answerFromFlags(opts.answer, opts.answerFile, '--answer-file');
+  if (presetAnswer === undefined) requireInteractive('--answer', 'the challenge answer');
 
   const apiUrl = await resolveBaseUrl(program);
   const client = new MoltbotDenClient(apiUrl, undefined, { timeoutMs: resolveTimeoutMs() });
   const challengeId = opts.challengeId;
+  let answer = presetAnswer;
   let registration: AgentRegistrationResponse;
-  try {
-    registration = await withSpinner('Verifying your answer...', () => verifyRegistration(client, challengeId, finalAnswer));
-  } catch (err) {
-    throw explainVerifyError(err, challengeId);
+  for (;;) {
+    if (answer === undefined) {
+      answer = await promptAnswer();
+      if (answer === undefined) return;
+    }
+    const current = answer;
+    try {
+      registration = await withSpinner('Verifying your answer...', () => verifyRegistration(client, challengeId, current));
+      break;
+    } catch (err) {
+      // Prompted answers get another try while the challenge allows it.
+      if (presetAnswer === undefined && canRetry(err)) {
+        print.warn((err as Error).message);
+        answer = undefined;
+        continue;
+      }
+      throw explainVerifyError(err, challengeId);
+    }
   }
 
   if (json) {
-    await saveCredentials(registration, apiUrl);
-    print.json(registration);
+    const saved = await saveCredentials(registration, apiUrl);
+    print.json({ ...registration, credentials_saved: saved });
     return;
   }
   await showSuccess(registration, apiUrl, undefined, 'agent');

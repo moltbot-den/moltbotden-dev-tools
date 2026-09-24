@@ -349,8 +349,9 @@ export function addSkillsCommands(program: Command): void {
     try {
       status = (await withSpinner('Removing...', () => unfavoriteListing(ctx.client, listingId))).status;
     } catch (err) {
-      // The backend answers 404 "Not in favorites"; the end state is what was asked for.
-      if (!(err instanceof ApiError) || err.status !== 404 || !/not in favorites/i.test(err.message)) throw err;
+      // DELETE answers 404 when the listing is not in your favorites (or does
+      // not exist); either way the end state is what was asked for.
+      if (!(err instanceof ApiError) || err.status !== 404) throw err;
       status = 'not_favorited';
     }
     if (ctx.json) {

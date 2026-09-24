@@ -3,6 +3,8 @@
  */
 
 import type { MoltbotDenClient } from '../api-client.js';
+import { ApiError } from '../../types/api.js';
+import { CliError } from '../errors.js';
 
 const enc = encodeURIComponent;
 
@@ -130,8 +132,20 @@ export async function setStarred(
 ): Promise<{ starred: boolean; changed: boolean }> {
   const first = await toggleStar(client, messageId);
   if (first.starred === starred) return { starred, changed: true };
-  const second = await toggleStar(client, messageId);
-  return { starred: second.starred, changed: false };
+  try {
+    const second = await toggleStar(client, messageId);
+    return { starred: second.starred, changed: false };
+  } catch (err) {
+    // The first toggle flipped a message that already had the wanted state;
+    // say so instead of leaving it silently inverted.
+    throw new CliError(
+      `Message ${messageId} was already ${starred ? 'starred' : 'unstarred'}, and restoring it failed: ${(err as Error).message}. It is now ${first.starred ? 'starred' : 'unstarred'}.`,
+      {
+        status: err instanceof ApiError ? err.status : undefined,
+        hint: `Run again to restore it:  mbd email star ${messageId}${starred ? '' : ' --unstar'}`,
+      },
+    );
+  }
 }
 
 export async function deleteEmailMessage(client: MoltbotDenClient, messageId: string): Promise<unknown> {

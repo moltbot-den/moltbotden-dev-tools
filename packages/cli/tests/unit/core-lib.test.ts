@@ -13,7 +13,9 @@ import { checkLength, parseList, resolveText } from '../../src/lib/input.js';
 import { parseOffset, resolveLimit } from '../../src/lib/preferences.js';
 import { loadSkillFile, looksLikeSkillFile, skillVersion } from '../../src/lib/skill-file.js';
 import { MoltbotDenClient } from '../../src/lib/api-client.js';
-import { UsageError } from '../../src/lib/errors.js';
+import { CliError, UsageError } from '../../src/lib/errors.js';
+import { ApiError } from '../../src/types/api.js';
+import { canRetry, explainVerifyError } from '../../src/commands/register.js';
 import { getConfigDir } from '../../src/lib/config-store.js';
 
 function clientReturning(...bodies: unknown[]) {
@@ -71,6 +73,56 @@ describe('setStarred', () => {
     const { client, fetchImpl } = clientReturning({ starred: false }, { starred: true });
     expect(await setStarred(client, 'e1', true)).toEqual({ starred: true, changed: false });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('setStarred failure', () => {
+  it('explains the inverted state when the corrective toggle fails', async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ starred: false }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ detail: 'boom' }), { status: 500 }));
+    const client = new MoltbotDenClient('https://api.example.com', 'k', {
+      fetch: fetchImpl as unknown as typeof fetch,
+      retry: { maxRetries: 0 },
+    });
+    await expect(setStarred(client, 'e1', true)).rejects.toMatchObject({
+      message: expect.stringContaining('It is now unstarred'),
+      hint: 'Run again to restore it:  mbd email star e1',
+    });
+  });
+});
+
+describe('registration challenge errors', () => {
+  // Exact wording from moltbotden-api services/registration_challenge.py and
+  // routers/agents.py; the retry/hint logic depends on it.
+  const apiErr = (status: number, detail: string) => new ApiError(status, `${detail} (HTTP ${status})`, { detail });
+
+  it('retries only while attempts remain', () => {
+    expect(canRetry(apiErr(400, 'Response did not pass verification. 2 attempt(s) remaining.'))).toBe(true);
+    expect(canRetry(apiErr(400, 'Response did not pass verification. Please start registration again.'))).toBe(false);
+    expect(canRetry(apiErr(400, 'Too many attempts. Please start registration again.'))).toBe(false);
+  });
+
+  it('points expired or exhausted challenges at a fresh `mbd register`', () => {
+    for (const detail of [
+      'Challenge expired. Please start registration again.',
+      'Invalid or expired challenge. Please start registration again.',
+      'This challenge has already been used.',
+      'Too many attempts. Please start registration again.',
+    ]) {
+      expect((explainVerifyError(apiErr(400, detail), 'ch_1') as CliError).hint).toContain('mbd register');
+    }
+  });
+
+  it('maps the same-IP 403 to an auth error with the network hint', () => {
+    const err = explainVerifyError(apiErr(403, 'Verification must come from the same IP that created the challenge.'), 'ch_1') as CliError;
+    expect(err.exitCode).toBe(3);
+    expect(err.hint).toContain('same network');
+  });
+
+  it('suggests a better answer while attempts remain', () => {
+    const err = explainVerifyError(apiErr(400, 'Response did not pass verification. 1 attempt(s) remaining.'), 'ch_1') as CliError;
+    expect(err.hint).toContain('mbd register verify --challenge-id ch_1');
   });
 });
 

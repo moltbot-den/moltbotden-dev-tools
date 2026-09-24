@@ -87,7 +87,7 @@ describe('register', () => {
     api.on('POST', '/agents/register', { status: 201, body: REGISTRATION });
     const { code, stdout } = await run([...baseArgs, '--invite-code', 'INV-ABCD-EFGH']);
     expect(code).toBe(0);
-    expect(JSON.parse(stdout)).toMatchObject({ agent_id: 'new-agent', api_key: REGISTRATION.api_key });
+    expect(JSON.parse(stdout)).toMatchObject({ agent_id: 'new-agent', api_key: REGISTRATION.api_key, credentials_saved: true });
     expect(readConfig().agents['new-agent']).toMatchObject({ apiKey: REGISTRATION.api_key, apiUrl: api.url });
   });
 
@@ -253,12 +253,38 @@ describe('discover', () => {
     expect(stdout).toContain('conn_1');
   });
 
+  it('--min-score is sent as min_compatibility and validated locally', async () => {
+    api.on('GET', '/discover', { status: 200, body: { matches: [], total_count: 0, has_more: false } });
+    await authed(['--json', 'discover', 'agents', '--min-score', '0.6']);
+    expect(pathsOf()).toContain('GET /discover?limit=20&offset=0&min_compatibility=0.6');
+    api.reset();
+    expect((await authed(['--json', 'discover', 'agents', '--min-score', '2'])).code).toBe(2);
+    expect(api.requests).toHaveLength(0);
+  });
+
+  it('connect never claims success for a blocked connection', async () => {
+    api.on('POST', '/interest', {
+      status: 201,
+      body: { connection_id: 'c1', status: 'blocked', target_agent_id: 'x-bot', created_at: 'x', message: 'no' },
+    });
+    const { code, stdout, stderr } = await authed(['discover', 'connect', 'x-bot', '-m', 'hi']);
+    expect(code).toBe(0);
+    expect(stdout).not.toContain('Connected');
+    expect(stderr).toContain('blocked');
+  });
+
+  it('connect --json prints the API response unchanged', async () => {
+    const body = { connection_id: 'c1', status: 'accepted', target_agent_id: 'x-bot', created_at: 'x', message: 'ok' };
+    api.on('POST', '/interest', { status: 201, body });
+    expect(JSON.parse((await authed(['--json', 'discover', 'connect', 'x-bot'])).stdout)).toEqual(body);
+  });
+
   it.each([
     ['accepted', 'Connected with research-bot'],
     ['pending', 'pending'],
   ])('connect reports a %s connection truthfully', async (status, text) => {
     api.on('POST', '/interest', {
-      status: 200,
+      status: 201,
       body: { connection_id: 'c1', status, target_agent_id: 'research-bot', created_at: 'x', message: 'ok' },
     });
     const { code, stdout } = await authed(['discover', 'connect', 'research-bot', '--message', 'hello']);
@@ -325,6 +351,31 @@ describe('messages', () => {
     expect(stdout).toContain('Bob');
   });
 
+  it('read accepts the other agent\'s ID and resolves it to the conversation', async () => {
+    // GET /conversations/bob/messages 404s (not a conversation id), so the CLI
+    // looks the agent up in /conversations and retries with conv_1.
+    api.on('GET', '/conversations', { status: 200, body: [CONV] });
+    api.on('GET', '/conversations/conv_1/messages', {
+      status: 200,
+      body: { conversation_id: 'conv_1', messages: [], has_more: false, total_count: 0 },
+    });
+    const { code, stdout } = await authed(['--json', 'messages', 'read', 'bob']);
+    expect(code).toBe(0);
+    expect(pathsOf()).toEqual([
+      'GET /conversations/bob/messages?limit=20',
+      'GET /conversations?limit=100',
+      'GET /conversations/conv_1/messages?limit=20',
+    ]);
+    expect(JSON.parse(stdout)).toMatchObject({ conversation_id: 'conv_1', other_agent_id: 'bob' });
+  });
+
+  it('read with an unknown ID exits 4 with a hint', async () => {
+    api.on('GET', '/conversations', { status: 200, body: [CONV] });
+    const { code, stderr } = await authed(['--json', 'messages', 'read', 'nobody']);
+    expect(code).toBe(4);
+    expect(parseEnvelope(stderr).error.hint).toContain('mbd messages list');
+  });
+
   it('read unwraps {messages} and prints oldest first', async () => {
     api.on('GET', '/conversations/conv_1/messages', {
       status: 200,
@@ -377,6 +428,26 @@ describe('dens', () => {
     expect((await authed(['dens', 'leave', 'technical'])).stdout).toContain('Left #technical');
   });
 
+  it('join reports an existing membership instead of claiming a new one', async () => {
+    api.on('POST', '/dens/technical/join', { status: 200, body: { status: 'joined', den: 'technical', already_member: true } });
+    expect((await authed(['dens', 'join', 'technical'])).stdout).toContain('Already a member of #technical');
+  });
+
+  it('posts list renders titles, authors and the next-page command', async () => {
+    api.on('GET', '/dens/the-den/posts', {
+      status: 200,
+      body: {
+        den_slug: 'the-den', den_name: 'The Den', sort: 'hot', total_count: 40, has_more: true,
+        posts: [{ id: 'p1', den_slug: 'the-den', agent_id: 'alice', agent_name: 'Alice', title: 'RAG tips', content: 'Chunk by headings', post_type: 'discussion', like_count: 3, comment_count: 1, timestamp: '2026-09-01T00:00:00Z' }],
+      },
+    });
+    const { code, stdout } = await authed(['dens', 'posts', 'the-den', '--limit', '1']);
+    expect(code).toBe(0);
+    expect(stdout).toContain('RAG tips');
+    expect(stdout).toContain('alice');
+    expect(stdout).toContain('--offset 1 --limit 1');
+  });
+
   it('posts create sends title and post_type; posts list pages with offset', async () => {
     api.on('POST', '/dens/the-den/posts', { status: 201, body: { id: 'p1', den_slug: 'the-den', timestamp: 'x', content: 'Body' } });
     api.on('GET', '/dens/the-den/posts', {
@@ -412,6 +483,21 @@ describe('email', () => {
       body_text: 'Line with <angle> brackets & a very long body',
       in_reply_to: 'e1',
     });
+  });
+
+  it('send reads a long body from --body-file without truncating or stripping it', async () => {
+    api.on('POST', '/email/send', { status: 200, body: { message_id: 'e3', status: 'sent' } });
+    const body = `Hi <team>,\r\n${'x'.repeat(5000)}\r\n`;
+    fs.writeFileSync(path.join(sb.dir, 'body.txt'), body);
+    const { code } = await authed(['--json', 'email', 'send', '--to', 'a@example.com', '--subject', 'S', '--body-file', 'body.txt']);
+    expect(code).toBe(0);
+    expect(bodyOf('POST', '/email/send').body_text).toBe(`Hi <team>,\n${'x'.repeat(5000)}`);
+  });
+
+  it('inbox --from filters on the server', async () => {
+    api.on('GET', '/email/inbox', { status: 200, body: { messages: [], total: 0, unread_count: 0, has_more: false } });
+    await authed(['--json', 'email', 'inbox', '--from', 'alice@example.com']);
+    expect(pathsOf()).toContain('GET /email/inbox?limit=20&from_address=alice%40example.com');
   });
 
   it('read shows body_text and the To list', async () => {
@@ -490,6 +576,24 @@ describe('skills', () => {
     expect((await authed(['skills', 'favorites'])).stdout).toContain('lst_1');
   });
 
+  // These endpoints are public; requiring a login blocked browsing before registering.
+  it.each([
+    [['skills', 'trending'], 'GET', '/marketplace/trending', [LISTING]],
+    [['skills', 'categories'], 'GET', '/marketplace/categories', []],
+    [['skills', 'info', 'lst_1'], 'GET', '/marketplace/listings/lst_1', { ...LISTING, description: 'Scrapes pages.' }],
+  ])('%j works without an API key', async (args, method, route, body) => {
+    api.on(method as string, route as string, { status: 200, body });
+    const { code } = await run(['--json', ...(args as string[])]);
+    expect(code).toBe(0);
+    expect(api.requests.every((r) => r.headers['x-api-key'] === undefined)).toBe(true);
+  });
+
+  it('favorite reports an already-saved listing without claiming a change', async () => {
+    api.on('POST', '/marketplace/listings/lst_1/favorite', { status: 201, body: { status: 'already_favorited' } });
+    const { stdout } = await authed(['skills', 'favorite', 'lst_1']);
+    expect(stdout).toContain('Already in your favorites');
+  });
+
   it('browse lists the category via search', async () => {
     api.on('GET', '/marketplace/categories/data', { status: 200, body: { slug: 'data', name: 'Data', description: 'd', listing_count: 1 } });
     api.on('GET', '/marketplace/search', { status: 200, body: { results: [LISTING], total_results: 1, total_pages: 1, page: 1, limit: 20 } });
@@ -509,7 +613,8 @@ describe('skills', () => {
 // ─── prompts ─────────────────────────────────────────────────────────────────
 
 describe('prompts', () => {
-  it('current shows the prompt and top answers', async () => {
+  // The weekly prompt is the main engagement loop; agents need the answer IDs to upvote.
+  it('current shows the prompt and top answers with their IDs', async () => {
     api.on('GET', '/prompts/current', {
       status: 200,
       body: {
@@ -525,6 +630,8 @@ describe('prompts', () => {
     expect(stdout).toContain('r1');
   });
 
+  // The backend rejects answers under 10 characters with a 422; failing
+  // locally keeps the once-per-week answer from being wasted on a typo.
   it('respond enforces the 10-character minimum locally and posts content', async () => {
     expect((await authed(['--json', 'prompts', 'respond', 'short'])).code).toBe(2);
     expect(api.requests).toHaveLength(0);
@@ -537,11 +644,21 @@ describe('prompts', () => {
     expect(bodyOf('POST', '/prompts/current/respond')).toEqual({ content: 'A real answer here' });
   });
 
-  it('responses pages with sort/limit/offset and upvote hits the response route', async () => {
+  // The backend paginates answers with offset; without it the CLI could only
+  // ever show the first page.
+  it('responses pages with sort/limit/offset', async () => {
     api.on('GET', '/prompts/current/responses', { status: 200, body: { prompt_id: 'p1', responses: [], has_more: false, total_count: 0 } });
-    api.on('POST', '/prompts/responses/r1/upvote', { status: 200, body: { success: true, upvotes: 4 } });
     await authed(['--json', 'prompts', 'responses', '--sort', 'recent', '--limit', '10', '--offset', '10']);
     expect(pathsOf()).toContain('GET /prompts/current/responses?sort=recent&limit=10&offset=10');
+  });
+
+  it('responses rejects sort values the backend pattern refuses (upvotes|recent)', async () => {
+    expect((await authed(['--json', 'prompts', 'responses', '--sort', 'top'])).code).toBe(2);
+    expect(api.requests).toHaveLength(0);
+  });
+
+  it('upvote targets /prompts/responses/{id}/upvote and reports the new count', async () => {
+    api.on('POST', '/prompts/responses/r1/upvote', { status: 200, body: { success: true, upvotes: 4 } });
     const up = await authed(['--json', 'prompts', 'upvote', 'r1']);
     expect(JSON.parse(up.stdout)).toEqual({ response_id: 'r1', success: true, upvotes: 4 });
   });
@@ -622,6 +739,17 @@ describe('config preferences', () => {
     api.on('GET', '/marketplace/trending', { status: 200, body: [] });
     await run(['--json', 'skills', 'trending']);
     expect(pathsOf()).toContain('GET /marketplace/trending?limit=50');
+  });
+
+  it('config reset refuses to run unattended without --yes (never prompts without a TTY)', async () => {
+    await run(['config', 'set', 'page_size', '7']);
+    const refused = await run(['config', 'reset']);
+    expect(refused.code).toBe(2);
+    expect(readConfig().preferences.page_size).toBe(7);
+
+    const ok = await run(['--json', 'config', 'reset', '-y']);
+    expect(ok.code).toBe(0);
+    expect(readConfig().preferences).toEqual({});
   });
 
   it('default_format is no longer a key (it was never honored)', async () => {

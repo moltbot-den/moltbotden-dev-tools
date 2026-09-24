@@ -16,9 +16,9 @@
 
 import { Command } from 'commander';
 import chalk from 'chalk';
-import * as clack from '@clack/prompts';
 import { getConfigDir, getConfigFile, readConfigFile, updateConfigFile } from '../lib/config-store.js';
-import { print } from '../lib/output.js';
+import { isJsonMode, print } from '../lib/output.js';
+import { confirmDestructive } from '../lib/prompts.js';
 import { UsageError } from '../lib/errors.js';
 
 // ─── Config Key Definitions ───────────────────────────────────────────────────
@@ -213,7 +213,7 @@ ${CONFIG_KEYS.map((k) => `  ${chalk.cyan(k.key.padEnd(16))} ${chalk.gray(k.descr
 `)
     .action(async () => {
       // Default action: list all config values
-      await listConfig(program);
+      await listConfig();
     });
 
   // ─── config list ────────────────────────────────────────────────────────────
@@ -221,7 +221,7 @@ ${CONFIG_KEYS.map((k) => `  ${chalk.cyan(k.key.padEnd(16))} ${chalk.gray(k.descr
     .command('list')
     .description('Show all configuration values with sources')
     .action(async () => {
-      await listConfig(program);
+      await listConfig();
     });
 
   // ─── config get ─────────────────────────────────────────────────────────────
@@ -229,8 +229,7 @@ ${CONFIG_KEYS.map((k) => `  ${chalk.cyan(k.key.padEnd(16))} ${chalk.gray(k.descr
     .command('get <key>')
     .description('Get a specific configuration value')
     .action(async (key: string) => {
-      const globalOpts = program.opts();
-      const jsonMode: boolean = globalOpts.json || false;
+      const jsonMode = isJsonMode();
 
       const def = CONFIG_KEY_MAP.get(key);
       if (!def) {
@@ -269,8 +268,7 @@ ${CONFIG_KEYS.map((k) => `  ${chalk.cyan(k.key.padEnd(16))} ${chalk.gray(k.descr
     .command('set <key> <value>')
     .description('Set a configuration value')
     .action(async (key: string, rawValue: string) => {
-      const globalOpts = program.opts();
-      const jsonMode: boolean = globalOpts.json || false;
+      const jsonMode = isJsonMode();
 
       const def = CONFIG_KEY_MAP.get(key);
       if (!def) {
@@ -303,20 +301,18 @@ ${CONFIG_KEYS.map((k) => `  ${chalk.cyan(k.key.padEnd(16))} ${chalk.gray(k.descr
   configCmd
     .command('reset')
     .description('Reset all configuration to defaults')
-    .option('--yes', 'Skip confirmation prompt')
-    .action(async (opts) => {
-      const globalOpts = program.opts();
-      const jsonMode: boolean = globalOpts.json || false;
+    .option('-y, --yes', 'Skip the confirmation prompt (required with --json or without a terminal)')
+    .action(async (opts: { yes?: boolean }) => {
+      const jsonMode = isJsonMode();
 
-      if (!opts.yes && !jsonMode) {
-        const confirm = await clack.confirm({
-          message: 'Reset all configuration to defaults? This cannot be undone.',
-        });
-
-        if (clack.isCancel(confirm) || !confirm) {
-          clack.cancel('Reset cancelled');
-          process.exit(0);
-        }
+      const confirmed = await confirmDestructive({
+        yes: opts.yes,
+        json: jsonMode,
+        message: 'Reset all configuration to defaults? This cannot be undone.',
+      });
+      if (!confirmed) {
+        print.info('Reset cancelled');
+        return;
       }
 
       await writePreferences({});
@@ -341,8 +337,7 @@ ${CONFIG_KEYS.map((k) => `  ${chalk.cyan(k.key.padEnd(16))} ${chalk.gray(k.descr
     .command('path')
     .description('Show the configuration file path')
     .action(async () => {
-      const globalOpts = program.opts();
-      const jsonMode: boolean = globalOpts.json || false;
+      const jsonMode = isJsonMode();
 
       if (jsonMode) {
         console.log(JSON.stringify({ config_file: getConfigFile(), config_dir: getConfigDir() }));
@@ -357,9 +352,8 @@ ${CONFIG_KEYS.map((k) => `  ${chalk.cyan(k.key.padEnd(16))} ${chalk.gray(k.descr
 
 // ─── List Helper ──────────────────────────────────────────────────────────────
 
-async function listConfig(program: Command): Promise<void> {
-  const globalOpts = program.opts();
-  const jsonMode: boolean = globalOpts.json || false;
+async function listConfig(): Promise<void> {
+  const jsonMode = isJsonMode();
 
   const prefs = await readPreferences();
 

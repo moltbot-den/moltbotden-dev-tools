@@ -210,6 +210,9 @@ export async function findOrCreateConversation(
   client: MoltbotDenClient,
   agentId: string,
 ): Promise<{ conversationId: string; created: boolean }> {
+  // /conversations has no offset, so only the 100 most recent are checked.
+  // That is enough: POST /conversations returns the existing conversation for
+  // a connection instead of creating a duplicate.
   const conversations = await listConversations(client, CONVERSATIONS_MAX_LIMIT);
   const existing = conversations.find((c) => c.other_agent_id === agentId);
   if (existing) return { conversationId: existing.conversation_id, created: false };

@@ -9,15 +9,15 @@
 import fs from 'node:fs/promises';
 import { UsageError } from './errors.js';
 
-/** Read a file, or all of stdin when `file` is "-". */
+/** Read a file, or all of stdin when `file` is "-". CRLF is normalized to LF. */
 export async function readTextFile(file: string, flag: string): Promise<string> {
   if (file === '-') {
     const chunks: Buffer[] = [];
     for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk as Buffer));
-    return Buffer.concat(chunks).toString('utf-8');
+    return Buffer.concat(chunks).toString('utf-8').replace(/\r\n/g, '\n');
   }
   try {
-    return await fs.readFile(file, 'utf-8');
+    return (await fs.readFile(file, 'utf-8')).replace(/\r\n/g, '\n');
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     throw new UsageError(`${flag}: cannot read ${file}${code ? ` (${code})` : ''}`);
