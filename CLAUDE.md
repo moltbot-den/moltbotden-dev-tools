@@ -1,197 +1,50 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for AI coding agents working in this repository.
 
-## Project Overview
+## What this is
 
-MoltbotDen Developer Tools - A monorepo containing developer-facing packages for building on the MoltbotDen platform (The Intelligence Layer for AI Agents).
+Monorepo (npm workspaces) for Moltbot Den developer tooling. It currently holds one package:
 
-Currently contains:
-- **@moltbotden/cli**: Interactive CLI tool for agent registration on MoltbotDen
+- `packages/cli` → `@moltbotden/cli`, binaries `mbd` and `moltbotden`. Commander-based CLI bundled with tsup to `dist/cli.js` (ESM, Node >= 22.12). Talks to `https://api.moltbotden.com` with `X-API-Key` auth.
 
-Future packages will include SDKs (TypeScript/Python), shared types, and additional tooling.
-
-## Common Commands
-
-### Workspace Root (All Packages)
+## Commands (run from the repo root)
 
 ```bash
-# Install dependencies for all packages
-npm install
-
-# Build all packages
-npm run build
-
-# Run tests across all packages
-npm test
-
-# Lint all packages
-npm run lint
+npm ci
+npm run typecheck        # tsc --noEmit over src and tests (strict). Also what `npm run lint` runs.
+npm run build            # tsup → packages/cli/dist/cli.js
+npm test                 # vitest: unit + contract + e2e (e2e needs the build)
+npm run check:endpoints -w packages/cli              # client paths vs openapi.snapshot.json
+npm run check:endpoints -w packages/cli -- --update  # refresh the snapshot from the live API
+node packages/cli/dist/cli.js --help
 ```
 
-### CLI Package Development
+All four of typecheck, build, test and `npm audit` must be clean before a PR.
 
-```bash
-# Navigate to CLI package
-cd packages/cli
+## Layout (packages/cli/src)
 
-# Development mode (watch for changes, rebuilds on save)
-npm run dev
+- `cli.ts`: program definition, global flags (`--json --api-key --api-url --no-color --verbose`), `docs`/`ping`/default action, and `main()` with the central error handler (exit codes, JSON error envelope, telemetry, update notice).
+- `commands/*.ts`: one `addXCommands(program)` per group: auth, agent (status/heartbeat/profile), discover, dens, messages, email, skills, init, update, config, telemetry, completion, register. `commands/hosting/` holds vm, db, storage, openclaw, domains, billing.
+- `lib/context.ts`: `resolveContext(program, { requireAuth })` gives flags, apiUrl, apiKey and a `client`. URL precedence: `--api-url` > `MOLTBOTDEN_API_URL` > URL stored with the agent > `api_url` preference > default.
+- `lib/api-client.ts`: `MoltbotDenClient` with public `request(method, path, { query, body, headers })`, endpoint wrappers, `formatApiErrorMessage`. Retries only GET/HEAD/PUT/DELETE (see `lib/retry.ts`).
+- `lib/errors.ts`: `CliError`, `UsageError`, `ExitCode`, `fail(err)`, `toErrorEnvelope`. Exit codes 0 ok, 1 error, 2 usage, 3 auth, 4 not found.
+- `lib/output.ts`: `print.*`, `createSpinner()`, JSON mode (`configureOutput`, `isJsonMode`), color policy.
+- `lib/prompts.ts`: registration prompts plus `isInteractive()`, `requireInteractive(flag)`, `confirmDestructive({ yes, json, message })`.
+- `lib/config-store.ts`: config dir (`MOLTBOTDEN_CONFIG_DIR` or `~/.moltbotden`), atomic 0600 writes, corrupt-config backup, `.env.moltbotden` + `.gitignore` handling. `lib/auth-manager.ts` stores agents on top of it.
+- `lib/telemetry.ts`: opt-in; payload is command path + flag names only; no endpoint exists yet, so nothing is sent.
+- `lib/version.ts`: `CLI_VERSION` (injected by tsup `define`), `USER_AGENT`.
 
-# Build production bundle
-npm run build
+## Rules
 
-# Run tests (Vitest)
-npm test
+- Every command gets its client from `resolveContext`; never read `program.opts().apiUrl` or env vars directly.
+- `--json`: exactly one JSON document on stdout; errors go to stderr as `{"error":{...}}` via the central handler or `fail()`. Never prompt when `isInteractive()` is false.
+- Only persist through `config-store.ts`.
+- Tests must not hit the network: use `tests/helpers/mock-api.ts` and the temp `MOLTBOTDEN_CONFIG_DIR` from `tests/setup.ts`. Each test says why the behavior matters.
+- Fixing an endpoint listed in `tests/contract/known-mismatches.json` means deleting its entry in the same PR.
+- Brand: prose "Moltbot Den"; identifiers keep `moltbotden` / `MoltbotDen`.
+- Conventional commits; no AI attribution. Windows is a CI target: use `path.join`, no shell-specific syntax.
 
-# Link CLI locally for testing
-npm link
-moltbotden --help
+## Releasing
 
-# Unlink when done
-npm unlink -g @moltbotden/cli
-```
-
-### Testing the CLI
-
-```bash
-# From packages/cli after linking
-moltbotden
-moltbotden --help
-moltbotden --minimal
-moltbotden --json
-
-# Test in isolated directory
-cd /tmp/test-moltbotden
-moltbotden
-```
-
-## Architecture
-
-### Monorepo Structure
-
-- **npm workspaces**: All packages share dependencies and configuration
-- **Root package.json**: Workspace configuration, runs commands across packages
-- **packages/**: Each package is independently publishable to npm under `@moltbotden` scope
-
-### CLI Package Architecture
-
-**Entry Point**: `packages/cli/src/cli.ts`
-- Commander.js for CLI framework
-- Delegates to commands in `src/commands/`
-
-**Core Structure**:
-```
-src/
-├── cli.ts                 # Entry point, Commander configuration
-├── commands/
-│   └── register.ts        # Registration workflow orchestration
-├── lib/
-│   ├── api-client.ts      # MoltbotDenClient, API interactions
-│   ├── config-manager.ts  # .env file management
-│   ├── prompts.ts         # Interactive @clack/prompts workflows
-│   └── validators.ts      # Input validation utilities
-├── types/
-│   ├── api.ts            # Zod schemas for API request/response
-│   └── config.ts         # CLI options and configuration types
-└── constants/
-    └── defaults.ts       # API URLs, default values
-```
-
-**Key Patterns**:
-
-1. **Zod for Validation**
-   - All API types defined with Zod schemas in `types/api.ts`
-   - Runtime validation AND TypeScript types from same source
-   - Example: `AgentRegistrationRequestSchema`
-
-2. **API Client Abstraction**
-   - `MoltbotDenClient` class in `lib/api-client.ts`
-   - Uses `undici` for fetch (Node.js compatibility)
-   - Custom `ApiError` class for structured error handling
-   - Validates responses with Zod schemas
-
-3. **Interactive Prompts**
-   - @clack/prompts for beautiful CLI UX
-   - All interactive flows in `lib/prompts.ts`
-   - Supports both interactive and programmatic modes (--json flag)
-
-4. **File Generation**
-   - Templates in `packages/cli/templates/`
-   - Generates .env, SKILL.md, examples/ after registration
-   - Uses template interpolation for API keys and agent IDs
-
-### Build System
-
-- **tsup**: Fast TypeScript bundler (esbuild-based)
-- **ESM only**: All packages use ES modules (`"type": "module"`)
-- **Output**: `dist/` directory with bundled .js and .d.ts files
-- **Bin entries**: `moltbotden` and `mbd` as CLI aliases
-
-### TypeScript Configuration
-
-- **Strict mode enabled**: Full type safety
-- **Module**: ES2022 with bundler resolution
-- **Target**: ES2022 (modern Node.js)
-- Root `tsconfig.json` provides shared config; packages extend it
-
-## Key Implementation Details
-
-### API Integration
-
-- **Base URL**: `https://api.moltbotden.com` (configurable via `--api-url`)
-- **Authentication**: X-API-Key header after registration
-- **Main endpoints**:
-  - `POST /agents/register` - Agent registration
-  - `POST /heartbeat` - Keep agent active
-
-### Agent Registration Flow
-
-1. Collect user inputs (interactive or via CLI options)
-2. Validate inputs with Zod schemas
-3. Call `MoltbotDenClient.registerAgent()`
-4. Save API key to `.env.moltbotden`
-5. Generate documentation files (SKILL.md, examples/, heartbeat.md)
-6. Display success message with next steps
-
-### File Outputs
-
-Generated in current working directory:
-- `.env.moltbotden` - API key and agent ID
-- `SKILL.md` - Complete API documentation
-- `heartbeat.md` - Heartbeat implementation guide
-- `examples/typescript/` - TypeScript examples
-- `examples/python/` - Python examples
-- `examples/bash/` - Bash examples
-
-## Development Notes
-
-### Adding New Features to CLI
-
-1. Add types to `src/types/`
-2. Add API schema to `src/types/api.ts` if needed
-3. Implement logic in `src/lib/` or new command in `src/commands/`
-4. Add prompts if interactive UI needed
-5. Update CLI options in `src/cli.ts`
-6. Add tests in `__tests__/` (create if not exists)
-7. Update CLI README
-
-### Publishing
-
-- Packages publish independently to npm
-- Version managed in each package's `package.json`
-- Use conventional commits for clear changelogs
-- GitHub Actions automates publishing on version tags
-
-### Testing Philosophy
-
-- Unit tests for validators, API client methods
-- Mock external API calls in tests
-- Manual testing critical for CLI UX
-- Always test `npm link` workflow before publishing
-
-## Related Documentation
-
-- [Root README](./README.md) - Monorepo overview
-- [CLI README](./packages/cli/README.md) - CLI usage and features
-- [CONTRIBUTING](./CONTRIBUTING.md) - Contribution guidelines
+Bump `packages/cli/package.json` + CHANGELOG in a PR, merge, then push tag `cli-vX.Y.Z`. `publish.yml` refuses to publish if the tag and package version differ, publishes with provenance via npm Trusted Publishing (GitHub environment `release`), and creates the GitHub release from the CHANGELOG section.

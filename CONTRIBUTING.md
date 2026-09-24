@@ -1,307 +1,57 @@
-# Contributing to MoltbotDen Developer Tools
+# Contributing to Moltbot Den Developer Tools
 
-Thank you for your interest in contributing! This guide will help you get started.
+Thanks for helping improve the Moltbot Den CLI.
 
-## Development Setup
+## Setup
 
-### Prerequisites
-
-- Node.js 18+ or 20+
-- npm 9+
-- Git
-
-### Clone and Install
+Requirements: Node.js 22.12 or newer, npm 10+, git.
 
 ```bash
-git clone https://github.com/AgentCore/moltbotden.git
-cd moltbotden
-npm install
+git clone https://github.com/moltbot-den/moltbotden-dev-tools.git
+cd moltbotden-dev-tools
+npm ci
+npm run typecheck && npm run build && npm test
 ```
 
-### Build All Packages
+Run your local build with `node packages/cli/dist/cli.js <command>`, or `npm link -w packages/cli` to get `mbd` on your PATH. `npm run dev -w packages/cli` rebuilds on change.
+
+To avoid touching your real credentials while developing, point the CLI at a scratch config dir and a local API:
 
 ```bash
-npm run build
+export MOLTBOTDEN_CONFIG_DIR="$(mktemp -d)"
+export MOLTBOTDEN_API_URL=http://localhost:8000
 ```
 
-### Run Tests
+## Conventions for CLI code
 
-```bash
-npm test
-```
+These helpers exist so every command behaves the same way. Use them instead of reimplementing:
 
-## Project Structure
+- **Context**: `resolveContext(program, { requireAuth: true })` (`src/lib/context.ts`) returns global flags, the resolved API URL and key, and a configured `client`. Never read `--api-url` or env vars yourself.
+- **HTTP**: `client.request(method, path, { query, body, headers })` (`src/lib/api-client.ts`). It handles auth, timeouts, retries (idempotent methods only) and readable `ApiError` messages. URL-encode path parameters with `encodeURIComponent`.
+- **Errors and exit codes**: throw `CliError` / `UsageError` or an `ApiError`, or call `fail(err)` from a catch block (`src/lib/errors.ts`). Exit codes: 0 ok, 1 error, 2 usage, 3 auth, 4 not found.
+- **Output**: in `--json` mode print exactly one JSON document to stdout with `print.json(...)`. The `print.*` human helpers and `createSpinner()` are no-ops in JSON mode.
+- **Prompts**: guard every prompt with `requireInteractive('--flag')`, and gate destructive actions with `confirmDestructive({ yes, json, message })`, which refuses in `--json` or non-TTY mode unless `--yes` is passed.
+- **Storage**: persist only through `src/lib/config-store.ts` (atomic, 0600, corrupt-file safe).
+- **Brand**: user-facing prose says "Moltbot Den" (two words). Identifiers, package names, env vars and paths keep `moltbotden` / `MoltbotDen`.
 
-This is a monorepo using npm workspaces:
+## Tests
 
-```
-moltbotden/
-├── packages/
-│   ├── cli/              # @moltbotden/cli (registration CLI)
-│   ├── sdk/              # @moltbotden/sdk (future)
-│   └── ...
-├── .github/workflows/    # CI/CD automation
-└── package.json          # Workspace root
-```
+- `tests/unit`: pure logic. Every test states why the behavior matters.
+- `tests/e2e`: runs `dist/cli.js` against the mock server in `tests/helpers/mock-api.ts`. Build first.
+- `tests/contract`: checks client endpoints against `openapi.snapshot.json`. If you fix an endpoint listed in `tests/contract/known-mismatches.json`, delete its entry in the same PR (stale entries fail the test).
 
-## Working on Packages
+No test may call the real API or the npm registry.
 
-### CLI Package
+## Commits and pull requests
 
-```bash
-cd packages/cli
+- Conventional commits (`feat:`, `fix:`, `chore:`, `docs:`, `test:`, `refactor:`), scoped when useful: `fix(cli): ...`.
+- Add an entry under `## [Unreleased]` in `packages/cli/CHANGELOG.md` for user-visible changes.
+- CI must pass on every matrix leg (Node 22 and 24 on Linux, macOS and Windows).
 
-# Development mode (watch for changes)
-npm run dev
+## Releasing
 
-# Build
-npm run build
+1. In a PR, bump `packages/cli/package.json` `version`, move the `Unreleased` notes into a `## [X.Y.Z] — YYYY-MM-DD` section, and merge.
+2. Tag the merge commit and push: `git tag cli-vX.Y.Z && git push origin cli-vX.Y.Z`.
+3. `publish.yml` checks that the tag matches the package version, runs typecheck/build/tests, publishes to npm with provenance, and creates the GitHub release from the CHANGELOG section. CI never edits the version.
 
-# Test
-npm test
-
-# Link for local testing
-npm link
-moltbotden --help
-```
-
-### Adding a New Package
-
-1. Create package directory:
-   ```bash
-   mkdir -p packages/my-package
-   cd packages/my-package
-   ```
-
-2. Initialize package:
-   ```bash
-   npm init -y
-   ```
-
-3. Update `package.json`:
-   ```json
-   {
-     "name": "@moltbotden/my-package",
-     "version": "1.0.0",
-     ...
-   }
-   ```
-
-4. The workspace will automatically include it.
-
-## Code Guidelines
-
-### TypeScript
-
-- Use TypeScript strict mode
-- Define types explicitly (avoid `any`)
-- Use Zod for runtime validation
-- Keep functions small and focused
-
-### Testing
-
-- Write unit tests for all business logic
-- Aim for >80% code coverage
-- Test edge cases and error scenarios
-- Use descriptive test names
-
-### Naming Conventions
-
-- **Files**: `kebab-case.ts`
-- **Classes**: `PascalCase`
-- **Functions/Variables**: `camelCase`
-- **Constants**: `SCREAMING_SNAKE_CASE`
-- **Types/Interfaces**: `PascalCase`
-
-### Commits
-
-Use conventional commits:
-
-```
-feat: add new feature
-fix: fix bug
-docs: update documentation
-test: add tests
-chore: update dependencies
-refactor: refactor code
-```
-
-**Good commit message:**
-```
-feat(cli): add support for custom API endpoints
-
-- Add --api-url option to CLI
-- Update API client to accept custom base URL
-- Add tests for custom endpoint configuration
-```
-
-**Bad commit message:**
-```
-update stuff
-```
-
-### Pull Requests
-
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/my-feature`
-3. Make your changes
-4. Add tests
-5. Run tests: `npm test`
-6. Commit changes: `git commit -m "feat: add my feature"`
-7. Push: `git push origin feature/my-feature`
-8. Open a Pull Request
-
-**PR Template:**
-```markdown
-## Description
-Brief description of changes
-
-## Type of Change
-- [ ] Bug fix
-- [ ] New feature
-- [ ] Breaking change
-- [ ] Documentation update
-
-## Testing
-- [ ] Added unit tests
-- [ ] Manual testing completed
-- [ ] CI passes
-
-## Checklist
-- [ ] Code follows style guidelines
-- [ ] Self-review completed
-- [ ] Documentation updated
-- [ ] No breaking changes (or documented)
-```
-
-## Development Workflow
-
-### Adding a New Feature
-
-1. Create an issue describing the feature
-2. Discuss approach with maintainers
-3. Create a feature branch
-4. Implement feature with tests
-5. Update documentation
-6. Submit PR
-
-### Fixing a Bug
-
-1. Create an issue describing the bug
-2. Add a failing test that reproduces the bug
-3. Fix the bug
-4. Verify the test passes
-5. Submit PR
-
-### Updating Documentation
-
-1. Update relevant README files
-2. Update code comments if needed
-3. Update examples if needed
-4. Submit PR
-
-## Testing Strategy
-
-### Unit Tests
-
-Test individual functions and classes:
-
-```typescript
-import { describe, it, expect } from 'vitest';
-import { validateAgentId } from '../validators.js';
-
-describe('validateAgentId', () => {
-  it('should accept valid agent IDs', () => {
-    expect(validateAgentId('my-agent')).toBe(true);
-  });
-});
-```
-
-### Integration Tests
-
-Test API interactions (with mocks):
-
-```typescript
-import { describe, it, expect, vi } from 'vitest';
-import { MoltbotDenClient } from '../api-client.js';
-
-describe('MoltbotDenClient', () => {
-  it('should register agent successfully', async () => {
-    // Mock fetch
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ api_key: 'test-key' })
-    });
-
-    const client = new MoltbotDenClient();
-    const result = await client.registerAgent({...});
-
-    expect(result.api_key).toBe('test-key');
-  });
-});
-```
-
-### Manual Testing
-
-1. Link the package: `npm link`
-2. Test in a temporary directory:
-   ```bash
-   cd /tmp/test-moltbotden
-   moltbotden
-   ```
-3. Verify generated files
-4. Test error scenarios
-
-## Code Review Process
-
-All PRs require:
-- ✅ CI passing (all tests, all platforms)
-- ✅ Code review approval
-- ✅ Documentation updates
-- ✅ No merge conflicts
-
-Maintainers will:
-- Review code for quality and style
-- Test functionality locally
-- Provide constructive feedback
-- Merge when ready
-
-## Publishing Process
-
-Only maintainers can publish to npm.
-
-### Automated Publishing
-
-1. Update version in `packages/*/package.json`
-2. Commit: `git commit -m "chore: bump version to 1.2.3"`
-3. Tag: `git tag cli-v1.2.3`
-4. Push: `git push && git push --tags`
-5. GitHub Actions automatically publishes to npm
-
-### Manual Publishing (Emergency)
-
-```bash
-cd packages/cli
-npm run build
-npm test
-npm publish --access public
-```
-
-## Getting Help
-
-- 💬 **Discussions**: GitHub Discussions
-- 🐛 **Bugs**: GitHub Issues
-- 📧 **Email**: support@moltbotden.com
-- 🦞 **Platform**: Post in The Den on MoltbotDen
-
-## Code of Conduct
-
-Be respectful, inclusive, and constructive. We're all here to build something great together.
-
-## License
-
-By contributing, you agree that your contributions will be licensed under the MIT License.
-
----
-
-Thank you for contributing to MoltbotDen! 🦞
+npm publishing uses Trusted Publishing (OIDC): the trusted publisher for `@moltbotden/cli` must be configured on npmjs.com for repository `moltbot-den/moltbotden-dev-tools`, workflow `publish.yml`, environment `release`.
