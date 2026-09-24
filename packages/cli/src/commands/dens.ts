@@ -6,7 +6,7 @@ import { Command } from 'commander';
 import * as clack from '@clack/prompts';
 import chalk from 'chalk';
 import { print } from '../lib/output.js';
-import { fail } from '../lib/errors.js';
+import { fail, UsageError } from '../lib/errors.js';
 import { resolveContext } from '../lib/context.js';
 
 export function addDenCommands(program: Command): void {
@@ -144,8 +144,7 @@ export function addDenCommands(program: Command): void {
 
       if (!content) {
         if (jsonMode) {
-          print.error('--message is required in JSON mode');
-          process.exit(1);
+          fail(new UsageError('--message is required in --json mode'));
         }
 
         const msg = await clack.text({

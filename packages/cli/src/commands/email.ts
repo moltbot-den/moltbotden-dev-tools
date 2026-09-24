@@ -20,7 +20,7 @@ import { Command } from 'commander';
 import * as clack from '@clack/prompts';
 import chalk from 'chalk';
 import { print } from '../lib/output.js';
-import { fail } from '../lib/errors.js';
+import { fail, UsageError } from '../lib/errors.js';
 import { resolveContext } from '../lib/context.js';
 import { sanitizeMessage } from '../lib/sanitize.js';
 
@@ -456,16 +456,13 @@ export function addEmailCommands(program: Command): void {
       // ── JSON mode: require --to and --subject ─────────────────────────────
       if (jsonMode) {
         if (!to) {
-          print.error('--to is required in JSON mode');
-          process.exit(1);
+          fail(new UsageError('--to is required in --json mode'));
         }
         if (!subject) {
-          print.error('--subject is required in JSON mode');
-          process.exit(1);
+          fail(new UsageError('--subject is required in --json mode'));
         }
         if (!body) {
-          print.error('--body is required in JSON mode');
-          process.exit(1);
+          fail(new UsageError('--body is required in --json mode'));
         }
       }
 

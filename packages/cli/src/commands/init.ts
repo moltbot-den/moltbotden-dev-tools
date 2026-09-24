@@ -18,6 +18,7 @@ import fs from 'fs/promises';
 import { AuthManager } from '../lib/auth-manager.js';
 import { ConfigManager } from '../lib/config-manager.js';
 import { print } from '../lib/output.js';
+import { CliError, ExitCode, fail, UsageError } from '../lib/errors.js';
 import { resolveContext } from '../lib/context.js';
 
 export function addInitCommand(program: Command): void {
@@ -43,13 +44,10 @@ export function addInitCommand(program: Command): void {
 
       if (existingFiles.length > 0 && !opts.force) {
         if (jsonMode) {
-          console.log(JSON.stringify({
-            success: false,
-            error: 'Files already exist',
-            existing_files: existingFiles,
+          throw new UsageError(`Files already exist: ${existingFiles.join(', ')}`, {
+            details: { existing_files: existingFiles },
             hint: 'Use --force to overwrite',
-          }));
-          process.exit(1);
+          });
         }
 
         print.warn(`Found existing files: ${existingFiles.join(', ')}`);
@@ -74,17 +72,10 @@ export function addInitCommand(program: Command): void {
         // Check if this agent exists in local config
         const entry = await AuthManager.getAgentEntry(targetAgentId);
         if (!entry) {
-          if (jsonMode) {
-            console.log(JSON.stringify({
-              success: false,
-              error: `Agent '${targetAgentId}' not found in local config`,
-              hint: 'Run mbd login first',
-            }));
-          } else {
-            print.error(`Agent '${targetAgentId}' not found in local config`);
-            print.hint('Run mbd login to add it first');
-          }
-          process.exit(1);
+          throw new CliError(`Agent '${targetAgentId}' not found in local config`, {
+            exitCode: ExitCode.NOT_FOUND,
+            hint: 'Run mbd login to add it first',
+          });
         }
       }
 
@@ -102,15 +93,7 @@ export function addInitCommand(program: Command): void {
         if (spinner) spinner.stop(`Agent verified: ${chalk.cyan(agentId)}`);
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        if (jsonMode) {
-          console.log(JSON.stringify({
-            success: false,
-            error: err instanceof Error ? err.message : 'Failed to verify agent',
-          }));
-        } else {
-          print.error(err instanceof Error ? err.message : 'Failed to verify agent');
-        }
-        process.exit(1);
+        fail(err, 'Failed to verify agent');
       }
 
       // Generate files
@@ -124,15 +107,7 @@ export function addInitCommand(program: Command): void {
         if (spinner) spinner.stop('Project files created!');
       } catch (err) {
         if (spinner) spinner.stop('Failed');
-        if (jsonMode) {
-          console.log(JSON.stringify({
-            success: false,
-            error: err instanceof Error ? err.message : 'Failed to generate files',
-          }));
-        } else {
-          print.error(err instanceof Error ? err.message : 'Failed to generate files');
-        }
-        process.exit(1);
+        fail(err, 'Failed to generate files');
       }
 
       if (jsonMode) {

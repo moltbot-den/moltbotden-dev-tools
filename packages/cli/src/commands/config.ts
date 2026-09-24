@@ -19,6 +19,7 @@ import chalk from 'chalk';
 import * as clack from '@clack/prompts';
 import { getConfigDir, getConfigFile, readConfigFile, updateConfigFile } from '../lib/config-store.js';
 import { print } from '../lib/output.js';
+import { UsageError } from '../lib/errors.js';
 
 // ─── Config Key Definitions ───────────────────────────────────────────────────
 
@@ -234,13 +235,10 @@ ${CONFIG_KEYS.map((k) => `  ${chalk.cyan(k.key.padEnd(16))} ${chalk.gray(k.descr
 
       const def = CONFIG_KEY_MAP.get(key);
       if (!def) {
-        if (jsonMode) {
-          console.log(JSON.stringify({ error: `Unknown config key: ${key}`, known_keys: CONFIG_KEYS.map((k) => k.key) }));
-        } else {
-          print.error(`Unknown config key: ${chalk.cyan(key)}`);
-          print.hint(`Valid keys: ${CONFIG_KEYS.map((k) => chalk.cyan(k.key)).join(', ')}`);
-        }
-        process.exit(1);
+        throw new UsageError(`Unknown config key: ${key}`, {
+          details: { known_keys: CONFIG_KEYS.map((k) => k.key) },
+          hint: `Valid keys: ${CONFIG_KEYS.map((k) => k.key).join(', ')}`,
+        });
       }
 
       const prefs = await readPreferences();
@@ -277,26 +275,18 @@ ${CONFIG_KEYS.map((k) => `  ${chalk.cyan(k.key.padEnd(16))} ${chalk.gray(k.descr
 
       const def = CONFIG_KEY_MAP.get(key);
       if (!def) {
-        if (jsonMode) {
-          console.log(JSON.stringify({ success: false, error: `Unknown config key: ${key}`, known_keys: CONFIG_KEYS.map((k) => k.key) }));
-        } else {
-          print.error(`Unknown config key: ${chalk.cyan(key)}`);
-          print.hint(`Valid keys: ${CONFIG_KEYS.map((k) => chalk.cyan(k.key)).join(', ')}`);
-        }
-        process.exit(1);
+        throw new UsageError(`Unknown config key: ${key}`, {
+          details: { known_keys: CONFIG_KEYS.map((k) => k.key) },
+          hint: `Valid keys: ${CONFIG_KEYS.map((k) => k.key).join(', ')}`,
+        });
       }
 
       const result = validateValue(def, rawValue);
       if (!result.ok) {
-        if (jsonMode) {
-          console.log(JSON.stringify({ success: false, error: result.error, key }));
-        } else {
-          print.error(`Invalid value for ${chalk.cyan(key)}: ${result.error}`);
-          if (def.allowed) {
-            print.hint(`Allowed values: ${def.allowed.join(', ')}`);
-          }
-        }
-        process.exit(1);
+        throw new UsageError(`Invalid value for ${key}: ${result.error}`, {
+          details: { key },
+          hint: def.allowed ? `Allowed values: ${def.allowed.join(', ')}` : undefined,
+        });
       }
 
       const prefs = await readPreferences();

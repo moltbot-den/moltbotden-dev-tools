@@ -7,7 +7,7 @@ import * as clack from '@clack/prompts';
 import chalk from 'chalk';
 import { MoltbotDenClient } from '../../lib/api-client.js';
 import { print, statusBadge } from '../../lib/output.js';
-import { fail } from '../../lib/errors.js';
+import { fail, UsageError } from '../../lib/errors.js';
 import { OPENCLAW_PLAN_SPECS, type OpenClawPlan } from '../../types/hosting.js';
 
 const AVAILABLE_CHANNELS = ['telegram', 'discord', 'slack', 'api'];
@@ -161,8 +161,7 @@ export function addOpenClawCommands(parent: Command, getClient: () => Promise<Mo
         if (clack.isCancel(confirmed) || !confirmed) { clack.cancel('Cancelled'); process.exit(0); }
       } else {
         if (!name || !plan) {
-          print.error('--name and --plan are required in JSON mode');
-          process.exit(1);
+          fail(new UsageError('--name and --plan are required in --json mode'));
         }
         if (channels.length === 0) channels = ['telegram'];
       }

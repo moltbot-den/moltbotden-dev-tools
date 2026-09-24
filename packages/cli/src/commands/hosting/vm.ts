@@ -7,7 +7,7 @@ import * as clack from '@clack/prompts';
 import chalk from 'chalk';
 import { MoltbotDenClient } from '../../lib/api-client.js';
 import { print, statusBadge } from '../../lib/output.js';
-import { fail } from '../../lib/errors.js';
+import { fail, UsageError } from '../../lib/errors.js';
 import { VM_TIER_SPECS, type VMTier } from '../../types/hosting.js';
 
 export function addVMCommands(parent: Command, getClient: () => Promise<MoltbotDenClient>, jsonMode: () => boolean): void {
@@ -141,8 +141,7 @@ export function addVMCommands(parent: Command, getClient: () => Promise<MoltbotD
       } else {
         // JSON mode — require all options
         if (!name || !tier) {
-          print.error('--name and --tier are required in JSON mode');
-          process.exit(1);
+          fail(new UsageError('--name and --tier are required in --json mode'));
         }
       }
 

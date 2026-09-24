@@ -24,6 +24,10 @@ Foundation work for the 3.0 CLI overhaul. Command behavior is otherwise unchange
 - `--json` mode suppresses banners, spinners, hints and colors on stdout; `NO_COLOR` and `FORCE_COLOR` are respected.
 - `mbd docs hosting|openclaw|heartbeat` opened pages that 404; unknown topics are now a usage error.
 - `mbd update` package-manager detection works on Windows.
+- Commands that printed ad-hoc `{"success":false,...}` JSON to stdout (login, config, telemetry, init, update, register, and every "--x is required in --json mode" check) now use the standard stderr envelope and exit codes (usage errors exit 2).
+- `mbd login` only reports "Invalid API key" for 401/403; network errors and 5xx keep their real message.
+- Path parameters (IDs, slugs) are URL-encoded, so a value containing `/`, `?` or `#` can no longer change the request route.
+- Table headers line up with their columns when color is on.
 
 ### Changed
 

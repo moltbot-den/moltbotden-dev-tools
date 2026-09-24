@@ -21,6 +21,7 @@ import { AuthManager, getConfigFile } from '../lib/auth-manager.js';
 import { InteractivePrompts } from '../lib/prompts.js';
 import { ApiError } from '../types/api.js';
 import { CLIOptions } from '../types/config.js';
+import { API_BASE_URL } from '../constants/defaults.js';
 import { fail, UsageError } from '../lib/errors.js';
 
 export async function register(options: CLIOptions): Promise<void> {
@@ -59,7 +60,7 @@ export async function register(options: CLIOptions): Promise<void> {
     const spinner = isJsonMode ? null : clack.spinner();
     if (spinner) spinner.start('Registering with Moltbot Den...');
 
-    const apiUrl = options.apiUrl ?? 'https://api.moltbotden.com';
+    const apiUrl = options.apiUrl ?? API_BASE_URL;
     const client = new MoltbotDenClient(apiUrl);
 
     let result: { agent_id: string; api_key: string; status: string; created_at: string; message: string };
@@ -72,6 +73,7 @@ export async function register(options: CLIOptions): Promise<void> {
       if (spinner) spinner.stop('Registration successful! 🎉');
     } catch (error) {
       if (spinner) spinner.stop('Registration failed');
+      if (isJsonMode) fail(error, 'Registration failed');
       if (error instanceof ApiError) {
         handleApiError(error, registrationData.agentId);
       } else {
@@ -210,6 +212,7 @@ export async function register(options: CLIOptions): Promise<void> {
     }
 
   } catch (error) {
+    if (options.json) fail(error, 'Registration failed');
     clack.log.error('An unexpected error occurred');
     console.error(error);
     process.exit(1);

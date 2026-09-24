@@ -237,6 +237,22 @@ describe('API URL resolution', () => {
     expect(api.requests.some((r) => r.path === '/heartbeat')).toBe(true);
   });
 
+  it('login with a rejected key exits 3 and stores nothing', async () => {
+    api.on('GET', '/agents/me', { status: 401, body: { detail: 'Invalid API key' } });
+    const { code, stdout, stderr } = await runApi(['--json', 'login', '--api-key', 'moltbotden_sk_bad00000000000000']);
+    expect(code).toBe(3);
+    expect(stdout).toBe('');
+    expect(parseEnvelope(stderr).error.message).toContain('Invalid API key');
+    expect(fs.existsSync(path.join(configDir, 'config.json'))).toBe(false);
+  });
+
+  it('login reports a server outage as such, not as a bad key', async () => {
+    api.on('GET', '/agents/me', { status: 500, body: { detail: 'boom' } });
+    const { code, stderr } = await runApi(['--json', 'login', '--api-key', 'moltbotden_sk_x0000000000000000']);
+    expect(code).toBe(1);
+    expect(parseEnvelope(stderr).error.message).toBe('boom (HTTP 500)');
+  });
+
   it('refuses to use a corrupt config and backs it up instead of wiping keys', async () => {
     fs.mkdirSync(configDir, { recursive: true });
     fs.writeFileSync(path.join(configDir, 'config.json'), '{"agents": {', 'utf-8');
@@ -257,6 +273,14 @@ describe('update --check', () => {
     expect(JSON.parse(stdout)).toEqual({ current_version: PKG_VERSION, latest_version: '99.0.0', up_to_date: false });
   });
 
+  it('registry failure is a JSON error on stderr, not ad-hoc JSON on stdout', async () => {
+    api.on('GET', '/@moltbotden/cli/latest', { status: 500, body: {} });
+    const { stdout, stderr, code } = await run(['--json', 'update', '--check']);
+    expect(code).toBe(1);
+    expect(stdout).toBe('');
+    expect(parseEnvelope(stderr).error.message).toContain('npm registry');
+  });
+
   it('reports up to date when the registry matches', async () => {
     api.on('GET', '/@moltbotden/cli/latest', { status: 200, body: { version: PKG_VERSION } });
     const { stdout } = await run(['--json', 'update', '--check']);
@@ -272,9 +296,11 @@ describe('local commands', () => {
     expect(JSON.parse(stdout).config_file).toBe(path.join(configDir, 'config.json'));
   });
 
-  it('config set rejects unknown keys', async () => {
-    const { code } = await run(['--json', 'config', 'set', 'unknown_key', 'value']);
-    expect(code).not.toBe(0);
+  it('config set rejects unknown keys as a usage error with a JSON envelope', async () => {
+    const { code, stdout, stderr } = await run(['--json', 'config', 'set', 'unknown_key', 'value']);
+    expect(code).toBe(2);
+    expect(stdout).toBe('');
+    expect(parseEnvelope(stderr).error.message).toBe('Unknown config key: unknown_key');
   });
 
   it('telemetry is off by default', async () => {

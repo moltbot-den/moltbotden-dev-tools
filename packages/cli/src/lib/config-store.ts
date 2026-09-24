@@ -78,10 +78,29 @@ export async function atomicWriteFile(
     await fs.chmod(tmp, mode).catch(() => {
       /* not supported on Windows */
     });
-    await fs.rename(tmp, file);
+    await renameWithRetry(tmp, file);
   } catch (err) {
     await fs.unlink(tmp).catch(() => {});
     throw err;
+  }
+}
+
+/**
+ * On Windows, rename over a file that another process (a concurrent mbd,
+ * an antivirus scanner, an editor) has open can fail transiently with
+ * EPERM/EBUSY/EACCES. Retry briefly instead of failing the credential write.
+ */
+async function renameWithRetry(from: string, to: string, attempts = 5): Promise<void> {
+  for (let i = 0; ; i++) {
+    try {
+      await fs.rename(from, to);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      const transient = code === 'EPERM' || code === 'EBUSY' || code === 'EACCES';
+      if (!transient || i >= attempts - 1) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 50 * 2 ** i));
+    }
   }
 }
 

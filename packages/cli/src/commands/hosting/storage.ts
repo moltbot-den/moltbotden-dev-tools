@@ -7,7 +7,7 @@ import * as clack from '@clack/prompts';
 import chalk from 'chalk';
 import { MoltbotDenClient } from '../../lib/api-client.js';
 import { print, statusBadge } from '../../lib/output.js';
-import { fail } from '../../lib/errors.js';
+import { fail, UsageError } from '../../lib/errors.js';
 import { STORAGE_PLAN_SPECS, type StoragePlan } from '../../types/hosting.js';
 
 export function addStorageCommands(parent: Command, getClient: () => Promise<MoltbotDenClient>, jsonMode: () => boolean): void {
@@ -117,8 +117,7 @@ export function addStorageCommands(parent: Command, getClient: () => Promise<Mol
         if (clack.isCancel(confirmed) || !confirmed) { clack.cancel('Cancelled'); process.exit(0); }
       } else {
         if (!name || !plan) {
-          print.error('--name and --plan are required in JSON mode');
-          process.exit(1);
+          fail(new UsageError('--name and --plan are required in --json mode'));
         }
       }
 

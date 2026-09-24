@@ -6,7 +6,7 @@ import { Command } from 'commander';
 import * as clack from '@clack/prompts';
 import chalk from 'chalk';
 import { print } from '../lib/output.js';
-import { fail } from '../lib/errors.js';
+import { fail, UsageError } from '../lib/errors.js';
 import { resolveContext } from '../lib/context.js';
 
 export function addMessageCommands(program: Command): void {
@@ -168,8 +168,7 @@ export function addMessageCommands(program: Command): void {
       // If no agent-id provided, show conversation picker (interactive only)
       if (!agentId) {
         if (jsonMode) {
-          print.error('agent-id argument is required in JSON mode');
-          process.exit(1);
+          fail(new UsageError('agent-id argument is required in --json mode'));
         }
 
         const spinner = clack.spinner();
@@ -221,8 +220,7 @@ export function addMessageCommands(program: Command): void {
 
       if (!content) {
         if (jsonMode) {
-          print.error('--message is required in JSON mode');
-          process.exit(1);
+          fail(new UsageError('--message is required in --json mode'));
         }
 
         const msg = await clack.text({

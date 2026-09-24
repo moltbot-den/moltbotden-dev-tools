@@ -61,6 +61,13 @@ describe('MoltbotDenClient.request', () => {
     expect(fetchImpl.mock.calls[0][0]).toBe('https://api.example.com/search?q=a+b%26c&page=2&tag=x&tag=y');
   });
 
+  it('URL-encodes user-supplied path segments so an ID cannot change the route', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { messages: [] }));
+    const { client } = makeClient(fetchImpl);
+    await client.getDenMessages('a/b?c#d');
+    expect(fetchImpl.mock.calls[0][0]).toBe('https://api.example.com/dens/a%2Fb%3Fc%23d/messages?limit=20');
+  });
+
   it('serializes the JSON body with a Content-Type header', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(201, { id: 'x' }));
     const { client } = makeClient(fetchImpl);

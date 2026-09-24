@@ -11,6 +11,7 @@ import chalk from 'chalk';
 import { print } from '../lib/output.js';
 import { compareSemver, fetchLatestVersion, PACKAGE_NAME } from '../lib/update-notifier.js';
 import { CLI_VERSION } from '../lib/version.js';
+import { CliError } from '../lib/errors.js';
 
 /**
  * Detect which package manager installed the CLI globally.
@@ -73,17 +74,10 @@ export function addUpdateCommand(program: Command): void {
 
       const latest = await fetchLatestVersion(10_000);
       if (!latest) {
-        if (jsonMode) {
-          console.log(JSON.stringify({
-            success: false,
-            error: 'Failed to check npm registry',
-            current_version: currentVersion,
-          }));
-        } else {
-          print.error('Could not reach npm registry');
-          print.hint('Check your internet connection and try again');
-        }
-        process.exit(1);
+        throw new CliError('Could not reach the npm registry to check for updates', {
+          details: { current_version: currentVersion },
+          hint: 'Check your internet connection and try again',
+        });
       }
       const latestVersion: string = latest;
 
@@ -149,19 +143,12 @@ export function addUpdateCommand(program: Command): void {
           console.log('');
           print.success(`Updated to ${chalk.green(latestVersion)}!`);
         }
-      } catch (err) {
-        if (jsonMode) {
-          console.log(JSON.stringify({
-            success: false,
-            error: 'Update failed',
-            command: updateCmd,
-            hint: `Try running manually: ${updateCmd}`,
-          }));
-        } else {
-          print.error('Update failed');
-          print.hint(`Try running manually: ${chalk.cyan(updateCmd)}`);
-        }
-        process.exit(1);
+      } catch {
+        throw new CliError('Update failed', {
+          details: { command: updateCmd },
+          hint: `Try running manually: ${updateCmd}` +
+            (process.platform === 'win32' ? '\nOn Windows, close other running mbd/moltbotden processes first.' : ''),
+        });
       }
     });
 }

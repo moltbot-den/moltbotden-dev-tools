@@ -82,12 +82,18 @@ jobs:
         run: npm test
 
       - name: Upgrade npm (trusted publishing needs npm >= 11.5.1)
-        run: npm install -g npm@latest
+        run: npm install -g npm@11
+        # Pinned to a major so releases use a known npm line; bump deliberately.
 
       - name: Publish to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish -w packages/cli --provenance --access public
+        run: |
+          # npm >= 11.5.1 tries OIDC trusted publishing first and only falls back
+          # to NODE_AUTH_TOKEN (empty when the NPM_TOKEN secret is absent). Do not
+          # unset it: setup-node's .npmrc references ${NODE_AUTH_TOKEN}.
+          npm --version
+          npm publish -w packages/cli --provenance --access public
 
       - name: Create GitHub release
         env:

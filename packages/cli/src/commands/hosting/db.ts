@@ -7,7 +7,7 @@ import * as clack from '@clack/prompts';
 import chalk from 'chalk';
 import { MoltbotDenClient } from '../../lib/api-client.js';
 import { print, statusBadge } from '../../lib/output.js';
-import { fail } from '../../lib/errors.js';
+import { fail, UsageError } from '../../lib/errors.js';
 import { DB_PLAN_SPECS, type DatabasePlan, type DatabaseEngine } from '../../types/hosting.js';
 
 export function addDatabaseCommands(parent: Command, getClient: () => Promise<MoltbotDenClient>, jsonMode: () => boolean): void {
@@ -131,8 +131,7 @@ export function addDatabaseCommands(parent: Command, getClient: () => Promise<Mo
         if (clack.isCancel(confirmed) || !confirmed) { clack.cancel('Cancelled'); process.exit(0); }
       } else {
         if (!name || !engine || !plan) {
-          print.error('--name, --engine, and --plan are required in JSON mode');
-          process.exit(1);
+          fail(new UsageError('--name, --engine, and --plan are required in --json mode'));
         }
       }
 

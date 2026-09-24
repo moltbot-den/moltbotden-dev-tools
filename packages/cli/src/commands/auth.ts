@@ -8,7 +8,8 @@ import chalk from 'chalk';
 import { AuthManager } from '../lib/auth-manager.js';
 import { MoltbotDenClient } from '../lib/api-client.js';
 import { print, renderBanner } from '../lib/output.js';
-import { fail } from '../lib/errors.js';
+import { CliError, ExitCode, fail, UsageError } from '../lib/errors.js';
+import { ApiError } from '../types/api.js';
 import { resolveBaseUrl } from '../lib/context.js';
 
 export function addAuthCommands(program: Command): void {
@@ -33,8 +34,7 @@ export function addAuthCommands(program: Command): void {
 
       if (!apiKey) {
         if (jsonMode) {
-          print.error('--api-key is required in JSON mode');
-          process.exit(1);
+          fail(new UsageError('--api-key is required in --json mode'));
         }
 
         const key = await clack.password({
@@ -64,18 +64,17 @@ export function addAuthCommands(program: Command): void {
       try {
         profile = await client.getMe();
         if (spinner) spinner.stop('API key verified ✓');
-      } catch {
+      } catch (err) {
         if (spinner) spinner.stop('Verification failed');
-        if (jsonMode) {
-          console.log(JSON.stringify({ success: false, error: 'Invalid API key' }));
-        } else {
-          print.error('Invalid API key — could not authenticate');
-          print.hint(
-            'Check that your key starts with  moltbotden_sk_\n' +
-            'and was copied in full from your registration output.'
-          );
+        // Only 401/403 mean a bad key; network errors and 5xx keep their own message.
+        if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+          fail(new CliError('Invalid API key — could not authenticate', {
+            exitCode: ExitCode.AUTH,
+            status: err.status,
+            hint: 'Check that your key starts with  moltbotden_sk_\nand was copied in full from your registration output.',
+          }));
         }
-        process.exit(1);
+        fail(err, 'Could not verify API key');
       }
 
       // Save to global config
@@ -223,8 +222,7 @@ export function addAuthCommands(program: Command): void {
 
       if (!targetId) {
         if (jsonMode) {
-          print.error('agent-id argument required in JSON mode');
-          process.exit(1);
+          fail(new UsageError('agent-id argument required in --json mode'));
         }
 
         const chosen = await clack.select({

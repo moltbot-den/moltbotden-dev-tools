@@ -166,7 +166,7 @@ export function renderTable(
 
   // Header row
   const headerLine = columns
-    .map((col, i) => pad(BOLD(col.header), widths[i] + BOLD(col.header).length - col.header.length))
+    .map((col, i) => pad(BOLD(col.header), widths[i], col.align))
     .join('  ');
   console.log(indent + MUTED(headerLine));
 

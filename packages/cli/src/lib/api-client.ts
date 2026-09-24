@@ -315,11 +315,11 @@ export class MoltbotDenClient {
   }
 
   async getMessages(conversationId: string, limit = 20): Promise<Message[]> {
-    return this.get<Message[]>(`/conversations/${conversationId}/messages?limit=${limit}`);
+    return this.get<Message[]>(`/conversations/${encodeURIComponent(conversationId)}/messages?limit=${limit}`);
   }
 
   async sendMessage(conversationId: string, content: string): Promise<Message> {
-    return this.post<Message>(`/conversations/${conversationId}/messages`, { content });
+    return this.post<Message>(`/conversations/${encodeURIComponent(conversationId)}/messages`, { content });
   }
 
   // ─── Dens ────────────────────────────────────────────────────────────────────
@@ -330,12 +330,12 @@ export class MoltbotDenClient {
   }
 
   async getDenMessages(slug: string, limit = 20): Promise<DenMessage[]> {
-    const result = await this.get<{ messages: DenMessage[] }>(`/dens/${slug}/messages?limit=${limit}`);
+    const result = await this.get<{ messages: DenMessage[] }>(`/dens/${encodeURIComponent(slug)}/messages?limit=${limit}`);
     return result.messages ?? [];
   }
 
   async postToDen(slug: string, content: string): Promise<DenMessage> {
-    return this.post<DenMessage>(`/dens/${slug}/messages`, { content });
+    return this.post<DenMessage>(`/dens/${encodeURIComponent(slug)}/messages`, { content });
   }
 
   // ─── Hosting — Account ──────────────────────────────────────────────────────
@@ -352,7 +352,7 @@ export class MoltbotDenClient {
   }
 
   async getVM(vmId: string): Promise<VM> {
-    return this.get<VM>(`/v1/hosting/compute/vms/${vmId}`);
+    return this.get<VM>(`/v1/hosting/compute/vms/${encodeURIComponent(vmId)}`);
   }
 
   async createVM(data: {
@@ -372,23 +372,23 @@ export class MoltbotDenClient {
   }
 
   async startVM(vmId: string): Promise<{ status: string }> {
-    return this.post(`/v1/hosting/compute/vms/${vmId}/start`);
+    return this.post(`/v1/hosting/compute/vms/${encodeURIComponent(vmId)}/start`);
   }
 
   async stopVM(vmId: string): Promise<{ status: string }> {
-    return this.post(`/v1/hosting/compute/vms/${vmId}/stop`);
+    return this.post(`/v1/hosting/compute/vms/${encodeURIComponent(vmId)}/stop`);
   }
 
   async restartVM(vmId: string): Promise<{ status: string }> {
-    return this.post(`/v1/hosting/compute/vms/${vmId}/restart`);
+    return this.post(`/v1/hosting/compute/vms/${encodeURIComponent(vmId)}/restart`);
   }
 
   async deleteVM(vmId: string): Promise<void> {
-    return this.delete(`/v1/hosting/compute/vms/${vmId}`);
+    return this.delete(`/v1/hosting/compute/vms/${encodeURIComponent(vmId)}`);
   }
 
   async getVMConsole(vmId: string, lines = 50): Promise<{ output: string }> {
-    return this.get(`/v1/hosting/compute/vms/${vmId}/console?lines=${lines}`);
+    return this.get(`/v1/hosting/compute/vms/${encodeURIComponent(vmId)}/console?lines=${lines}`);
   }
 
   // ─── Hosting — Databases ────────────────────────────────────────────────────
@@ -398,7 +398,7 @@ export class MoltbotDenClient {
   }
 
   async getDatabase(dbId: string): Promise<Database> {
-    return this.get<Database>(`/v1/hosting/databases/${dbId}`);
+    return this.get<Database>(`/v1/hosting/databases/${encodeURIComponent(dbId)}`);
   }
 
   async createDatabase(data: {
@@ -410,15 +410,15 @@ export class MoltbotDenClient {
   }
 
   async getDatabaseConnectionString(dbId: string): Promise<{ connection_string: string; read_only_connection_string?: string }> {
-    return this.get(`/v1/hosting/databases/${dbId}/connection-string`);
+    return this.get(`/v1/hosting/databases/${encodeURIComponent(dbId)}/connection-string`);
   }
 
   async getDatabaseMetrics<T = Record<string, unknown>>(dbId: string): Promise<T> {
-    return this.get(`/v1/hosting/databases/${dbId}/metrics`);
+    return this.get(`/v1/hosting/databases/${encodeURIComponent(dbId)}/metrics`);
   }
 
   async deleteDatabase(dbId: string): Promise<void> {
-    return this.delete(`/v1/hosting/databases/${dbId}`);
+    return this.delete(`/v1/hosting/databases/${encodeURIComponent(dbId)}`);
   }
 
   // ─── Hosting — Storage ──────────────────────────────────────────────────────
@@ -428,7 +428,7 @@ export class MoltbotDenClient {
   }
 
   async getBucket(bucketId: string): Promise<Bucket> {
-    return this.get<Bucket>(`/v1/hosting/storage/buckets/${bucketId}`);
+    return this.get<Bucket>(`/v1/hosting/storage/buckets/${encodeURIComponent(bucketId)}`);
   }
 
   async createBucket(data: {
@@ -443,11 +443,11 @@ export class MoltbotDenClient {
   }
 
   async getBucketUsage(bucketId: string): Promise<{ storage_used_bytes: number; object_count: number }> {
-    return this.get(`/v1/hosting/storage/buckets/${bucketId}/usage`);
+    return this.get(`/v1/hosting/storage/buckets/${encodeURIComponent(bucketId)}/usage`);
   }
 
   async deleteBucket(bucketId: string): Promise<void> {
-    return this.delete(`/v1/hosting/storage/buckets/${bucketId}`);
+    return this.delete(`/v1/hosting/storage/buckets/${encodeURIComponent(bucketId)}`);
   }
 
   // ─── Hosting — OpenClaw ─────────────────────────────────────────────────────
@@ -457,7 +457,7 @@ export class MoltbotDenClient {
   }
 
   async getOpenClawInstance(instanceId: string): Promise<OpenClawInstance> {
-    return this.get<OpenClawInstance>(`/v1/hosting/openclaw/instances/${instanceId}`);
+    return this.get<OpenClawInstance>(`/v1/hosting/openclaw/instances/${encodeURIComponent(instanceId)}`);
   }
 
   async createOpenClawInstance(data: {
@@ -473,15 +473,15 @@ export class MoltbotDenClient {
   }
 
   async restartOpenClawInstance(instanceId: string): Promise<{ status: string }> {
-    return this.post(`/v1/hosting/openclaw/instances/${instanceId}/restart`);
+    return this.post(`/v1/hosting/openclaw/instances/${encodeURIComponent(instanceId)}/restart`);
   }
 
   async getOpenClawLogs(instanceId: string, limit = 100): Promise<{ logs: string[] }> {
-    return this.get(`/v1/hosting/openclaw/instances/${instanceId}/logs?limit=${limit}`);
+    return this.get(`/v1/hosting/openclaw/instances/${encodeURIComponent(instanceId)}/logs?limit=${limit}`);
   }
 
   async deleteOpenClawInstance(instanceId: string): Promise<void> {
-    return this.delete(`/v1/hosting/openclaw/instances/${instanceId}`);
+    return this.delete(`/v1/hosting/openclaw/instances/${encodeURIComponent(instanceId)}`);
   }
 
   // ─── Hosting — Domains ──────────────────────────────────────────────────────
@@ -491,7 +491,7 @@ export class MoltbotDenClient {
   }
 
   async getDomain(domainId: string): Promise<Domain> {
-    return this.get<Domain>(`/v1/hosting/domains/${domainId}`);
+    return this.get<Domain>(`/v1/hosting/domains/${encodeURIComponent(domainId)}`);
   }
 
   async addDomain(domain: string): Promise<Domain> {
@@ -504,14 +504,14 @@ export class MoltbotDenClient {
     value: string;
     ttl?: number;
   }): Promise<{ status: string }> {
-    return this.post(`/v1/hosting/domains/${domainId}/dns`, {
+    return this.post(`/v1/hosting/domains/${encodeURIComponent(domainId)}/dns`, {
       ttl: 300,
       ...record,
     });
   }
 
   async removeDomain(domainId: string): Promise<void> {
-    return this.delete(`/v1/hosting/domains/${domainId}`);
+    return this.delete(`/v1/hosting/domains/${encodeURIComponent(domainId)}`);
   }
 
   // ─── Hosting — Billing ──────────────────────────────────────────────────────
@@ -556,23 +556,23 @@ export class MoltbotDenClient {
   }
 
   async emailThread<T = Record<string, unknown>>(threadId: string): Promise<T> {
-    return this.get(`/email/thread/${threadId}`);
+    return this.get(`/email/thread/${encodeURIComponent(threadId)}`);
   }
 
   async emailMessage<T = Record<string, unknown>>(messageId: string): Promise<T> {
-    return this.get(`/email/message/${messageId}`);
+    return this.get(`/email/message/${encodeURIComponent(messageId)}`);
   }
 
   async emailMarkRead<T = Record<string, unknown>>(messageId: string, unread = false): Promise<T> {
-    return this.post(`/email/message/${messageId}/read?unread=${unread}`);
+    return this.post(`/email/message/${encodeURIComponent(messageId)}/read?unread=${unread}`);
   }
 
   async emailStar<T = Record<string, unknown>>(messageId: string, starred = true): Promise<T> {
-    return this.post(`/email/message/${messageId}/star?starred=${starred}`);
+    return this.post(`/email/message/${encodeURIComponent(messageId)}/star?starred=${starred}`);
   }
 
   async emailDelete(messageId: string): Promise<void> {
-    return this.delete(`/email/message/${messageId}`);
+    return this.delete(`/email/message/${encodeURIComponent(messageId)}`);
   }
 
   // ─── Skills / Marketplace ───────────────────────────────────────────────────
@@ -600,7 +600,7 @@ export class MoltbotDenClient {
   }
 
   async skillsInfo<T = Record<string, unknown>>(listingId: string): Promise<T> {
-    return this.get(`/marketplace/listings/${listingId}`);
+    return this.get(`/marketplace/listings/${encodeURIComponent(listingId)}`);
   }
 
   async skillsFavorites<T = Record<string, unknown>>(): Promise<T> {
@@ -608,11 +608,11 @@ export class MoltbotDenClient {
   }
 
   async skillsFavorite<T = Record<string, unknown>>(listingId: string): Promise<T> {
-    return this.post(`/marketplace/listings/${listingId}/favorite`);
+    return this.post(`/marketplace/listings/${encodeURIComponent(listingId)}/favorite`);
   }
 
   async skillsUnfavorite(listingId: string): Promise<void> {
-    return this.delete(`/marketplace/listings/${listingId}/favorite`);
+    return this.delete(`/marketplace/listings/${encodeURIComponent(listingId)}/favorite`);
   }
 
   async skillsBrowseCategory<T = Record<string, unknown>>(slug: string, opts: {
@@ -623,7 +623,7 @@ export class MoltbotDenClient {
     if (opts.page) params.set('page', String(opts.page));
     if (opts.per_page) params.set('per_page', String(opts.per_page));
     const qs = params.toString();
-    return this.get(`/marketplace/categories/${slug}${qs ? '?' + qs : ''}`);
+    return this.get(`/marketplace/categories/${encodeURIComponent(slug)}${qs ? '?' + qs : ''}`);
   }
 }
 

@@ -15,6 +15,7 @@ import chalk from 'chalk';
 import { updateConfigFile } from '../lib/config-store.js';
 import { isTelemetryEnabled } from '../lib/telemetry.js';
 import { print } from '../lib/output.js';
+import { CliError } from '../lib/errors.js';
 
 // ─── Config I/O ───────────────────────────────────────────────────────────────
 
@@ -103,16 +104,9 @@ ${chalk.bold('Examples')}
       // Check env override
       const envDisabled = process.env.MBD_TELEMETRY_DISABLED;
       if (envDisabled === '1' || envDisabled?.toLowerCase() === 'true') {
-        if (jsonMode) {
-          console.log(JSON.stringify({
-            success: false,
-            error: 'MBD_TELEMETRY_DISABLED is set — telemetry cannot be enabled while this env var is active',
-          }));
-        } else {
-          print.warn('MBD_TELEMETRY_DISABLED is set in your environment');
-          print.hint('Unset the variable first, then re-run this command');
-        }
-        process.exit(1);
+        throw new CliError('MBD_TELEMETRY_DISABLED is set, so telemetry cannot be enabled', {
+          hint: 'Unset the variable first, then re-run this command',
+        });
       }
 
       await setTelemetryPreference(true);

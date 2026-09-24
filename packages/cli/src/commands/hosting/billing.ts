@@ -8,7 +8,7 @@ import chalk from 'chalk';
 import open from 'open';
 import { MoltbotDenClient } from '../../lib/api-client.js';
 import { print } from '../../lib/output.js';
-import { fail } from '../../lib/errors.js';
+import { fail, UsageError } from '../../lib/errors.js';
 
 export function addBillingCommands(parent: Command, getClient: () => Promise<MoltbotDenClient>, jsonMode: () => boolean): void {
 
@@ -220,8 +220,7 @@ export function addBillingCommands(parent: Command, getClient: () => Promise<Mol
         if (clack.isCancel(amt)) { clack.cancel('Cancelled'); process.exit(0); }
         amountDollars = parseFloat(amt as string);
       } else {
-        print.error('--amount is required in JSON mode');
-        process.exit(1);
+        fail(new UsageError('--amount is required in --json mode'));
       }
 
       const amountCents = Math.round(amountDollars * 100);

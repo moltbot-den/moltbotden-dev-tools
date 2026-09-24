@@ -71,7 +71,10 @@ export async function fetchLatestVersion(timeoutMs = FETCH_TIMEOUT_MS): Promise<
  */
 export function compareSemver(a: string, b: string): number {
   const parse = (v: string) => {
-    const [core, pre] = v.replace(/^v/, '').split('-', 2);
+    const clean = v.replace(/^v/, '');
+    const dash = clean.indexOf('-');
+    const core = dash === -1 ? clean : clean.slice(0, dash);
+    const pre = dash === -1 ? undefined : clean.slice(dash + 1);
     return { parts: core.split('.').map((n) => Number.parseInt(n, 10) || 0), pre };
   };
   const pa = parse(a);
