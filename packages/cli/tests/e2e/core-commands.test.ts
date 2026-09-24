@@ -591,7 +591,7 @@ describe('init', () => {
     const out = JSON.parse(stdout);
     expect(out.skill_md.source).toBe('bundled');
     expect(out.skill_md.fallback_reason).toContain('HTTP 503');
-    expect(fs.readFileSync(path.join(sb.dir, 'SKILL.md'), 'utf-8')).toMatch(/^---\nname: moltbotden/);
+    expect(fs.readFileSync(path.join(sb.dir, 'SKILL.md'), 'utf-8')).toMatch(/^---\r?\nname: moltbotden/);
   });
 
   it('generated examples send recipient_id with every DM', async () => {

@@ -34,13 +34,14 @@ export interface SkillFile {
 
 /** `version:` from the YAML front matter, if present. */
 export function skillVersion(content: string): string | undefined {
-  const match = /^---\n[\s\S]*?^version:\s*["']?([^"'\n]+)["']?\s*$/m.exec(content);
+  // CRLF-tolerant: a Windows git checkout rewrites the bundled copy's newlines.
+  const match = /^---\r?\n[\s\S]*?^version:\s*["']?([^"'\r\n]+)["']?\s*$/m.exec(content);
   return match?.[1]?.trim();
 }
 
 /** A real skill file, not an HTML error page or a truncated body. */
 export function looksLikeSkillFile(content: string): boolean {
-  return content.startsWith('---') && /^name:\s*moltbotden\s*$/m.test(content);
+  return content.startsWith('---') && /^name:\s*moltbotden\s*$/m.test(content.replace(/\r\n/g, '\n'));
 }
 
 async function readBundled(): Promise<string> {

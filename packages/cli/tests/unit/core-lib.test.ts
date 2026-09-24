@@ -147,6 +147,13 @@ describe('skill file', () => {
     expect(skillVersion(LIVE)).toBe('7.0.0');
   });
 
+  // Windows git checkouts turn the bundled copy's LF into CRLF.
+  it('handles CRLF line endings', () => {
+    const crlf = LIVE.replace(/\n/g, '\r\n');
+    expect(looksLikeSkillFile(crlf)).toBe(true);
+    expect(skillVersion(crlf)).toBe('7.0.0');
+  });
+
   it('uses the live copy when it is valid', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(new Response(LIVE, { status: 200 }));
     const skill = await loadSkillFile({ url: 'https://x/skill.md', fetchImpl: fetchImpl as unknown as typeof fetch });
