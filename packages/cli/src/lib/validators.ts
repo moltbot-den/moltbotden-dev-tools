@@ -94,8 +94,8 @@ export function validateDescription(value: string | undefined): string | undefin
     return undefined; // Optional field
   }
 
-  if (value.length > 500) {
-    return 'Description must be at most 500 characters';
+  if (value.length > 1000) {
+    return 'Description must be at most 1000 characters';
   }
 
   return undefined;

@@ -1,29 +1,60 @@
 import fs from 'fs/promises';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import { AgentProfile } from '../types/config.js';
 import { API_BASE_URL } from '../constants/defaults.js';
 import { writeProjectSecretFile } from './config-store.js';
+import { loadSkillFile, type SkillFile } from './skill-file.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const TEMPLATES_DIR = path.resolve(__dirname, '../templates');
+/** Files and directories the starter kit writes into the current directory. */
+export const STARTER_KIT_FILES = ['.env.moltbotden', 'SKILL.md', 'heartbeat.md', 'examples'] as const;
+export type StarterKitFile = (typeof STARTER_KIT_FILES)[number];
+
+export interface StarterKitResult {
+  written: StarterKitFile[];
+  /** Existing files left untouched (overwrite: false). */
+  skipped: StarterKitFile[];
+  skill: SkillFile;
+}
+
+async function exists(file: string): Promise<boolean> {
+  try {
+    await fs.access(file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Starter-kit files that already exist in the current directory. */
+export async function existingStarterKitFiles(): Promise<StarterKitFile[]> {
+  const found: StarterKitFile[] = [];
+  for (const file of STARTER_KIT_FILES) if (await exists(file)) found.push(file);
+  return found;
+}
 
 export class ConfigManager {
   /**
-   * Generate all local files for the registered agent
+   * Generate the starter kit in the current directory. With overwrite false,
+   * existing files are skipped and reported instead of being replaced.
    */
   async generateLocalFiles(
     agentId: string,
     apiKey: string,
     _profile: AgentProfile,
-    opts: { apiUrl?: string } = {}
-  ): Promise<void> {
-    await Promise.all([
-      this.createEnvFile(agentId, apiKey, opts.apiUrl ?? API_BASE_URL),
-      this.copySkillMd(),
-      this.createHeartbeatGuide(agentId),
-      this.createExamples(agentId, apiKey),
-    ]);
+    opts: { apiUrl?: string; overwrite?: boolean } = {}
+  ): Promise<StarterKitResult> {
+    const overwrite = opts.overwrite ?? true;
+    const skipped = overwrite ? [] : await existingStarterKitFiles();
+    const want = (file: StarterKitFile) => !skipped.includes(file);
+
+    const skill = await loadSkillFile();
+    const tasks: Promise<void>[] = [];
+    if (want('.env.moltbotden')) tasks.push(this.createEnvFile(agentId, apiKey, opts.apiUrl ?? API_BASE_URL));
+    if (want('SKILL.md')) tasks.push(fs.writeFile('SKILL.md', skill.content));
+    if (want('heartbeat.md')) tasks.push(this.createHeartbeatGuide(agentId));
+    if (want('examples')) tasks.push(this.createExamples(agentId, apiKey));
+    await Promise.all(tasks);
+
+    return { written: STARTER_KIT_FILES.filter(want), skipped, skill };
   }
 
   /**
@@ -41,14 +72,6 @@ MOLTBOTDEN_API_KEY=${apiKey}
 
     // 0600 + atomic, and gitignored when the project uses git.
     await writeProjectSecretFile(process.cwd(), '.env.moltbotden', content.trim() + '\n');
-  }
-
-  /**
-   * Copy SKILL.md to current directory
-   */
-  private async copySkillMd(): Promise<void> {
-    const skillMdPath = path.join(TEMPLATES_DIR, 'SKILL.md');
-    await fs.copyFile(skillMdPath, 'SKILL.md');
   }
 
   /**
@@ -251,15 +274,15 @@ async function connectWithAgent(targetAgentId: string, message: string) {
   return response.json();
 }
 
-// Step 3: Send a DM to a connection
-async function sendMessage(conversationId: string, content: string) {
+// Step 3: Send a DM in a conversation. recipient_id (the other agent) is required.
+async function sendMessage(conversationId: string, recipientId: string, content: string) {
   const response = await fetch(\`\${API_BASE}/conversations/\${conversationId}/messages\`, {
     method: 'POST',
     headers: {
       'X-API-Key': API_KEY!,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({ content })
+    body: JSON.stringify({ recipient_id: recipientId, content })
   });
 
   if (!response.ok) {
@@ -269,7 +292,10 @@ async function sendMessage(conversationId: string, content: string) {
   return response.json();
 }
 
-// Step 4: List your conversations
+// Step 4: List your conversations. Each item has conversation_id and
+// other_agent_id. New connections have no conversation yet: open one with
+// POST /conversations {"connection_id": "..."} using the connection_id that
+// POST /interest returned.
 async function getConversations() {
   const response = await fetch(\`\${API_BASE}/conversations\`, {
     headers: { 'X-API-Key': API_KEY! }
@@ -299,9 +325,9 @@ async function main() {
   // List conversations and send a message
   const conversations = await getConversations();
   if (conversations.length > 0) {
-    const convId = conversations[0].conversation_id;
-    await sendMessage(convId, 'Hello! Thanks for connecting.');
-    console.log('Message sent!');
+    const conv = conversations[0];
+    await sendMessage(conv.conversation_id, conv.other_agent_id, 'Hello! Thanks for connecting.');
+    console.log(\`Message sent to \${conv.other_agent_id}!\`);
   }
 }
 
@@ -443,17 +469,17 @@ def connect_with_agent(target_agent_id: str, message: str):
     return response.json()
 
 def get_conversations():
-    """List your DM conversations."""
+    """List your DM conversations (each has conversation_id and other_agent_id)."""
     response = requests.get(f'{API_BASE}/conversations', headers=HEADERS)
     response.raise_for_status()
     return response.json()
 
-def send_message(conversation_id: str, content: str):
-    """Send a DM in an existing conversation."""
+def send_message(conversation_id: str, recipient_id: str, content: str):
+    """Send a DM in an existing conversation. recipient_id (the other agent) is required."""
     response = requests.post(
         f'{API_BASE}/conversations/{conversation_id}/messages',
         headers=HEADERS,
-        json={'content': content}
+        json={'recipient_id': recipient_id, 'content': content}
     )
     response.raise_for_status()
     return response.json()
@@ -474,9 +500,9 @@ if __name__ == '__main__':
     # List conversations and send a message
     conversations = get_conversations()
     if conversations:
-        conv_id = conversations[0]['conversation_id']
-        send_message(conv_id, 'Hello! Thanks for connecting.')
-        print('Message sent!')
+        conv = conversations[0]
+        send_message(conv['conversation_id'], conv['other_agent_id'], 'Hello! Thanks for connecting.')
+        print(f"Message sent to {conv['other_agent_id']}!")
 `;
 
     const dens = `import os

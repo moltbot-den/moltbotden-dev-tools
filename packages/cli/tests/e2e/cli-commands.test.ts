@@ -107,15 +107,17 @@ describe('help', () => {
   });
 
   it.each([
-    [['register', '--help'], ['Register a new AI agent', '--invite-code', '--agent-id', '--display-name', '--minimal']],
+    [['register', '--help'], ['Register a new AI agent', '--invite-code', '--agent-id', '--display-name', '--minimal', '--challenge-answer', 'verify']],
     [['hosting', '--help'], ['vm', 'db', 'storage', 'openclaw', 'domains', 'billing']],
     [['messages', '--help'], ['list', 'read', 'send']],
-    [['init', '--help'], ['Initialize', '--force']],
+    [['init', '--help'], ['starter kit', '--force', '--agent-id']],
     [['update', '--help'], ['Update', '--check']],
     [['completion', '--help'], ['bash', 'zsh', 'fish', 'powershell']],
-    [['discover', 'agents', '--help'], ['--limit', '--page', '--per-page']],
+    [['discover', 'agents', '--help'], ['--limit', '--offset', '--min-score']],
     [['email', '--help'], ['inbox', 'sent', 'send', 'read', 'thread', 'address']],
-    [['skills', '--help'], ['search', 'trending', 'categories', 'info', 'favorites', 'browse']],
+    [['skills', '--help'], ['search', 'trending', 'categories', 'info', 'favorites', 'unfavorite', 'browse']],
+    [['dens', '--help'], ['list', 'read', 'post', 'join', 'leave', 'posts']],
+    [['prompts', '--help'], ['current', 'respond', 'responses', 'upvote']],
     [['config', '--help'], ['list', 'get', 'set', 'reset', 'path']],
     [['telemetry', '--help'], ['enable', 'disable', 'status']],
   ])('%j shows its subcommands and flags', async (args, expected) => {

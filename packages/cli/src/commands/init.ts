@@ -1,143 +1,105 @@
 /**
- * Init command — initialize a project directory for an existing Moltbot Den agent.
+ * init: set up the current directory for an existing agent.
  *
- * Creates:
- *   - .env.moltbotden with agent credentials
- *   - SKILL.md API reference
- *   - heartbeat.md implementation guide
- *   - examples/ directory with TypeScript, Python, Bash starters
- *
- * This is useful for agents that were registered elsewhere (e.g., via the API directly)
- * and want to set up a local project directory with all the starter files.
+ * Writes .env.moltbotden (0600, gitignored), SKILL.md (fetched live from
+ * https://moltbotden.com/skill.md, bundled copy when offline), heartbeat.md
+ * and examples/.
  */
 
 import { Command } from 'commander';
 import * as clack from '@clack/prompts';
 import chalk from 'chalk';
-import fs from 'fs/promises';
 import { AuthManager } from '../lib/auth-manager.js';
-import { ConfigManager } from '../lib/config-manager.js';
+import { MoltbotDenClient } from '../lib/api-client.js';
+import { ConfigManager, existingStarterKitFiles } from '../lib/config-manager.js';
 import { print } from '../lib/output.js';
-import { CliError, ExitCode, fail, UsageError } from '../lib/errors.js';
+import { CliError, ExitCode, UsageError } from '../lib/errors.js';
 import { resolveContext } from '../lib/context.js';
+import { isInteractive } from '../lib/prompts.js';
+import { withExamples, withSpinner } from '../lib/ui.js';
 
 export function addInitCommand(program: Command): void {
-  program
-    .command('init')
-    .description('Initialize current directory with Moltbot Den agent files')
-    .option('--force', 'Overwrite existing files without prompting')
-    .option('--agent-id <id>', 'Specify which agent to initialize for')
-    .action(async (opts) => {
-      const globalOpts = program.opts();
-      const jsonMode: boolean = globalOpts.json || false;
+  withExamples(
+    program
+      .command('init')
+      .description('Write the agent starter kit (.env.moltbotden, SKILL.md, heartbeat.md, examples/) here')
+      .option('--force', 'Overwrite existing files without prompting')
+      .option('--agent-id <id>', 'Use this locally stored agent instead of the current one'),
+    ['mbd init', 'mbd init --agent-id my-other-agent --force', 'mbd init --force --json'],
+  ).action(async (opts: { force?: boolean; agentId?: string }) => {
+    const ctx = await resolveContext(program, { requireAuth: true });
 
-      // Check if files already exist
-      const existingFiles: string[] = [];
-      for (const file of ['.env.moltbotden', 'SKILL.md', 'heartbeat.md']) {
-        try {
-          await fs.access(file);
-          existingFiles.push(file);
-        } catch {
-          // File doesn't exist — good
-        }
-      }
-
-      if (existingFiles.length > 0 && !opts.force) {
-        if (jsonMode) {
-          throw new UsageError(`Files already exist: ${existingFiles.join(', ')}`, {
-            details: { existing_files: existingFiles },
-            hint: 'Use --force to overwrite',
-          });
-        }
-
-        print.warn(`Found existing files: ${existingFiles.join(', ')}`);
-        const overwrite = await clack.confirm({
-          message: 'Overwrite existing files?',
-          initialValue: false,
+    // Credentials for the target agent: the stored entry's own key and URL,
+    // never the current agent's key paired with another agent's ID.
+    let client = ctx.client;
+    let apiKey = ctx.auth.apiKey;
+    let apiUrl = ctx.apiUrl;
+    if (opts.agentId && opts.agentId !== ctx.auth.agentId) {
+      const entry = await AuthManager.getAgentEntry(opts.agentId);
+      if (!entry) {
+        throw new CliError(`Agent '${opts.agentId}' is not stored locally`, {
+          exitCode: ExitCode.NOT_FOUND,
+          hint: 'Add it with:  mbd login --api-key <key>   (see stored agents: mbd agents)',
         });
-
-        if (clack.isCancel(overwrite) || !overwrite) {
-          clack.cancel('Init cancelled');
-          process.exit(0);
-        }
       }
+      apiKey = entry.apiKey;
+      apiUrl = ctx.apiUrlSource === 'flag' || ctx.apiUrlSource === 'env' ? ctx.apiUrl : (entry.apiUrl ?? ctx.apiUrl);
+      client = new MoltbotDenClient(apiUrl, apiKey, { timeoutMs: ctx.timeoutMs });
+    }
 
-      // Resolve auth — need an authenticated agent
-      const ctx = await resolveContext(program, { requireAuth: true });
-      const auth = ctx.auth;
-
-      // If --agent-id is specified and differs from current, switch
-      const targetAgentId = opts.agentId as string | undefined;
-      if (targetAgentId && targetAgentId !== auth.agentId) {
-        // Check if this agent exists in local config
-        const entry = await AuthManager.getAgentEntry(targetAgentId);
-        if (!entry) {
-          throw new CliError(`Agent '${targetAgentId}' not found in local config`, {
-            exitCode: ExitCode.NOT_FOUND,
-            hint: 'Run mbd login to add it first',
-          });
-        }
+    const existing = await existingStarterKitFiles();
+    if (existing.length > 0 && !opts.force) {
+      if (!isInteractive()) {
+        throw new UsageError(`Files already exist: ${existing.join(', ')}`, {
+          details: { existing_files: existing },
+          hint: 'Re-run with --force to overwrite them',
+        });
       }
-
-      const agentId = targetAgentId ?? auth.agentId ?? 'unknown';
-      const apiKey = auth.apiKey;
-
-      // Verify agent exists on the platform
-      const client = ctx.client;
-      const spinner = jsonMode ? null : clack.spinner();
-      if (spinner) spinner.start('Verifying agent...');
-
-      let profile: { display_name: string };
-      try {
-        profile = await client.getMe();
-        if (spinner) spinner.stop(`Agent verified: ${chalk.cyan(agentId)}`);
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Failed to verify agent');
-      }
-
-      // Generate files
-      if (spinner) spinner.start('Generating project files...');
-
-      const configManager = new ConfigManager();
-      try {
-        await configManager.generateLocalFiles(agentId, apiKey, {
-          display_name: profile.display_name,
-        }, { apiUrl: ctx.apiUrl });
-        if (spinner) spinner.stop('Project files created!');
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Failed to generate files');
-      }
-
-      if (jsonMode) {
-        console.log(JSON.stringify({
-          success: true,
-          agent_id: agentId,
-          files: ['.env.moltbotden', 'SKILL.md', 'heartbeat.md', 'examples/'],
-          directory: process.cwd(),
-        }));
+      print.warn(`Found existing files: ${existing.join(', ')}`);
+      const overwrite = await clack.confirm({ message: 'Overwrite them?', initialValue: false });
+      if (clack.isCancel(overwrite) || !overwrite) {
+        clack.cancel('Init cancelled');
         return;
       }
+    }
 
-      // Success output
-      console.log('');
-      clack.log.success('✓ Created .env.moltbotden');
-      clack.log.success('✓ Created SKILL.md');
-      clack.log.success('✓ Created heartbeat.md');
-      clack.log.success('✓ Created examples/ (TypeScript · Python · Bash)');
-      console.log('');
+    // The agent ID comes from the API, so it always matches the key.
+    const profile = await withSpinner('Verifying agent...', () => client.getMe());
+    const kit = await withSpinner('Writing project files...', () =>
+      new ConfigManager().generateLocalFiles(profile.agent_id, apiKey, { display_name: profile.display_name }, { apiUrl }),
+    );
 
-      print.keyValue([
-        { label: 'Agent',     value: chalk.cyan(agentId) },
-        { label: 'Directory', value: chalk.gray(process.cwd()) },
-      ]);
+    if (ctx.json) {
+      print.json({
+        agent_id: profile.agent_id,
+        directory: process.cwd(),
+        files: kit.written.map((f) => (f === 'examples' ? 'examples/' : f)),
+        skill_md: {
+          source: kit.skill.source,
+          version: kit.skill.version ?? null,
+          url: kit.skill.url ?? null,
+          fallback_reason: kit.skill.fallbackReason ?? null,
+        },
+      });
+      return;
+    }
 
-      console.log('');
-      print.hint('Next steps:');
-      print.hint(`  ${chalk.cyan('mbd heartbeat')}     Send your first heartbeat`);
-      print.hint(`  ${chalk.cyan('cat SKILL.md')}      Read the API reference`);
-      print.hint(`  ${chalk.cyan('ls examples/')}      Explore starter code`);
-      console.log('');
-    });
+    console.log('');
+    for (const file of kit.written) {
+      const note = file === 'SKILL.md'
+        ? chalk.gray(kit.skill.source === 'live' ? ` (live${kit.skill.version ? ` v${kit.skill.version}` : ''})` : ` (bundled copy: ${kit.skill.fallbackReason})`)
+        : '';
+      print.success(`${file}${file === 'examples' ? '/' : ''}${note}`);
+    }
+    console.log('');
+    print.keyValue([
+      { label: 'Agent', value: chalk.cyan(profile.agent_id) },
+      { label: 'Directory', value: chalk.gray(process.cwd()) },
+    ]);
+    console.log('');
+    print.hint(`${chalk.cyan('mbd heartbeat')}    send your first heartbeat`);
+    print.hint(`${chalk.cyan('cat SKILL.md')}     the full API guide`);
+    print.hint(`${chalk.cyan('ls examples/')}     starter code (TypeScript, Python, Bash)`);
+    console.log('');
+  });
 }

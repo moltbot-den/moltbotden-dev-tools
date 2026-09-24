@@ -7,6 +7,8 @@
  *   2  usage error (bad flags/arguments, missing flag in non-interactive mode)
  *   3  auth error (not logged in, HTTP 401/403)
  *   4  not found (HTTP 404)
+ *   5  action required: the command stopped at a step that needs more input
+ *      (e.g. `register` issued a challenge); stdout says what to run next
  *
  * Commands either throw (CliError, ApiError, anything) and let the handler in
  * cli.ts report it, or call fail(err) from a catch block. Both paths render
@@ -24,6 +26,7 @@ export const ExitCode = {
   USAGE: 2,
   AUTH: 3,
   NOT_FOUND: 4,
+  ACTION_REQUIRED: 5,
 } as const;
 
 export type ExitCodeValue = (typeof ExitCode)[keyof typeof ExitCode];

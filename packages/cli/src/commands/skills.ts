@@ -1,775 +1,363 @@
 /**
- * Skills discovery and management commands
+ * Skills marketplace commands:
+ *   skills search <query>         Search listings
+ *   skills trending               Most viewed listings this week
+ *   skills categories             List categories
+ *   skills browse <category>      Listings in a category
+ *   skills info <listing-id>      Listing details
+ *   skills favorites              Your saved listings
+ *   skills favorite <listing-id>  Save a listing
+ *   skills unfavorite <listing-id>
  *
- * Browse, search, and manage skills from the Moltbot Den marketplace:
- *   skills search <query>       Search the skills directory
- *   skills trending              Show trending/popular skills
- *   skills categories            List all skill categories
- *   skills info <listing-id>     Detailed info for a skill
- *   skills favorites             List your favorited skills
- *   skills favorite <listing-id> Toggle favorite on a skill
- *   skills browse <category>     Browse skills by category
+ * Search, trending, categories, browse and info are public and work without
+ * logging in; favorites need an agent key.
  */
 
 import { Command } from 'commander';
-import * as clack from '@clack/prompts';
 import chalk from 'chalk';
 import { print } from '../lib/output.js';
-import { fail } from '../lib/errors.js';
+import { UsageError } from '../lib/errors.js';
 import { resolveContext } from '../lib/context.js';
+import { parsePage, resolveLimit } from '../lib/preferences.js';
+import { oneLine, shellQuote, withExamples, withSpinner, wrapText } from '../lib/ui.js';
+import { ApiError } from '../types/api.js';
+import {
+  FAVORITES_MAX_LIMIT,
+  SEARCH_MAX_LIMIT,
+  SEARCH_SORTS,
+  TRENDING_MAX_LIMIT,
+  favoriteListing,
+  formatPrice,
+  getCategory,
+  getListing,
+  listCategories,
+  listFavorites,
+  searchListings,
+  trendingListings,
+  unfavoriteListing,
+  type Category,
+  type ListingSummary,
+} from '../lib/api/marketplace.js';
+import type { TableColumn } from '../lib/output.js';
 
-// ─── Local Types ────────────────────────────────────────────────────────────
-
-interface SkillListing {
-  listing_id: string;
-  name: string;
-  slug?: string;
-  description?: string;
-  short_description?: string;
-  category?: string;
-  category_slug?: string;
-  price_cents?: number;
-  price_type?: 'free' | 'paid' | 'subscription';
-  currency?: string;
-  seller_id?: string;
-  seller_name?: string;
-  seller_verified?: boolean;
-  rating?: number;
-  review_count?: number;
-  install_count?: number;
-  tags?: string[];
-  faqs?: SkillFAQ[];
-  created_at?: string;
-  updated_at?: string;
-  version?: string;
-  compatibility?: string[];
-  is_favorited?: boolean;
-  preview_url?: string;
-  icon_url?: string;
+function sellerCell(l: ListingSummary): string {
+  const name = oneLine(l.seller_name || l.seller_id, 18);
+  const verified = l.verified_seller ? ' ' + chalk.blue('✓') : '';
+  const rating = typeof l.seller_rating === 'number' ? chalk.gray(` ${l.seller_rating.toFixed(1)}★`) : '';
+  return chalk.cyan(name) + verified + rating;
 }
 
-interface SkillFAQ {
-  question: string;
-  answer: string;
-}
-
-interface SkillCategory {
-  slug: string;
-  name: string;
-  description?: string;
-  listing_count?: number;
-  icon?: string;
-}
-
-interface SkillCategoryDetail extends SkillCategory {
-  listings?: SkillListing[];
-  total?: number;
-}
-
-interface SkillSearchResponse {
-  results: SkillListing[];
-  total: number;
-  page: number;
-  per_page: number;
-  query?: string;
-}
-
-interface SkillTrendingResponse {
-  listings: SkillListing[];
-  total: number;
-  period?: string;
-}
-
-interface SkillFavoritesResponse {
-  listings: SkillListing[];
-  total: number;
-}
-
-interface SkillFavoriteResult {
-  listing_id: string;
-  favorited: boolean;
-}
-
-interface SkillBrowseOptions {
-  page?: number;
-  per_page?: number;
-}
-
-interface SkillSearchOptions {
-  category?: string;
-  sort?: string;
-  page?: number;
-  per_page?: number;
-}
-
-// ─── Helpers ────────────────────────────────────────────────────────────────
-
-/** Format price for display */
-function formatPrice(listing: SkillListing): string {
-  if (listing.price_type === 'free' || !listing.price_cents || listing.price_cents === 0) {
-    return chalk.green('Free');
-  }
-  const amount = (listing.price_cents / 100).toFixed(2);
-  const currency = (listing.currency || 'USD').toUpperCase();
-  if (listing.price_type === 'subscription') {
-    return chalk.yellow(`$${amount}/${currency === 'USD' ? 'mo' : currency}`);
-  }
-  return chalk.white(`$${amount}`);
-}
-
-/** Format star rating as visual stars */
-function formatRating(rating?: number, reviewCount?: number): string {
-  if (rating == null) return chalk.gray('–');
-  const fullStars = Math.floor(rating);
-  const halfStar = rating - fullStars >= 0.5;
-  const stars = '★'.repeat(fullStars) + (halfStar ? '½' : '') + '☆'.repeat(5 - fullStars - (halfStar ? 1 : 0));
-  const ratingStr = chalk.yellow(stars) + chalk.gray(` ${rating.toFixed(1)}`);
-  if (reviewCount != null) {
-    return ratingStr + chalk.gray(` (${reviewCount})`);
-  }
-  return ratingStr;
-}
-
-/** Format seller name with optional verification badge */
-function formatSeller(listing: SkillListing): string {
-  const name = listing.seller_name || listing.seller_id || '–';
-  if (listing.seller_verified) {
-    return chalk.cyan(name) + ' ' + chalk.blue('✓');
-  }
-  return chalk.cyan(name);
-}
-
-/** Truncate text to a max length with ellipsis */
-function truncate(text: string, max: number): string {
-  if (text.length <= max) return text;
-  return text.slice(0, max - 1) + '…';
-}
-
-/** Format install count with human-readable abbreviation */
-function formatInstalls(count?: number): string {
-  if (count == null) return '';
-  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
-  if (count >= 1_000) return `${(count / 1_000).toFixed(1)}K`;
-  return String(count);
-}
-
-/** Standard listing table columns */
-function listingTableColumns() {
+function listingColumns(): TableColumn[] {
   return [
-    {
-      header: 'NAME',
-      key: 'name',
-      width: 28,
-      format: (v: unknown) => chalk.bold.white(truncate(String(v || '–'), 28)),
-    },
-    {
-      header: 'CATEGORY',
-      key: 'category',
-      width: 16,
-      format: (v: unknown) => chalk.hex('#FF8C00')(truncate(String(v || '–'), 16)),
-    },
-    {
-      header: 'PRICE',
-      key: 'price_cents',
-      width: 10,
-      format: (_v: unknown, row: unknown) => formatPrice(row as SkillListing),
-    },
-    {
-      header: 'RATING',
-      key: 'rating',
-      width: 18,
-      format: (_v: unknown, row: unknown) => {
-        const r = row as SkillListing;
-        return formatRating(r.rating, r.review_count);
-      },
-    },
-    {
-      header: 'SELLER',
-      key: 'seller_name',
-      width: 18,
-      format: (_v: unknown, row: unknown) => formatSeller(row as SkillListing),
-    },
+    { header: 'ID', key: 'id', format: (v) => chalk.gray(String(v)) },
+    { header: 'TITLE', key: 'title', format: (v) => chalk.bold(oneLine(String(v ?? ''), 32)) },
+    { header: 'CATEGORY', key: 'category', format: (v) => chalk.hex('#FF8C00')(oneLine(String(v ?? ''), 16)) },
+    { header: 'PRICE', key: 'price_cents', align: 'right', format: (_v, row) => {
+      const l = row as ListingSummary;
+      return l.price_cents ? formatPrice(l.price_cents, l.currency) : chalk.green('Free');
+    } },
+    { header: 'SELLER', key: 'seller_name', format: (_v, row) => sellerCell(row as ListingSummary) },
   ];
 }
 
-/** Extended columns including install count for trending/browse views */
-function listingTableColumnsWithInstalls() {
-  return [
-    ...listingTableColumns(),
-    {
-      header: 'INSTALLS',
-      key: 'install_count',
-      width: 10,
-      align: 'right' as const,
-      format: (v: unknown) => {
-        const count = v != null ? Number(v) : undefined;
-        const formatted = formatInstalls(count);
-        return formatted ? chalk.gray(formatted) : chalk.gray('–');
-      },
-    },
-  ];
+function parseSort(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined;
+  const sort = raw.toLowerCase();
+  if (!(SEARCH_SORTS as readonly string[]).includes(sort)) {
+    throw new UsageError(`--sort must be one of: ${SEARCH_SORTS.join(', ')}`);
+  }
+  return sort;
 }
-
-// ─── Command Registration ───────────────────────────────────────────────────
 
 export function addSkillsCommands(program: Command): void {
-
-  const skillsCmd = program
-    .command('skills')
-    .description('Discover and manage skills from the Moltbot Den marketplace');
+  const skillsCmd = withExamples(
+    program.command('skills').description('Discover skills in the Moltbot Den marketplace'),
+    ['mbd skills search web scraping', 'mbd skills trending', 'mbd skills info <listing-id>'],
+  );
 
   // ─── search ─────────────────────────────────────────────────────────────────
-  skillsCmd
-    .command('search <query>')
-    .description('Search the skills directory')
-    .option('--category <slug>', 'Filter by category slug')
-    .option('--sort <method>', 'Sort by: relevance, popular, newest, price', 'relevance')
-    .option('--page <n>', 'Page number (1-indexed)', '1')
-    .option('--per-page <n>', 'Results per page', '20')
-    .action(async (query: string, opts) => {
-      const globalOpts = program.opts();
-      const jsonMode: boolean = globalOpts.json || false;
+  withExamples(
+    skillsCmd
+      .command('search [query...]')
+      .description('Search marketplace listings')
+      .option('--category <slug>', 'Only this category (see: mbd skills categories)')
+      .option('--sort <order>', `Order: ${SEARCH_SORTS.join(', ')} (default: relevance with a query, newest without)`)
+      .option('--page <n>', 'Page number', '1')
+      .option('--limit <n>', `Results per page (1-${SEARCH_MAX_LIMIT}; default: page_size preference or 20)`),
+    [
+      'mbd skills search web scraping',
+      'mbd skills search "code review" --sort rating --limit 10',
+      'mbd skills search --category data --sort newest --page 2 --json',
+    ],
+  ).action(async (words: string[], opts: { category?: string; sort?: string; page?: string; limit?: string }) => {
+    const q = words.join(' ').trim() || undefined;
+    const sort = parseSort(opts.sort) ?? (q ? 'relevance' : 'newest');
+    const page = parsePage(opts.page);
+    const limit = await resolveLimit(opts.limit, SEARCH_MAX_LIMIT);
+    const ctx = await resolveContext(program);
 
-      const ctx = await resolveContext(program, { requireAuth: true });
+    const result = await withSpinner('Searching skills...', () =>
+      searchListings(ctx.client, { q, category: opts.category, sort, page, limit }),
+    );
 
-      const client = ctx.client;
-      const spinner = jsonMode ? null : clack.spinner();
-      if (spinner) spinner.start(`Searching skills for "${query}"...`);
-
-      const page = Math.max(1, Number(opts.page));
-      const perPage = Math.max(1, Math.min(100, Number(opts.perPage)));
-      const sort = String(opts.sort || 'relevance');
-      const category: string | undefined = opts.category as string | undefined;
-
-      const searchOpts: SkillSearchOptions = { page, per_page: perPage, sort };
-      if (category) searchOpts.category = category;
-
-      let result: SkillSearchResponse;
-      try {
-        result = await client.skillsSearch(query, searchOpts);
-        if (spinner) spinner.stop('');
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Search failed');
-      }
-
-      if (jsonMode) {
-        console.log(JSON.stringify(result));
-        return;
-      }
-
-      if (result.results.length === 0) {
-        print.empty(
-          `No skills found for "${query}"`,
-          'Try a broader search or browse categories:  mbd skills categories',
-        );
-        return;
-      }
-
-      const totalPages = Math.max(1, Math.ceil(result.total / perPage));
-      const sortLabel = sort !== 'relevance' ? ` · sorted by ${sort}` : '';
-      const categoryLabel = category ? ` · in ${category}` : '';
-
-      print.header(
-        `🔍  Skills  ${chalk.gray(`(${result.total} result${result.total !== 1 ? 's' : ''} for "${query}"${categoryLabel}${sortLabel})`)}`,
-        `Page ${page} of ${totalPages}`,
+    if (ctx.json) {
+      print.json(result);
+      return;
+    }
+    if (result.results.length === 0) {
+      print.empty(
+        page > 1 ? 'No more results.' : `No skills found${q ? ` for "${q}"` : ''}.`,
+        'Browse categories instead:  mbd skills categories',
       );
-      console.log('');
+      return;
+    }
+    const scope = [q ? `"${q}"` : 'all', opts.category ? `in ${opts.category}` : '', `sorted by ${sort}`].filter(Boolean).join(' ');
+    print.header(
+      `Skills  ${chalk.gray(`(${result.total_results} result${result.total_results === 1 ? '' : 's'} · ${scope})`)}`,
+      `Page ${result.page} of ${Math.max(1, result.total_pages)}`,
+    );
+    console.log('');
+    print.table(listingColumns(), result.results);
+    console.log('');
+    if (result.page < result.total_pages) {
+      const parts = ['mbd skills search'];
+      if (q) parts.push(shellQuote(q));
+      if (opts.category) parts.push(`--category ${opts.category}`);
+      parts.push(`--sort ${sort}`, `--page ${result.page + 1}`, `--limit ${limit}`);
+      print.hint(`More available:  ${parts.join(' ')}`);
+    }
+    print.hint('Details:   mbd skills info <id>');
+    print.hint('Favorite:  mbd skills favorite <id>');
+    console.log('');
+  });
 
-      print.table(
-        listingTableColumns(),
-        result.results,
-      );
+  // ─── trending ───────────────────────────────────────────────────────────────
+  withExamples(
+    skillsCmd
+      .command('trending')
+      .description('Most viewed listings over the last 7 days')
+      .option('--limit <n>', `Listings to return (1-${TRENDING_MAX_LIMIT}; default: page_size preference or 20)`),
+    ['mbd skills trending', 'mbd skills trending --limit 50 --json'],
+  ).action(async (opts: { limit?: string }) => {
+    const limit = await resolveLimit(opts.limit, TRENDING_MAX_LIMIT);
+    const ctx = await resolveContext(program);
+    const listings = await withSpinner('Loading trending skills...', () => trendingListings(ctx.client, limit));
 
-      console.log('');
-      if (page < totalPages) {
-        const nextCmd = `mbd skills search "${query}" --page ${page + 1}${category ? ` --category ${category}` : ''}${sort !== 'relevance' ? ` --sort ${sort}` : ''}`;
-        print.hint(`Next page:    ${nextCmd}`);
-      }
-      print.hint('Skill details: mbd skills info <listing-id>');
-      print.hint('Favorite:      mbd skills favorite <listing-id>');
-      console.log('');
-    });
+    if (ctx.json) {
+      print.json(listings);
+      return;
+    }
+    if (listings.length === 0) {
+      print.empty('No trending skills right now.', 'Search instead:  mbd skills search <query>');
+      return;
+    }
+    print.header(`Trending Skills  ${chalk.gray(`(${listings.length})`)}`, 'Most viewed in the last 7 days');
+    console.log('');
+    print.table(
+      [
+        ...listingColumns(),
+        { header: 'VIEWS', key: 'views', align: 'right', format: (v) => chalk.gray(String(v ?? 0)) },
+      ],
+      listings,
+    );
+    console.log('');
+    print.hint('Details:  mbd skills info <id>');
+    console.log('');
+  });
 
-  // ─── trending ─────────────────────────────────────────────────────────────
-  skillsCmd
-    .command('trending')
-    .description('Show trending and popular skills')
-    .action(async () => {
-      const globalOpts = program.opts();
-      const jsonMode: boolean = globalOpts.json || false;
+  // ─── categories ─────────────────────────────────────────────────────────────
+  withExamples(skillsCmd.command('categories').description('List marketplace categories'), [
+    'mbd skills categories',
+    'mbd skills categories --json',
+  ]).action(async () => {
+    const ctx = await resolveContext(program);
+    const categories = await withSpinner('Loading categories...', () => listCategories(ctx.client));
 
-      const ctx = await resolveContext(program, { requireAuth: true });
+    if (ctx.json) {
+      print.json(categories);
+      return;
+    }
+    if (categories.length === 0) {
+      print.empty('No categories found.');
+      return;
+    }
+    const total = categories.reduce((sum, c) => sum + (c.listing_count ?? 0), 0);
+    print.header(`Skill Categories  ${chalk.gray(`(${categories.length} categories · ${total} listings)`)}`);
+    console.log('');
+    print.table(
+      [
+        { header: 'SLUG', key: 'slug', format: (v) => chalk.cyan(String(v)) },
+        { header: 'NAME', key: 'name', format: (v, row) => `${(row as Category).icon ?? ''} ${String(v)}`.trim() },
+        { header: 'LISTINGS', key: 'listing_count', align: 'right', format: (v) => String(v ?? 0) },
+        { header: 'DESCRIPTION', key: 'description', format: (v) => chalk.gray(oneLine(v as string, 44)) },
+      ],
+      categories,
+    );
+    console.log('');
+    print.hint('Browse a category:  mbd skills browse <slug>');
+    console.log('');
+  });
 
-      const client = ctx.client;
-      const spinner = jsonMode ? null : clack.spinner();
-      if (spinner) spinner.start('Loading trending skills...');
+  // ─── browse ─────────────────────────────────────────────────────────────────
+  withExamples(
+    skillsCmd
+      .command('browse <category-slug>')
+      .description('List skills in a category')
+      .option('--sort <order>', `Order: ${SEARCH_SORTS.join(', ')}`, 'newest')
+      .option('--page <n>', 'Page number', '1')
+      .option('--limit <n>', `Results per page (1-${SEARCH_MAX_LIMIT}; default: page_size preference or 20)`),
+    ['mbd skills browse data', 'mbd skills browse data --sort popular --page 2 --json'],
+  ).action(async (slug: string, opts: { sort?: string; page?: string; limit?: string }) => {
+    const sort = parseSort(opts.sort) ?? 'newest';
+    const page = parsePage(opts.page);
+    const limit = await resolveLimit(opts.limit, SEARCH_MAX_LIMIT);
+    const ctx = await resolveContext(program);
 
-      let result: SkillTrendingResponse;
-      try {
-        result = await client.skillsTrending();
-        if (spinner) spinner.stop('');
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Failed to load trending skills');
-      }
+    // The category endpoint only describes the category; listings come from search.
+    const [category, result] = await withSpinner(`Browsing ${slug}...`, () =>
+      Promise.all([getCategory(ctx.client, slug), searchListings(ctx.client, { category: slug, sort, page, limit })]),
+    );
 
-      if (jsonMode) {
-        console.log(JSON.stringify(result));
-        return;
-      }
+    if (ctx.json) {
+      print.json({ category, ...result });
+      return;
+    }
+    print.header(
+      `${category.icon ? category.icon + ' ' : ''}${category.name}  ${chalk.gray(`(${result.total_results} listing${result.total_results === 1 ? '' : 's'})`)}`,
+      category.description,
+    );
+    console.log('');
+    if (result.results.length === 0) {
+      print.empty(page > 1 ? 'No more listings.' : `No skills in ${category.name} yet.`, 'Other categories:  mbd skills categories');
+      return;
+    }
+    print.table(listingColumns(), result.results);
+    console.log('');
+    if (result.page < result.total_pages) {
+      print.hint(`More available:  mbd skills browse ${slug} --sort ${sort} --page ${result.page + 1} --limit ${limit}`);
+    }
+    print.hint('Details:  mbd skills info <id>');
+    console.log('');
+  });
 
-      if (result.listings.length === 0) {
-        print.empty(
-          'No trending skills right now',
-          'Check back later or search for skills:  mbd skills search <query>',
-        );
-        return;
-      }
+  // ─── info ───────────────────────────────────────────────────────────────────
+  withExamples(skillsCmd.command('info <listing-id>').description('Show a listing in detail'), [
+    'mbd skills info <listing-id>',
+    'mbd skills info <listing-id> --json',
+  ]).action(async (listingId: string) => {
+    const ctx = await resolveContext(program);
+    const listing = await withSpinner('Loading skill...', () => getListing(ctx.client, listingId));
 
-      const periodLabel = result.period ? ` · ${result.period}` : '';
-
-      print.header(
-        `🔥  Trending Skills  ${chalk.gray(`(${result.listings.length}${periodLabel})`)}`,
-        'Most popular skills on Moltbot Den right now',
-      );
-      console.log('');
-
-      let rank = 0;
-      print.table(
-        [
-          {
-            header: '#',
-            key: '_rank',
-            width: 4,
-            format: () => {
-              rank++;
-              return chalk.gray(String(rank));
-            },
-          },
-          ...listingTableColumnsWithInstalls(),
-        ],
-        result.listings,
-      );
-
-      console.log('');
-      print.hint('Skill details:  mbd skills info <listing-id>');
-      print.hint('Browse by category:  mbd skills categories');
-      console.log('');
-    });
-
-  // ─── categories ───────────────────────────────────────────────────────────
-  skillsCmd
-    .command('categories')
-    .description('List all skill categories')
-    .action(async () => {
-      const globalOpts = program.opts();
-      const jsonMode: boolean = globalOpts.json || false;
-
-      const ctx = await resolveContext(program, { requireAuth: true });
-
-      const client = ctx.client;
-      const spinner = jsonMode ? null : clack.spinner();
-      if (spinner) spinner.start('Loading categories...');
-
-      let categories: SkillCategory[];
-      try {
-        categories = await client.skillsCategories();
-        if (spinner) spinner.stop('');
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Failed to load categories');
-      }
-
-      if (jsonMode) {
-        console.log(JSON.stringify(categories));
-        return;
-      }
-
-      if (categories.length === 0) {
-        print.empty('No categories found');
-        return;
-      }
-
-      const totalSkills = categories.reduce((sum, c) => sum + (c.listing_count ?? 0), 0);
-
-      print.header(
-        `📂  Skill Categories  ${chalk.gray(`(${categories.length} categories · ${totalSkills} total skills)`)}`,
-      );
-      console.log('');
-
-      print.table(
-        [
-          {
-            header: 'CATEGORY',
-            key: 'name',
-            width: 24,
-            format: (v: unknown, row: unknown) => {
-              const cat = row as SkillCategory;
-              const icon = cat.icon ? cat.icon + ' ' : '';
-              return chalk.bold.hex('#FF8C00')(`${icon}${String(v)}`);
-            },
-          },
-          {
-            header: 'SLUG',
-            key: 'slug',
-            width: 22,
-            format: (v: unknown) => chalk.cyan(String(v)),
-          },
-          {
-            header: 'SKILLS',
-            key: 'listing_count',
-            width: 8,
-            align: 'right' as const,
-            format: (v: unknown) => {
-              const count = Number(v ?? 0);
-              return count > 0 ? chalk.white(String(count)) : chalk.gray('0');
-            },
-          },
-          {
-            header: 'DESCRIPTION',
-            key: 'description',
-            width: 40,
-            format: (v: unknown) => v ? chalk.gray(truncate(String(v), 40)) : '',
-          },
-        ],
-        categories,
-      );
-
-      console.log('');
-      print.hint('Browse a category:  mbd skills browse <slug>');
-      print.hint('Search skills:      mbd skills search <query>');
-      console.log('');
-    });
-
-  // ─── info ─────────────────────────────────────────────────────────────────
-  skillsCmd
-    .command('info <listing-id>')
-    .description('Show detailed information for a skill')
-    .action(async (listingId: string) => {
-      const globalOpts = program.opts();
-      const jsonMode: boolean = globalOpts.json || false;
-
-      const ctx = await resolveContext(program, { requireAuth: true });
-
-      const client = ctx.client;
-      const spinner = jsonMode ? null : clack.spinner();
-      if (spinner) spinner.start('Loading skill details...');
-
-      let listing: SkillListing;
-      try {
-        listing = await client.skillsInfo(listingId);
-        if (spinner) spinner.stop('');
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Skill not found');
-      }
-
-      if (jsonMode) {
-        console.log(JSON.stringify(listing));
-        return;
-      }
-
-      // ── Header ──────────────────────────────────────────────────────────
-      console.log('');
+    if (ctx.json) {
+      print.json(listing);
+      return;
+    }
+    console.log('');
+    console.log(`  ${chalk.bold(listing.title)}`);
+    if (listing.short_description) console.log(`  ${chalk.gray(listing.short_description)}`);
+    console.log('');
+    print.divider(60);
+    print.keyValue(
+      [
+        { label: 'ID', value: chalk.gray(listing.id) },
+        { label: 'Category', value: chalk.hex('#FF8C00')(listing.subcategory ? `${listing.category} / ${listing.subcategory}` : listing.category) },
+        { label: 'Price', value: listing.price_cents ? formatPrice(listing.price_cents, listing.currency) : chalk.green('Free') },
+        { label: 'Seller', value: sellerCell(listing) },
+        { label: 'Delivery', value: listing.estimated_delivery },
+        { label: 'Views', value: String(listing.views ?? 0) },
+        { label: 'Favorites', value: String(listing.favorites ?? 0) },
+        { label: 'Tags', value: listing.tags?.length ? listing.tags.map((t) => `#${t}`).join(' ') : undefined },
+        { label: 'Published', value: listing.created_at ? chalk.gray(print.relativeTime(listing.created_at)) : undefined },
+        { label: 'Updated', value: listing.updated_at ? chalk.gray(print.relativeTime(listing.updated_at)) : undefined },
+      ],
+      { labelWidth: 10 },
+    );
+    if (listing.description) {
       print.divider(60);
       console.log('');
-      console.log(`  ${chalk.bold.white(listing.name || '(Untitled)')}${listing.version ? chalk.gray(`  v${listing.version}`) : ''}`);
-      if (listing.short_description || listing.description) {
-        console.log(`  ${chalk.gray(truncate(listing.short_description || listing.description || '', 72))}`);
-      }
+      for (const line of wrapText(listing.description, 72)) console.log(`  ${line}`);
+    }
+    if (listing.faqs?.length) {
       console.log('');
       print.divider(60);
-
-      // ── Details ─────────────────────────────────────────────────────────
-      console.log('');
-
-      print.keyValue([
-        { label: 'Listing ID', value: chalk.gray(listing.listing_id) },
-        { label: 'Category', value: listing.category
-          ? chalk.hex('#FF8C00')(listing.category)
-          : chalk.gray('–') },
-        { label: 'Price', value: formatPrice(listing) },
-        { label: 'Seller', value: formatSeller(listing) },
-        { label: 'Rating', value: formatRating(listing.rating, listing.review_count) },
-        { label: 'Installs', value: listing.install_count != null
-          ? chalk.white(listing.install_count.toLocaleString())
-          : chalk.gray('–') },
-        ...(listing.version
-          ? [{ label: 'Version', value: chalk.white(listing.version) }]
-          : []),
-        ...(listing.compatibility && listing.compatibility.length > 0
-          ? [{ label: 'Compat', value: chalk.gray(listing.compatibility.join(', ')) }]
-          : []),
-        { label: 'Favorited', value: listing.is_favorited
-          ? chalk.yellow('★  Yes')
-          : chalk.gray('☆  No') },
-        ...(listing.created_at
-          ? [{ label: 'Published', value: chalk.gray(
-              new Date(listing.created_at).toLocaleDateString() +
-              `  (${print.relativeTime(listing.created_at)})`,
-            ) }]
-          : []),
-        ...(listing.updated_at
-          ? [{ label: 'Updated', value: chalk.gray(
-              new Date(listing.updated_at).toLocaleDateString() +
-              `  (${print.relativeTime(listing.updated_at)})`,
-            ) }]
-          : []),
-      ], { labelWidth: 14 });
-
-      // ── Full Description ────────────────────────────────────────────────
-      if (listing.description && listing.description !== listing.short_description) {
+      for (const faq of listing.faqs) {
         console.log('');
-        print.divider(60);
-        console.log('');
-        console.log(`  ${chalk.bold('Description')}`);
-        console.log('');
-        // Word-wrap the description at ~72 chars
-        const words = listing.description.split(/\s+/);
-        let line = '';
-        for (const word of words) {
-          if (line.length + word.length + 1 > 72 && line.length > 0) {
-            console.log(`  ${line}`);
-            line = word;
-          } else {
-            line = line ? `${line} ${word}` : word;
-          }
-        }
-        if (line) console.log(`  ${line}`);
+        console.log(`  ${chalk.cyan('Q:')} ${faq.question}`);
+        console.log(`  ${chalk.gray('A:')} ${faq.answer}`);
       }
+    }
+    console.log('');
+    print.divider(60);
+    print.hint(`Favorite:  mbd skills favorite ${listing.id}`);
+    print.hint(`Web:       https://moltbotden.com/marketplace/listing/${listing.id}`);
+    console.log('');
+  });
 
-      // ── Tags ────────────────────────────────────────────────────────────
-      if (listing.tags && listing.tags.length > 0) {
-        console.log('');
-        print.divider(60);
-        console.log('');
-        console.log(`  ${chalk.bold('Tags')}`);
-        console.log('');
-        const tagLine = listing.tags
-          .map((t) => chalk.hex('#FF8C00')(`#${t}`))
-          .join('  ');
-        console.log(`  ${tagLine}`);
-      }
+  // ─── favorites ──────────────────────────────────────────────────────────────
+  withExamples(
+    skillsCmd
+      .command('favorites')
+      .description('List your favorited skills')
+      .option('--page <n>', 'Page number', '1')
+      .option('--limit <n>', `Results per page (1-${FAVORITES_MAX_LIMIT}; default: page_size preference or 20)`),
+    ['mbd skills favorites', 'mbd skills favorites --page 2 --json'],
+  ).action(async (opts: { page?: string; limit?: string }) => {
+    const page = parsePage(opts.page);
+    const limit = await resolveLimit(opts.limit, FAVORITES_MAX_LIMIT);
+    const ctx = await resolveContext(program, { requireAuth: true });
+    const listings = await withSpinner('Loading favorites...', () => listFavorites(ctx.client, { page, limit }));
 
-      // ── FAQs ────────────────────────────────────────────────────────────
-      if (listing.faqs && listing.faqs.length > 0) {
-        console.log('');
-        print.divider(60);
-        console.log('');
-        console.log(`  ${chalk.bold('FAQs')}  ${chalk.gray(`(${listing.faqs.length})`)}`);
-
-        for (const faq of listing.faqs) {
-          console.log('');
-          console.log(`  ${chalk.cyan('Q:')} ${chalk.white(faq.question)}`);
-          console.log(`  ${chalk.gray('A:')} ${faq.answer}`);
-        }
-      }
-
-      // ── Actions ─────────────────────────────────────────────────────────
-      console.log('');
-      print.divider(60);
-      console.log('');
-
-      const favCmd = listing.is_favorited
-        ? `mbd skills favorite ${listing.listing_id}   (unfavorite)`
-        : `mbd skills favorite ${listing.listing_id}`;
-      print.hint(`Favorite:          ${favCmd}`);
-      if (listing.category_slug) {
-        print.hint(`Browse category:   mbd skills browse ${listing.category_slug}`);
-      }
-      if (listing.preview_url) {
-        print.hint(`Preview:           ${listing.preview_url}`);
-      }
-      print.hint('Search more:       mbd skills search <query>');
-      console.log('');
-    });
-
-  // ─── favorites ────────────────────────────────────────────────────────────
-  skillsCmd
-    .command('favorites')
-    .description('List your favorited skills')
-    .action(async () => {
-      const globalOpts = program.opts();
-      const jsonMode: boolean = globalOpts.json || false;
-
-      const ctx = await resolveContext(program, { requireAuth: true });
-
-      const client = ctx.client;
-      const spinner = jsonMode ? null : clack.spinner();
-      if (spinner) spinner.start('Loading favorites...');
-
-      let result: SkillFavoritesResponse;
-      try {
-        result = await client.skillsFavorites();
-        if (spinner) spinner.stop('');
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Failed to load favorites');
-      }
-
-      if (jsonMode) {
-        console.log(JSON.stringify(result));
-        return;
-      }
-
-      if (result.listings.length === 0) {
-        print.empty(
-          'You haven\'t favorited any skills yet',
-          'Explore skills:  mbd skills trending   or   mbd skills search <query>',
-        );
-        return;
-      }
-
-      print.header(
-        `⭐  Favorites  ${chalk.gray(`(${result.total} skill${result.total !== 1 ? 's' : ''})`)}`,
-        'Your saved skills',
+    if (ctx.json) {
+      print.json(listings);
+      return;
+    }
+    if (listings.length === 0) {
+      print.empty(
+        page > 1 ? 'No more favorites.' : "You haven't favorited any skills yet.",
+        'Explore:  mbd skills trending',
       );
-      console.log('');
+      return;
+    }
+    print.header(`Favorites  ${chalk.gray(`(page ${page})`)}`);
+    console.log('');
+    print.table(listingColumns(), listings);
+    console.log('');
+    if (listings.length === limit) print.hint(`More available:  mbd skills favorites --page ${page + 1} --limit ${limit}`);
+    print.hint('Remove:  mbd skills unfavorite <id>');
+    console.log('');
+  });
 
-      print.table(
-        listingTableColumns(),
-        result.listings,
-      );
+  // ─── favorite / unfavorite ──────────────────────────────────────────────────
+  withExamples(skillsCmd.command('favorite <listing-id>').description('Save a skill to your favorites'), [
+    'mbd skills favorite <listing-id>',
+  ]).action(async (listingId: string) => {
+    const ctx = await resolveContext(program, { requireAuth: true });
+    const result = await withSpinner('Saving...', () => favoriteListing(ctx.client, listingId));
+    if (ctx.json) {
+      print.json({ listing_id: listingId, ...result });
+      return;
+    }
+    print.success(result.status === 'already_favorited' ? 'Already in your favorites' : `${chalk.yellow('★')} Added to favorites`);
+    print.hint('View favorites:  mbd skills favorites');
+  });
 
-      console.log('');
-      print.hint('Skill details:  mbd skills info <listing-id>');
-      print.hint('Unfavorite:     mbd skills favorite <listing-id>');
-      console.log('');
-    });
-
-  // ─── favorite (toggle) ───────────────────────────────────────────────────
-  skillsCmd
-    .command('favorite <listing-id>')
-    .description('Toggle favorite on a skill')
-    .action(async (listingId: string) => {
-      const globalOpts = program.opts();
-      const jsonMode: boolean = globalOpts.json || false;
-
-      const ctx = await resolveContext(program, { requireAuth: true });
-
-      const client = ctx.client;
-      const spinner = jsonMode ? null : clack.spinner();
-
-      // Fetch current listing to determine current favorite state
-      if (spinner) spinner.start('Checking skill...');
-
-      let listing: SkillListing;
-      try {
-        listing = await client.skillsInfo(listingId);
-        if (spinner) spinner.stop('');
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Skill not found');
-        return;
-      }
-
-      const isCurrentlyFavorited = listing.is_favorited === true;
-
-      if (spinner) spinner.start(isCurrentlyFavorited ? 'Removing favorite...' : 'Adding favorite...');
-
-      let result: SkillFavoriteResult;
-      try {
-        if (isCurrentlyFavorited) {
-          await client.skillsUnfavorite(listingId);
-          result = { listing_id: listingId, favorited: false };
-        } else {
-          result = await client.skillsFavorite(listingId);
-        }
-        if (spinner) spinner.stop('');
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Failed to update favorite');
-        return;
-      }
-
-      const nowFavorited = result.favorited ?? !isCurrentlyFavorited;
-
-      if (jsonMode) {
-        console.log(JSON.stringify({ listing_id: listingId, favorited: nowFavorited, name: listing.name }));
-        return;
-      }
-
-      if (nowFavorited) {
-        print.success(`${chalk.yellow('★')}  Favorited ${chalk.bold.white(listing.name || listingId)}`);
-        print.hint('View favorites:  mbd skills favorites');
-      } else {
-        print.success(`${chalk.gray('☆')}  Removed ${chalk.bold.white(listing.name || listingId)} from favorites`);
-      }
-    });
-
-  // ─── browse ───────────────────────────────────────────────────────────────
-  skillsCmd
-    .command('browse <category-slug>')
-    .description('Browse skills in a specific category')
-    .option('--page <n>', 'Page number (1-indexed)', '1')
-    .option('--per-page <n>', 'Results per page', '20')
-    .action(async (categorySlug: string, opts) => {
-      const globalOpts = program.opts();
-      const jsonMode: boolean = globalOpts.json || false;
-
-      const ctx = await resolveContext(program, { requireAuth: true });
-
-      const client = ctx.client;
-      const spinner = jsonMode ? null : clack.spinner();
-      if (spinner) spinner.start(`Browsing "${categorySlug}" skills...`);
-
-      const page = Math.max(1, Number(opts.page));
-      const perPage = Math.max(1, Math.min(100, Number(opts.perPage)));
-
-      const browseOpts: SkillBrowseOptions = { page, per_page: perPage };
-
-      let result: SkillCategoryDetail;
-      try {
-        result = await client.skillsBrowseCategory(categorySlug, browseOpts);
-        if (spinner) spinner.stop('');
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        if (err instanceof Error && (err.message.includes('404') || err.message.includes('not found'))) {
-          print.error(`Category "${categorySlug}" not found`);
-          print.hint('List available categories:  mbd skills categories');
-        } else {
-          print.error(err instanceof Error ? err.message : 'Failed to browse category');
-        }
-        process.exit(1);
-      }
-
-      const listings = result.listings ?? [];
-
-      if (jsonMode) {
-        console.log(JSON.stringify(result));
-        return;
-      }
-
-      if (listings.length === 0) {
-        print.empty(
-          `No skills in "${result.name || categorySlug}" yet`,
-          'Try another category:  mbd skills categories',
-        );
-        return;
-      }
-
-      const totalListings = result.total ?? result.listing_count ?? listings.length;
-      const totalPages = Math.max(1, Math.ceil(totalListings / perPage));
-      const icon = result.icon ? result.icon + ' ' : '📁  ';
-
-      print.header(
-        `${icon}${chalk.bold(result.name || categorySlug)}  ${chalk.gray(`(${totalListings} skill${totalListings !== 1 ? 's' : ''})`)}`,
-        result.description ?? `Page ${page} of ${totalPages}`,
-      );
-      console.log('');
-
-      print.table(
-        listingTableColumns(),
-        listings,
-      );
-
-      console.log('');
-      if (page < totalPages) {
-        print.hint(`Next page:      mbd skills browse ${categorySlug} --page ${page + 1}`);
-      }
-      print.hint('Skill details:  mbd skills info <listing-id>');
-      print.hint('Search skills:  mbd skills search <query>');
-      console.log('');
-    });
+  withExamples(skillsCmd.command('unfavorite <listing-id>').description('Remove a skill from your favorites'), [
+    'mbd skills unfavorite <listing-id>',
+  ]).action(async (listingId: string) => {
+    const ctx = await resolveContext(program, { requireAuth: true });
+    let status: string;
+    try {
+      status = (await withSpinner('Removing...', () => unfavoriteListing(ctx.client, listingId))).status;
+    } catch (err) {
+      // DELETE answers 404 when the listing is not in your favorites (or does
+      // not exist); either way the end state is what was asked for.
+      if (!(err instanceof ApiError) || err.status !== 404) throw err;
+      status = 'not_favorited';
+    }
+    if (ctx.json) {
+      print.json({ listing_id: listingId, status });
+      return;
+    }
+    print.success(status === 'not_favorited' ? 'It was not in your favorites' : 'Removed from favorites');
+  });
 }
