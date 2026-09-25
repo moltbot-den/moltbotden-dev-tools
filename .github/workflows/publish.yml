@@ -9,8 +9,14 @@ name: Publish CLI
 #   repository: moltbot-den/moltbotden-dev-tools
 #   workflow:   publish.yml
 #   environment: release
-# Until that is configured, the NPM_TOKEN repository secret (if present) is
-# used as a fallback via NODE_AUTH_TOKEN.
+# There is no npm token: publishing only works through that trusted publisher.
+#
+# After npm, the standalone binaries (packages/cli/scripts/build-binary.mjs)
+# are built and smoke-tested natively on each target, attached to the GitHub
+# release with SHA256SUMS (scripts/install.sh and install.ps1 download them),
+# and the Homebrew formula in moltbot-den/homebrew-tap is updated (deploy key
+# secret HOMEBREW_TAP_DEPLOY_KEY). Prereleases do not touch the tap. This is
+# the only workflow that builds binaries.
 
 on:
   push:
@@ -28,6 +34,8 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     environment: release
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     permissions:
       contents: write # gh release create
       id-token: write # npm provenance + trusted publishing
@@ -87,19 +95,165 @@ jobs:
 
       - name: Publish to npm
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # Empty on purpose: npm >= 11.5.1 authenticates with the job's OIDC
+          # token (trusted publishing); there is no npm token secret.
+          NODE_AUTH_TOKEN: ''
         run: |
-          # npm >= 11.5.1 tries OIDC trusted publishing first and only falls back
-          # to NODE_AUTH_TOKEN (empty when the NPM_TOKEN secret is absent). Do not
-          # unset it: setup-node's .npmrc references ${NODE_AUTH_TOKEN}.
           npm --version
           npm publish -w packages/cli --provenance --access public
 
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
+          # A semver prerelease (3.1.0-beta.1) must not become "latest": the
+          # install scripts download from releases/latest.
+          PRERELEASE=()
+          case "$VERSION" in *-*) PRERELEASE=(--prerelease) ;; esac
           gh release create "$GITHUB_REF_NAME" \
-            --title "@moltbotden/cli ${{ steps.version.outputs.version }}" \
+            --title "@moltbotden/cli $VERSION" \
             --notes-file release-notes.md \
-            --verify-tag
+            --verify-tag "${PRERELEASE[@]}"
+
+  binaries:
+    name: binary (${{ matrix.target }})
+    needs: publish
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: darwin-arm64, runner: macos-14, archive: tar.gz }
+          # macos-13 was retired in December 2025; macos-15-intel is GitHub's x64 macOS runner.
+          - { target: darwin-x64, runner: macos-15-intel, archive: tar.gz }
+          - { target: linux-x64, runner: ubuntu-latest, archive: tar.gz }
+          - { target: linux-arm64, runner: ubuntu-24.04-arm, archive: tar.gz }
+          - { target: windows-x64, runner: windows-latest, archive: zip }
+    defaults:
+      run:
+        shell: bash
+    env:
+      EXE: packages/cli/release/mbd-${{ matrix.target }}/mbd${{ matrix.archive == 'zip' && '.exe' || '' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # The embedded runtime: the newest Node 24 (LTS) patch on every target.
+      # The SEA blob must be injected into the Node build that made it, so
+      # each target builds on its own OS and arch.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+          check-latest: true
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build binary
+        run: npm run build:binary -w packages/cli
+
+      # Hermetic: every API call goes to a local stub, so a production blip
+      # cannot fail a release.
+      - name: Smoke test
+        run: node packages/cli/scripts/smoke-binary.mjs "$EXE"
+
+      - name: Archive (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          mkdir -p dist-bin
+          tar -czf "dist-bin/mbd-${{ matrix.target }}.tar.gz" -C "packages/cli/release/mbd-${{ matrix.target }}" mbd LICENSE
+
+      - name: Archive (zip)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist-bin | Out-Null
+          Compress-Archive -Path "packages/cli/release/mbd-${{ matrix.target }}/*" -DestinationPath "dist-bin/mbd-${{ matrix.target }}.zip"
+
+      # The real install script against this archive, served locally with its
+      # checksum (install.ps1 through `iex`, in PowerShell 7 and 5.1).
+      - name: Install script
+        run: |
+          (cd dist-bin && node -e 'const c=require("crypto"),f=require("fs");for(const n of f.readdirSync(".")){if(n.startsWith("mbd-"))process.stdout.write(c.createHash("sha256").update(f.readFileSync(n)).digest("hex")+"  "+n+"\n")}' > SHA256SUMS)
+          node -e 'const f=require("fs"),p=require("path");require("http").createServer((q,r)=>f.readFile(p.join("dist-bin",p.basename(q.url)),(e,d)=>{r.statusCode=e?404:200;r.end(d)})).listen(18666)' &
+          export MBD_DOWNLOAD_URL=http://127.0.0.1:18666
+          for _ in $(seq 1 50); do curl -fsS -o /dev/null "$MBD_DOWNLOAD_URL/SHA256SUMS" && break; sleep 0.2; done
+          if [ "$RUNNER_OS" = Windows ]; then
+            for shell in pwsh powershell; do
+              dir="$RUNNER_TEMP/mbd-$shell"
+              MBD_INSTALL_DIR="$dir" "$shell" -NoProfile -Command 'Get-Content scripts/install.ps1 -Raw | Invoke-Expression'
+              "$dir/mbd.exe" --version
+            done
+          else
+            MBD_INSTALL_DIR="$RUNNER_TEMP/mbd-sh" sh scripts/install.sh
+            "$RUNNER_TEMP/mbd-sh/mbd" --version
+          fi
+          rm dist-bin/SHA256SUMS
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mbd-${{ matrix.target }}
+          path: dist-bin/mbd-${{ matrix.target }}.${{ matrix.archive }}
+          if-no-files-found: error
+          retention-days: 7
+
+  release-assets:
+    needs: [publish, binaries]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # gh release upload
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.publish.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: mbd-*
+          path: dist-bin
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist-bin
+        run: |
+          sha256sum mbd-* > SHA256SUMS
+          cat SHA256SUMS
+          test "$(wc -l < SHA256SUMS)" -eq 5
+
+      - name: Attach to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" dist-bin/* --clobber
+
+      - name: Render Homebrew formula
+        run: |
+          node scripts/render-formula.mjs "$VERSION" dist-bin/SHA256SUMS > mbd.rb
+          ruby -c mbd.rb
+
+      - name: Check out the tap
+        if: ${{ !contains(env.VERSION, '-') }}
+        uses: actions/checkout@v7
+        with:
+          repository: moltbot-den/homebrew-tap
+          ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          path: tap
+
+      - name: Update the formula
+        if: ${{ !contains(env.VERSION, '-') }}
+        working-directory: tap
+        run: |
+          mkdir -p Formula
+          cp ../mbd.rb Formula/mbd.rb
+          git add Formula/mbd.rb
+          if git diff --cached --quiet; then
+            echo "Formula already at $VERSION"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "mbd $VERSION"
+          git push

@@ -17,6 +17,7 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
+    "build:binary": "node scripts/build-binary.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
     "lint": "npm run typecheck",
@@ -52,6 +53,8 @@
   },
   "devDependencies": {
     "@types/node": "^22.20.4",
+    "esbuild": "^0.28.2",
+    "postject": "^1.0.0-alpha.6",
     "tsup": "^8.5.1",
     "typescript": "~5.9.3",
     "vitest": "^5.0.1"
