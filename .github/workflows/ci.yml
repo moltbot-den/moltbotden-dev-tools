@@ -1,8 +1,11 @@
 name: CI
 
+# One cheap Linux job on pull requests. It runs scripts/verify.sh, the same
+# script the local pre-push hook runs, so CI confirms what was already checked
+# locally instead of discovering failures. No push-to-main run: main only
+# changes through PRs that already passed this job.
+
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
 
@@ -11,54 +14,21 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 jobs:
   test:
-    name: test (${{ matrix.os }}, node ${{ matrix.node-version }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        node-version: [22.x, 24.x]
-    defaults:
-      run:
-        shell: bash
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v7
         with:
-          node-version: ${{ matrix.node-version }}
+          # The engines floor. Developers run current Node locally through the hook.
+          node-version: 22.12.0
           cache: npm
 
-      - name: Install
-        run: npm ci
+      - run: npm ci
 
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Build
-        run: npm run build
-
-      - name: Test
-        run: npm test
-
-      - name: Audit runtime dependencies
-        run: npm audit --omit=dev --audit-level=high
-
-      - name: Package sanity check
-        run: |
-          npm pack --dry-run --json -w packages/cli > pack.json
-          node -e '
-            const [pkg] = JSON.parse(require("fs").readFileSync("pack.json", "utf8"));
-            const files = pkg.files.map((f) => f.path);
-            const required = ["dist/cli.js", "package.json", "README.md", "LICENSE", "CHANGELOG.md", "templates/SKILL.md"];
-            const missing = required.filter((f) => !files.includes(f));
-            const leaked = files.filter((f) => /^(src|tests|scripts)\/|openapi\.snapshot\.json|\.env/.test(f));
-            console.log(`${pkg.name}@${pkg.version}: ${files.length} files, ${pkg.size} bytes packed`);
-            if (missing.length) { console.error("missing from tarball:", missing); process.exit(1); }
-            if (leaked.length) { console.error("should not be in tarball:", leaked); process.exit(1); }
-          '
-          node packages/cli/dist/cli.js --version
+      - run: bash scripts/verify.sh

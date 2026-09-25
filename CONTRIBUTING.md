@@ -46,7 +46,8 @@ No test may call the real API or the npm registry.
 
 - Conventional commits (`feat:`, `fix:`, `chore:`, `docs:`, `test:`, `refactor:`), scoped when useful: `fix(cli): ...`.
 - Add an entry under `## [Unreleased]` in `packages/cli/CHANGELOG.md` for user-visible changes.
-- CI must pass on every matrix leg (Node 22 and 24 on Linux, macOS and Windows).
+- `npm install` points git at `.githooks/`. The pre-push hook runs `scripts/verify.sh` (typecheck, build, tests, runtime audit, endpoint contract, package contents): the same script CI runs, so a push that fails CI can't leave your machine. Never push with `--no-verify`.
+- CI is one Linux job on Node 22.12 (the engines floor). Keep code portable anyway: `path.join`, no shell-specific syntax.
 
 ## Releasing
 
