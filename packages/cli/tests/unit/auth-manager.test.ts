@@ -6,18 +6,16 @@
  * staging/local keys were sent to production.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 import { Command } from 'commander';
 import { AuthManager, resolveApiUrl } from '../../src/lib/auth-manager.js';
 import { resolveContext, resolveBaseUrl } from '../../src/lib/context.js';
 import { writeConfigFile } from '../../src/lib/config-store.js';
+import { makeTempDir } from '../helpers/temp-dir.js';
 
 const DEFAULT = 'https://api.moltbotden.com';
 
 beforeEach(() => {
-  process.env.MOLTBOTDEN_CONFIG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'mbd-auth-'));
+  process.env.MOLTBOTDEN_CONFIG_DIR = makeTempDir('auth');
   delete process.env.MOLTBOTDEN_API_KEY;
   delete process.env.MOLTBOTDEN_API_URL;
 });
@@ -129,7 +127,7 @@ describe('AuthManager storage', () => {
 
   it('returns null when there are no credentials anywhere', async () => {
     const cwd = process.cwd();
-    process.chdir(fs.mkdtempSync(path.join(os.tmpdir(), 'mbd-empty-cwd-')));
+    process.chdir(makeTempDir('empty-cwd'));
     try {
       await expect(AuthManager.getAuth()).resolves.toBeNull();
     } finally {

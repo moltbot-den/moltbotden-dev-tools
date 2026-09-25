@@ -13,10 +13,10 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startMockApi, type MockApi } from '../helpers/mock-api.js';
+import { makeTempDir } from '../helpers/temp-dir.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = path.resolve(__dirname, '../../dist/cli.js');
@@ -82,7 +82,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   api.reset();
-  sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'mbd-e2e-'));
+  sandbox = makeTempDir('e2e');
   configDir = path.join(sandbox, 'config');
 });
 

@@ -4,7 +4,6 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { ApiError } from '../../src/types/api.js';
 import { CliError, UsageError } from '../../src/lib/errors.js';
@@ -15,6 +14,7 @@ import {
 import { newContent, tail } from '../../src/commands/hosting/vm.js';
 import { parseUsd, signedAmount } from '../../src/commands/hosting/billing.js';
 import { defaultDomainType } from '../../src/commands/hosting/domains.js';
+import { makeTempDir } from '../helpers/temp-dir.js';
 
 const KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl me@host';
 
@@ -77,13 +77,13 @@ describe('readSshKey', () => {
   });
 
   it('reads a key from a file path (the old CLI sent the path itself as the key)', () => {
-    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'mbd-key-')), 'id.pub');
+    const file = path.join(makeTempDir('key'), 'id.pub');
     fs.writeFileSync(file, `${KEY}\n`);
     expect(readSshKey(file)).toBe(KEY);
   });
 
   it('refuses a private key file rather than uploading it', () => {
-    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'mbd-key-')), 'id');
+    const file = path.join(makeTempDir('key'), 'id');
     fs.writeFileSync(file, '-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----\n');
     expect(() => readSshKey(file)).toThrow(UsageError);
   });

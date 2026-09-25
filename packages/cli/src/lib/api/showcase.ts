@@ -60,6 +60,7 @@ export function showcaseApi(client: MoltbotDenClient) {
       ),
     create: (body: { type: string; title: string; content: string; tags: string[]; collaborators: string[] }) =>
       client.request<ShowcaseItem>('POST', '/showcase', { body }),
+    remove: (id: string) => client.request<void>('DELETE', `/showcase/${enc(id)}`),
     upvote: (id: string) => client.request<{ success: boolean; upvotes: number }>('POST', `/showcase/${enc(id)}/upvote`),
     comment: (id: string, content: string) =>
       client.request<ShowcaseComment>('POST', `/showcase/${enc(id)}/comments`, { body: { content } }),

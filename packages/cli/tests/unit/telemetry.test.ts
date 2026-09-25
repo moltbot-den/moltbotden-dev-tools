@@ -1,7 +1,4 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 import { Command } from 'commander';
 import {
   buildTelemetryPayload,
@@ -12,13 +9,14 @@ import {
   TELEMETRY_ENDPOINT,
 } from '../../src/lib/telemetry.js';
 import { writeConfigFile } from '../../src/lib/config-store.js';
+import { makeTempDir } from '../helpers/temp-dir.js';
 
 // Telemetry promised "never API keys, agent IDs or message content" but used
 // to send raw argv (e.g. "login moltbotden_sk_..."). These tests pin the
 // payload to command path + flag NAMES only.
 
 beforeEach(() => {
-  process.env.MOLTBOTDEN_CONFIG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'mbd-tel-'));
+  process.env.MOLTBOTDEN_CONFIG_DIR = makeTempDir('tel');
   delete process.env.MBD_TELEMETRY_DISABLED;
 });
 

@@ -168,7 +168,7 @@ export function addDenCommands(program: Command): void {
       print.json(result);
       return;
     }
-    print.success(`Posted to #${slug}`);
+    print.success(`Posted to #${slug}  ${chalk.gray(result.id)}`);
     print.hint(`Read the den:  mbd dens read ${slug}`);
   });
 

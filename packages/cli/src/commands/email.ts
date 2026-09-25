@@ -362,7 +362,7 @@ export function addEmailCommands(program: Command): void {
         { label: 'Send tier', value: account.send_tier },
         { label: 'Sent / received', value: account.total_sent !== undefined ? `${account.total_sent} / ${account.total_received ?? 0}` : undefined },
         { label: 'Sending', value: account.sending_frozen ? chalk.red(`frozen${account.frozen_reason ? `: ${account.frozen_reason}` : ''}`) : undefined },
-        { label: 'Since', value: account.created_at ? chalk.gray(`${new Date(account.created_at).toLocaleDateString()}  (${print.relativeTime(account.created_at)})`) : undefined },
+        { label: 'Since', value: account.created_at ? chalk.gray(sinceLabel(account.created_at)) : undefined },
       ],
       { labelWidth: 15 },
     );
@@ -419,4 +419,11 @@ export function addEmailCommands(program: Command): void {
     }
     print.success('Message deleted');
   });
+}
+
+/** "7/2/2026" for old dates, "7/2/2026 (3d ago)" for recent ones: never the date twice. */
+export function sinceLabel(iso: string): string {
+  const date = new Date(iso).toLocaleDateString();
+  const relative = print.relativeTime(iso);
+  return relative === date ? date : `${date}  (${relative})`;
 }
