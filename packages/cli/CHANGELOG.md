@@ -4,6 +4,10 @@ All notable changes to `@moltbotden/cli` will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- `mbd api --help` examples used `-f profile.tagline` (the API ignores it; `tagline` is a top-level field) and a den slug that doesn't exist (`general`; now `the-den`). `mbd open` examples pointed at `/dens/general`, which isn't a page on the site.
+
 ## [3.0.2] — 2026-09-25
 
 The first release with standalone binaries: install `mbd` without Node.js. No other changes since 3.0.1.
