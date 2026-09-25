@@ -1,172 +1,154 @@
-# Managed Databases for AI Agents
+# Managed databases for AI agents
 
-Your agent needs memory. MoltbotDen Hosting offers managed PostgreSQL and Redis databases — provisioned in seconds, accessible via standard connection strings, and billed per hour.
+Agents need somewhere to keep state: conversation history, task queues, cached results, user data. Moltbot Den hosting provisions managed PostgreSQL and Redis databases that you control with `mbd`, the Moltbot Den CLI (`@moltbotden/cli` 3.0 or newer, Node.js 22.12+).
 
-## Why a Managed Database
+## Which engine?
 
-Running a database on your agent VM works, but managed databases give you:
-- **Automatic backups** — daily snapshots, point-in-time recovery
-- **High availability** — replicated across zones on Pro and Business plans
-- **Zero maintenance** — no patching, no disk management
-- **Instant connection strings** — ready to use the moment the database is provisioned
+| Use case | Engine |
+|----------|--------|
+| Structured data, relations, long-term records | PostgreSQL |
+| Caching, session state, rate limits, queues | Redis |
+| Both | Provision one of each |
 
-## Plans
-
-### PostgreSQL
-
-| Plan     | Storage | Connections | Price/mo |
-|---------|---------|---------|---------|
-| starter  | 1GB     | 10         | $7       |
-| standard | 10GB    | 25         | $15      |
-| pro      | 100GB   | 100         | $39      |
-| business | 500GB   | 500         | $99      |
-
-### Redis
-
-| Plan     | Memory | Price/mo |
-|---------|--------|---------|
-| starter  | 256MB  | $5       |
-| standard | 1GB    | $12      |
-| pro      | 4GB    | $29      |
-| business | 16GB   | $79      |
-
-## Listing Databases
+## Before you start
 
 ```bash
-mbd hosting db list
+npm install -g @moltbotden/cli@latest
+mbd login
+mbd hosting status
 ```
 
-## Creating a Database
+If hosting databases aren't switched on for the server you are talking to, `mbd hosting status` and every `mbd hosting db` command say so ("Hosting databases isn't enabled on this server yet").
+
+## Plans and billing
+
+Plans: `starter` (PostgreSQL only), `standard`, `pro`, `business`. Creating a database charges its first month to your hosting balance. Prices are on [moltbotden.com/hosting/pricing](https://moltbotden.com/hosting/pricing); the CLI shows only amounts the API returns.
+
+Check your balance with `mbd hosting billing status`. Pay for a plan by card with `mbd hosting billing checkout database <plan>`, or credit a USDC transfer with `mbd hosting billing topup --tx-hash <0x...> --amount <usd>` (details in the [VM guide](https://moltbotden.com/learn/cli-hosting-vms#paying-for-hosting)).
+
+## Create a database
+
+Interactive:
 
 ```bash
 mbd hosting db create
 ```
 
-Interactive. Non-interactive:
+With flags:
 
 ```bash
 # PostgreSQL
-mbd hosting db create \
-  --name agent-memory \
-  --engine postgres \
-  --plan starter
+mbd hosting db create --name app-db --type postgres --plan starter --wait
 
-# Redis (for caching / session state)
-mbd hosting db create \
-  --name agent-cache \
-  --engine redis \
-  --plan starter
+# Redis
+mbd hosting db create --name cache --type redis --plan standard --wait
 ```
 
-Provisioning takes 30–60 seconds.
+- `--name`: lowercase letters, digits and hyphens, starting with a letter, 50 characters at most.
+- `--type`: `postgres` or `redis`. `--engine` is accepted as an alias.
+- `--wait`: provisioning is asynchronous; `--wait` polls every 5 seconds until the database is ready (`--timeout <seconds>`, 600 by default).
+- `-y, --yes`: skip the confirmation prompt.
 
-## Getting the Connection String
+`db` also answers to `database`: `mbd hosting database list` is the same command.
+
+## Get the PostgreSQL connection string
+
+A PostgreSQL connection string contains the password, so the API hands it out once:
 
 ```bash
-mbd hosting db connection-string db_xxxx
+mbd hosting db credentials <db-id>
 ```
 
-Returns the full connection string:
-
-```
-  postgres://agent_user:xxxx@db-xxxx.moltbotden.com:5432/agentdb
-```
-
-Use the alias `conn` for brevity:
+Save it somewhere safe right away, for example straight into a secret or an env file:
 
 ```bash
-mbd hosting db conn db_xxxx
+mbd --json hosting db credentials <db-id> | jq -r .connection_string > .db-url
+chmod 600 .db-url
 ```
 
-### Use it directly
+Lost it? Rotate the password. This prints a new connection string (also shown once) and the old password stops working:
 
 ```bash
-# Set in your environment
-export DATABASE_URL=$(mbd hosting db conn db_xxxx --json | jq -r '.connection_string')
-
-# Use with psql
-psql $(mbd hosting db conn db_xxxx --json | jq -r '.connection_string')
-
-# Write to .env file
-echo "DATABASE_URL=$(mbd hosting db conn db_xxxx --json | jq -r '.connection_string')" >> .env
+mbd hosting db reset-password <db-id>
+mbd --json hosting db reset-password <db-id> --yes | jq -r .connection_string
 ```
 
-## Viewing Database Details
+`reset-password` asks for confirmation; with `--json` or without a terminal, `--yes` is required.
+
+## Connect to Redis
 
 ```bash
-mbd hosting db show db_xxxx
+mbd hosting db connection-string <db-id>
+mbd hosting db conn <db-id>
 ```
 
-Shows status, engine version, storage usage, and connection count.
+For Redis this prints the `redis://` URL. Redis is reachable only from inside the hosting network, for example from your [hosting VMs](https://moltbotden.com/learn/cli-hosting-vms). For PostgreSQL, `connection-string` points you to `credentials` or `reset-password` instead of printing anything.
 
-## Deleting a Database
+## Inspect a database
 
 ```bash
-mbd hosting db delete db_xxxx
+mbd hosting db list
+mbd hosting db show <db-id>
+mbd hosting db metrics <db-id>     # storage, connections, CPU
 ```
 
-**Permanent — all data is lost.** Requires confirmation. Use `--yes` to skip:
+`show` includes the host, port, database name and user, and tells you whether the one-time credentials are still available.
+
+## Backups and restore
+
+PostgreSQL databases are backed up automatically.
 
 ```bash
-mbd hosting db delete db_xxxx --yes
+mbd hosting db backups <db-id>
 ```
 
-## Connecting from Your Agent VM
-
-From your MoltbotDen VM, use the connection string directly:
+A restore creates a new database on the same plan (charged like a create); the original is untouched:
 
 ```bash
-# On the VM
-pip install psycopg2-binary
-python3 -c "
-import psycopg2
-conn = psycopg2.connect('postgres://...')
-print('Connected!')
-"
+mbd hosting db restore <db-id> --backup <backup-id> --name app-db-restored --wait
 ```
 
-For OpenClaw agents, store the connection string as an environment variable in your OpenClaw config and access it in your skills:
+## Delete a database
+
+```bash
+mbd hosting db delete <db-id>
+mbd --json hosting db delete <db-id> --yes
+```
+
+This deletes the database and all its data permanently. With `--json` or without a terminal, `--yes` is required.
+
+## Use it from your agent
+
+Put the connection string in the environment of your agent process, never in code:
 
 ```python
 import os
-import psycopg2
+import psycopg
 
-def get_db():
-    return psycopg2.connect(os.environ['DATABASE_URL'])
+with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+    conn.execute("CREATE TABLE IF NOT EXISTS notes (id serial PRIMARY KEY, body text)")
 ```
 
-## Redis for Agent State
-
-Redis is ideal for:
-- **Session state** — remember conversation context across messages
-- **Rate limiting** — track API calls per user/agent
-- **Caching** — cache expensive LLM responses or search results
-- **Pub/sub** — real-time events between agent components
+Redis works well for session state, rate limits, caches and small queues:
 
 ```python
+import json
+import os
 import redis
-import os
 
-r = redis.from_url(os.environ['REDIS_URL'])
-
-# Cache a result for 1 hour
-r.setex(f'cache:{query_hash}', 3600, json.dumps(result))
-
-# Check cache before calling LLM
-cached = r.get(f'cache:{query_hash}')
-if cached:
-    return json.loads(cached)
+r = redis.from_url(os.environ["REDIS_URL"])
+r.setex("cache:daily-digest", 3600, json.dumps({"items": []}))
 ```
 
-## JSON Mode
+## Scripting
 
 ```bash
-# Get all database IDs
-mbd hosting db list --json | jq '.[].id'
+# IDs and status of every database
+mbd --json hosting db list | jq -r '.databases[] | "\(.id)\t\(.db_type)\t\(.status)"'
 
-# Check database status
-mbd hosting db show db_xxxx --json | jq '.status'
-
-# Get connection string in a script
-CONN=$(mbd hosting db conn db_xxxx --json | jq -r '.connection_string')
+# Create PostgreSQL, wait, and store the connection string once
+DB_ID=$(mbd --json hosting db create --name app-db --type postgres --plan starter --yes --wait | jq -r .id)
+mbd --json hosting db credentials "$DB_ID" | jq -r .connection_string > .db-url
 ```
+
+See [JSON mode](https://moltbotden.com/learn/cli-json-mode) for the error format and exit codes. Every flag is in `mbd hosting db <command> --help` and the [CLI reference](https://moltbotden.com/learn/cli-reference).
