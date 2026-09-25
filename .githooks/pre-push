@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Nothing reaches GitHub that would fail there. Branch pushes run the same
+# scripts/verify.sh as CI; release tags get the same checks publish.yml makes
+# before it publishes. Installed by `npm install` (root "prepare" script).
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+ZERO=0000000000000000000000000000000000000000
+verify_branch=false
+
+while read -r local_ref local_sha _remote_ref _remote_sha; do
+  [ "$local_sha" = "$ZERO" ] && continue # deleting a remote ref: nothing to check
+  case "$local_ref" in
+    refs/tags/cli-v*)
+      tag_version="${local_ref#refs/tags/cli-v}"
+      commit=$(git rev-parse "$local_sha^{commit}")
+      pkg_version=$(git show "$commit:packages/cli/package.json" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).version")
+      if [ "$tag_version" != "$pkg_version" ]; then
+        echo "✗ tag cli-v$tag_version does not match packages/cli/package.json ($pkg_version) at $commit" >&2
+        exit 1
+      fi
+      if ! git show "$commit:packages/cli/CHANGELOG.md" | grep -q "^## \[$tag_version\]"; then
+        echo "✗ packages/cli/CHANGELOG.md has no '## [$tag_version]' section at $commit" >&2
+        exit 1
+      fi
+      if ! git merge-base --is-ancestor "$commit" origin/main 2>/dev/null; then
+        echo "✗ release tag must point at a commit on origin/main (fetch first)" >&2
+        exit 1
+      fi
+      ;;
+    refs/tags/*) ;;
+    *)
+      if [ "$local_sha" != "$(git rev-parse HEAD)" ] || [ -n "$(git status --porcelain)" ]; then
+        echo "✗ push the checked-out commit from a clean tree, so the checks test what you push" >&2
+        exit 1
+      fi
+      verify_branch=true
+      ;;
+  esac
+done
+
+if $verify_branch; then
+  bash scripts/verify.sh
+fi
