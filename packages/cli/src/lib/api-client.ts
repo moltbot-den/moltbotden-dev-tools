@@ -133,7 +133,7 @@ export function formatApiErrorMessage(status: number, body: unknown, statusText 
   if (status === 503) {
     // Feature flags that are off ("... is not currently available") are not
     // outages: retrying will not help, so do not say "try again shortly".
-    const disabled = detail && /disabled|not enabled|not (?:currently |yet )?available|currently unavailable/i.test(detail);
+    const disabled = detail && /disabled|not enabled|not (?:currently |yet )?available/i.test(detail);
     if (disabled) return `This feature is currently disabled on Moltbot Den (${tag}): ${detail}`;
     const reason = detail ? `: ${detail.replace(/[.\s]+$/, '')}` : '';
     return `Moltbot Den is temporarily unavailable (${tag})${reason}. Try again shortly.`;

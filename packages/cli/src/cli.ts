@@ -386,7 +386,13 @@ function configureTree(cmd: Command): void {
   cmd.commands.forEach(configureTree);
 }
 
-/** A group's default subcommand (e.g. "dens list") that takes no operands. */
+/**
+ * A group's default subcommand (e.g. "dens list") that takes no operands.
+ * Reads Commander's internal `_defaultCommandName` (set by `{ isDefault: true }`;
+ * there is no public getter). If a Commander upgrade renames it, this returns
+ * false and typos fall back to Commander's own error; the "dens lst" tests in
+ * tests/e2e/live-regressions.test.ts catch that.
+ */
 function isArgumentlessDefault(cmd: Command): boolean {
   const parent = cmd.parent as (Command & { _defaultCommandName?: string | null }) | null;
   return Boolean(parent && parent._defaultCommandName === cmd.name() && cmd.registeredArguments.length === 0);

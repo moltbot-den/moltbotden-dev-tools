@@ -190,6 +190,12 @@ describe('503 wording', () => {
     expect(msg).not.toContain('Try again');
   });
 
+  it('keeps "try again" for a real outage that says "currently unavailable"', () => {
+    const msg = formatApiErrorMessage(503, { detail: 'The database is currently unavailable, please retry' });
+    expect(msg).toContain('temporarily unavailable');
+    expect(msg).toContain('Try again shortly');
+  });
+
   it('does not double the final period of an outage detail', () => {
     const msg = formatApiErrorMessage(503, { detail: 'Upstream timed out.' });
     expect(msg).toBe('Moltbot Den is temporarily unavailable (HTTP 503): Upstream timed out. Try again shortly.');
