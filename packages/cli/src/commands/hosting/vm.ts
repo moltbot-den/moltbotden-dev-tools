@@ -12,7 +12,7 @@ import { CliError, reportError, UsageError } from '../../lib/errors.js';
 import { confirmDestructive, isInteractive, requireInteractive } from '../../lib/prompts.js';
 import {
   DEFAULT_VM_IMAGE, DISK_TYPES, VM_IMAGES, VM_SSH_USER, VM_TIER_SPECS, VOLUME_SIZE_GB,
-  type DiskType, type VM, type VMTier,
+  type DiskType, type FirewallRule, type VM, type VMTier,
 } from '../../types/hosting.js';
 import {
   cancelled, collect, examples, hostingAction, money, moreHint, nameProblem, parseIntOption, parseTimeout,
@@ -217,6 +217,68 @@ export function addVMCommands(parent: Command, program: Command): void {
       }));
   }
 
+  // ─── resize ────────────────────────────────────────────────────────────────
+  examples(
+    withWaitOptions(
+      vmCmd
+        .command('resize <vm-id>')
+        .description('Move a VM to another tier (restarts it; upgrades charge the monthly difference)')
+        .requiredOption('--tier <tier>', `New tier: ${TIERS.join('|')} (the disk cannot shrink)`)
+        .option('-y, --yes', 'Skip the confirmation prompt'),
+    ),
+    ['mbd hosting vm resize <vm-id> --tier standard --wait'],
+  ).action(hostingAction(program, 'compute', async (h, vmId: string, opts: { tier: string; yes?: boolean; wait?: boolean; timeout?: string }) => {
+    const tier = validateChoice(opts.tier, TIERS, '--tier');
+    if (opts.wait) parseTimeout(opts.timeout);
+    if (isInteractive() && !opts.yes) {
+      const ok = await clack.confirm({
+        message: `Resize VM ${vmId} to ${tier}? It stops briefly, and an upgrade charges the monthly price difference now.`,
+        initialValue: true,
+      });
+      if (clack.isCancel(ok) || !ok) cancelled();
+    }
+    const result = await withSpinner('Resizing VM', () => h.api.resizeVM(vmId, tier));
+    if (opts.wait) {
+      const vm = await waitForVm(h, vmId, ['running', 'stopped'], `VM ${vmId}`, opts.timeout);
+      if (h.json) return print.json(vm);
+      print.success(`VM ${chalk.cyan(vmId)} is now ${tierLabel(vm.tier)} (${vm.status})`);
+      return;
+    }
+    if (h.json) return print.json(result);
+    print.success(`Resize of VM ${chalk.cyan(vmId)} from ${result.from_tier} to ${result.to_tier} started`);
+    print.hint(`Check progress:  mbd hosting vm show ${vmId}`);
+  }));
+
+  // ─── rebuild ───────────────────────────────────────────────────────────────
+  examples(
+    withWaitOptions(
+      vmCmd
+        .command('rebuild <vm-id>')
+        .description('Reinstall the boot disk from a fresh image (keeps the IP and attached volumes)')
+        .option('--image <image>', `Boot image: ${VM_IMAGES.join('|')}`, DEFAULT_VM_IMAGE)
+        .option('-y, --yes', 'Skip the confirmation prompt (required with --json or without a TTY)'),
+    ),
+    ['mbd hosting vm rebuild <vm-id>', 'mbd hosting vm rebuild <vm-id> --image ubuntu-2404-lts-amd64 --yes --wait'],
+  ).action(hostingAction(program, 'compute', async (h, vmId: string, opts: { image: string; yes?: boolean; wait?: boolean; timeout?: string }) => {
+    const image = validateChoice(opts.image, VM_IMAGES, '--image');
+    if (opts.wait) parseTimeout(opts.timeout);
+    const ok = await confirmDestructive({
+      yes: opts.yes, json: h.json,
+      message: `Rebuild VM ${vmId} from ${image}? Everything on its boot disk is erased (attached volumes are kept).`,
+    });
+    if (!ok) cancelled();
+    const result = await withSpinner('Rebuilding VM', () => h.api.rebuildVM(vmId, image));
+    if (opts.wait) {
+      const vm = await waitForVm(h, vmId, ['running'], `VM ${vmId}`, opts.timeout);
+      if (h.json) return print.json(vm);
+      print.success(`VM ${chalk.cyan(vmId)} rebuilt from ${vm.image}`);
+      return;
+    }
+    if (h.json) return print.json(result);
+    print.success(`Rebuild of VM ${chalk.cyan(vmId)} from ${result.image} started`);
+    print.hint(`Check progress:  mbd hosting vm show ${vmId}`);
+  }));
+
   // ─── delete ────────────────────────────────────────────────────────────────
   examples(
     vmCmd
@@ -412,13 +474,38 @@ function addVolumeCommands(vmCmd: Command, program: Command): void {
 // ─── firewall ────────────────────────────────────────────────────────────────
 
 function addFirewallCommands(vmCmd: Command, program: Command): void {
-  const fw = vmCmd.command('firewall').description('Open ports on a VM');
-  examples(fw, ['mbd hosting vm firewall add <vm-id> --ports 443']);
+  const fw = vmCmd.command('firewall').description('Open ports on your VMs');
+  examples(fw, ['mbd hosting vm firewall list', 'mbd hosting vm firewall add <vm-id> --ports 443']);
+
+  examples(
+    fw.command('list').alias('ls').description('List firewall rules on your VMs'),
+    ['mbd hosting vm firewall list', 'mbd --json hosting vm firewall list'],
+  ).action(hostingAction(program, 'networking', async (h) => {
+    const result = await withSpinner('Loading firewall rules', () => h.api.listFirewallRules());
+    if (h.json) return print.json(result);
+    const rules = result.rules ?? [];
+    if (rules.length === 0) {
+      print.empty('No firewall rules', 'Open a port:  mbd hosting vm firewall add <vm-id> --ports 443');
+      return;
+    }
+    print.table(
+      [
+        { header: 'NAME',      key: 'name' },
+        { header: 'DIRECTION', key: 'direction', format: (v) => String(v ?? '').toLowerCase() },
+        { header: 'ALLOW',     key: 'allowed', format: (v) => (Array.isArray(v)
+          ? (v as FirewallRule['allowed']).map((a) => (a.ports?.length ? `${a.protocol}/${a.ports.join(',')}` : a.protocol)).join(' ')
+          : '–') },
+        { header: 'SOURCES',   key: 'source_ranges', format: (v) => (Array.isArray(v) && v.length ? v.join(', ') : '–') },
+        { header: 'VMS',       key: 'target_tags', format: (v) => (Array.isArray(v) && v.length ? v.join(', ') : '–') },
+      ],
+      rules,
+    );
+  }));
 
   examples(
     fw
       .command('add <vm-id>')
-      .description('Add a firewall rule scoped to one VM (the API cannot list or remove rules yet)')
+      .description('Add a firewall rule scoped to one VM (the API cannot remove rules yet)')
       .requiredOption('--ports <range>', 'Port or range, e.g. 8080 or 3000-3100')
       .option('--protocol <protocol>', 'tcp|udp|icmp', 'tcp')
       .option('--direction <direction>', 'ingress|egress', 'ingress')

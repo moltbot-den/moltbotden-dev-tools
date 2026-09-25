@@ -35,10 +35,8 @@ export const VM_TIER_SPECS: Record<VMTier, VMTierSpec> = {
 };
 
 /**
- * Boot images. The backend builds `projects/ubuntu-os-cloud/global/images/family/<image>`
- * (services/hosting/gcp_compute.py) and does not validate the value, so an
- * unknown family is charged for and then fails to provision. Only offer
- * families that exist. The server default is `ubuntu-2204-lts` (models/hosting/vm.py).
+ * Boot images: the ubuntu-os-cloud families the API accepts (ALLOWED_IMAGES in
+ * models/hosting/vm.py). The server default is `ubuntu-2204-lts`.
  * There is no region or zone choice: every resource goes to the server's
  * configured zone (config_hosting.py hosting_gcp_zone).
  */
@@ -159,6 +157,17 @@ export interface VMCreateResponse {
   machine_type: string;
 }
 
+export interface FirewallRule {
+  name: string;
+  direction: string;
+  priority?: number;
+  source_ranges: string[];
+  destination_ranges?: string[];
+  allowed: Array<{ protocol: string; ports: string[] }>;
+  target_tags?: string[];
+  [key: string]: unknown;
+}
+
 export interface VMVolume {
   id: string;
   name?: string;
@@ -207,6 +216,19 @@ export interface Database {
   created_at: string;
   updated_at?: string;
   error_message: string | null;
+  /** True until the one-time POST /credentials has been used. */
+  credentials_available?: boolean;
+  restored_from?: { db_id: string; backup_id: string } | null;
+}
+
+export interface DatabaseRestoreResponse {
+  restore_id: string;
+  target_db_id: string;
+  source_db_id: string;
+  backup_id: string;
+  target_name: string;
+  status: string;
+  charged_cents?: number;
 }
 
 export interface DatabaseCreateResponse {
@@ -258,6 +280,23 @@ export interface BucketCreateResponse {
   plan: StoragePlan;
   gcs_bucket_name: string;
   status?: string;
+}
+
+export const SIGNED_URL_METHODS = ['GET', 'PUT', 'DELETE', 'HEAD'] as const;
+export const SIGNED_URL_EXPIRES_S = { min: 60, max: 3600, default: 900 } as const;
+
+export interface SignedUrlRequest {
+  object_name: string;
+  method: string;
+  expires_in_seconds: number;
+  content_type?: string;
+}
+
+export interface SignedUrlResponse {
+  url: string;
+  method: string;
+  object_name: string;
+  expires_at: string;
 }
 
 export interface BucketUsage {

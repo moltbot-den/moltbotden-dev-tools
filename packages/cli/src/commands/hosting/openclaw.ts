@@ -30,7 +30,7 @@ function maxLength(value: string | undefined, max: number, flag: string): string
 function checkChannels(channels: string[], plan?: OpenClawPlan): string[] {
   for (const c of channels) validateChoice(c, OPENCLAW_CHANNELS, '--channels');
   if (new Set(channels).size !== channels.length) throw new UsageError('--channels lists a channel twice.');
-  // The API does not enforce the plan limits yet; the plan still promises them.
+  // Same caps the API enforces (routers/hosting/openclaw.py); checked here to fail before any prompt.
   if (plan && channels.length > OPENCLAW_PLAN_SPECS[plan].max_channels) {
     throw new UsageError(`The ${plan} plan allows at most ${OPENCLAW_PLAN_SPECS[plan].max_channels} channels.`);
   }
@@ -294,11 +294,9 @@ export function addOpenClawCommands(parent: Command, program: Command): void {
     ['mbd hosting openclaw logs <instance-id>', 'mbd hosting openclaw logs <instance-id> --limit 500'],
   ).action(hostingAction(program, 'OpenClaw', async (h, id: string, opts: { limit: string }) => {
     const limit = parseIntOption(opts.limit, '--limit', 1, LOGS_API_MAX);
-    // Ask for the maximum and keep the newest lines ourselves, so the result is
-    // the most recent `limit` lines whichever end of the buffer the API returns.
-    const result = await withSpinner('Fetching logs', () => h.api.getOpenClawLogs(id, LOGS_API_MAX));
-    const logs = (result.logs ?? []).slice(-limit);
-    if (h.json) return print.json({ ...result, logs });
+    const result = await withSpinner('Fetching logs', () => h.api.getOpenClawLogs(id, limit));
+    const logs = result.logs ?? [];
+    if (h.json) return print.json(result);
     if (logs.length === 0) return print.empty(result.message ?? 'No log lines yet');
     for (const line of logs) console.log('  ' + chalk.gray(line));
   }));

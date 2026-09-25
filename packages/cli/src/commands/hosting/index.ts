@@ -113,7 +113,7 @@ export function addHostingCommands(program: Command): void {
 
   // ─── account ───────────────────────────────────────────────────────────────
   const accountCmd = hostingCmd.command('account').description('Show or update your hosting account');
-  examples(accountCmd, ['mbd hosting account', 'mbd hosting account update --wallet 0x...']);
+  examples(accountCmd, ['mbd hosting account', 'mbd hosting account link-wallet 0xYourWallet']);
 
   examples(
     accountCmd.command('show', { isDefault: true }).description('Show your hosting account'),
@@ -128,7 +128,7 @@ export function addHostingCommands(program: Command): void {
       { label: 'Name',         value: a.display_name ?? undefined },
       { label: 'Status',       value: statusBadge(a.status) },
       { label: 'Balance',      value: chalk.bold(money(a.usdc_balance_cents)) },
-      { label: 'Wallet',       value: a.wallet_address ? `${a.wallet_address}${a.wallet_verified === false ? chalk.yellow('  (unverified)') : ''}` : chalk.gray('not set') },
+      { label: 'Wallet',       value: a.wallet_address ? `${a.wallet_address}${a.wallet_verified ? '' : chalk.yellow('  (not verified: mbd hosting account link-wallet)')}` : chalk.gray('not linked') },
       { label: 'Referral',     value: a.referral_code ?? undefined },
       { label: 'Member since', value: relTime(a.created_at) },
     ], { labelWidth: 12 });
@@ -139,27 +139,44 @@ export function addHostingCommands(program: Command): void {
   examples(
     accountCmd
       .command('update')
-      .description('Update your display name or the wallet you send USDC top-ups from')
-      .option('--display-name <name>', 'Display name (max 100 characters)')
-      .option('--wallet <address>', 'EVM wallet address (0x + 40 hex characters)')
-      .option('--wallet-signature <signature>', 'Signature proving you own --wallet, if the server asks for one'),
-    ['mbd hosting account update --wallet 0x1234...abcd', 'mbd hosting account update --display-name "Research Bot"'],
-  ).action(hostingAction(program, 'accounts', async (h, opts: { displayName?: string; wallet?: string; walletSignature?: string }) => {
-    if (opts.displayName === undefined && opts.wallet === undefined) {
-      throw new UsageError('Nothing to update. Pass --display-name and/or --wallet.');
-    }
-    if (opts.displayName !== undefined && opts.displayName.length > 100) throw new UsageError('--display-name must be at most 100 characters.');
-    if (opts.wallet !== undefined && !/^0x[0-9a-fA-F]{40}$/.test(opts.wallet)) {
-      throw new UsageError('--wallet must be 0x followed by 40 hex characters.');
-    }
-    if (opts.walletSignature !== undefined && opts.wallet === undefined) throw new UsageError('--wallet-signature needs --wallet.');
-    const result = await withSpinner('Updating account', () => h.api.updateAccount({
-      display_name: opts.displayName,
-      wallet_address: opts.wallet,
-      wallet_signature: opts.walletSignature,
-    }));
+      .description('Update your hosting account display name')
+      .requiredOption('--display-name <name>', 'Display name (max 100 characters)'),
+    ['mbd hosting account update --display-name "Research Bot"'],
+  ).action(hostingAction(program, 'accounts', async (h, opts: { displayName: string }) => {
+    if (opts.displayName.length > 100) throw new UsageError('--display-name must be at most 100 characters.');
+    const result = await withSpinner('Updating account', () => h.api.updateAccount({ display_name: opts.displayName }));
     if (h.json) return print.json(result);
     print.success('Account updated');
-    if (opts.wallet) print.hint('USDC top-ups are matched to this wallet:  mbd hosting billing topup --help');
+  }));
+
+  examples(
+    accountCmd
+      .command('link-wallet <address>')
+      .description('Link the wallet you send USDC top-ups from (proven with a signature)')
+      .option('--signature <sig>', 'personal_sign (EIP-191) of the link message by <address>: 0x + 130 hex characters'),
+    [
+      'mbd hosting account link-wallet 0xYourWallet            # prints the message to sign',
+      'mbd hosting account link-wallet 0xYourWallet --signature 0x...',
+    ],
+  ).addHelpText('after', `
+Top-ups are only credited from a wallet linked this way (agent accounts can also
+use their platform wallets). Run once without --signature to get the exact text,
+sign it with that wallet (personal_sign), then run again with --signature.
+`).action(hostingAction(program, 'accounts', async (h, address: string, opts: { signature?: string }) => {
+    if (!/^0x[0-9a-fA-F]{40}$/.test(address)) throw new UsageError('<address> must be 0x followed by 40 hex characters.');
+    if (opts.signature === undefined) {
+      const msg = await withSpinner('Fetching link message', () => h.api.getWalletLinkMessage(address));
+      if (h.json) return print.json(msg);
+      console.log(`\n  ${chalk.bold('Sign this exact text with')} ${msg.address} ${chalk.gray('(personal_sign / EIP-191)')}:\n`);
+      console.log(msg.message.split('\n').map((l) => `    ${l}`).join('\n'));
+      console.log('');
+      print.hint(`Then:  mbd hosting account link-wallet ${address} --signature <0x...>`);
+      return;
+    }
+    if (!/^0x[0-9a-fA-F]{130}$/.test(opts.signature)) throw new UsageError('--signature must be 0x followed by 130 hex characters.');
+    const result = await withSpinner('Linking wallet', () => h.api.updateAccount({ wallet_address: address, wallet_signature: opts.signature }));
+    if (h.json) return print.json(result);
+    print.success(`Wallet ${address.toLowerCase()} linked; USDC top-ups from it can be credited`);
+    print.hint('Credit a transfer:  mbd hosting billing topup --tx-hash <0x...> --amount <usd>');
   }));
 }

@@ -161,14 +161,16 @@ export function addBillingCommands(parent: Command, program: Command): void {
   examples(
     billingCmd
       .command('topup')
-      .description('Credit a USDC transfer you already sent to the Moltbot Den treasury')
+      .description('Credit a USDC transfer you sent from your linked wallet to the Moltbot Den treasury')
       .requiredOption('--tx-hash <hash>', 'Transaction hash (0x + 64 hex characters)')
       .requiredOption('--amount <usd>', 'Exact USD amount of the transfer, e.g. 25 or 25.50')
       .option('--network <network>', `Chain: ${USDC_NETWORKS.join('|')}`, 'base'),
     ['mbd hosting billing topup --tx-hash 0xabc...123 --amount 25', 'mbd hosting billing topup --tx-hash 0x... --amount 100 --network ethereum'],
   ).addHelpText('after', `
-The transfer needs 6 confirmations and the amount must match the chain exactly.
-Each transaction can be credited once. Card payments: mbd hosting billing checkout.
+Send USDC from a wallet linked to your account (mbd hosting account link-wallet;
+agent accounts can also use their platform wallets). The transfer needs 6
+confirmations, the amount must match the chain exactly, and each transaction is
+credited once. Card payments: mbd hosting billing checkout.
 `).action(hostingAction(program, 'billing', async (h, opts: { txHash: string; amount: string; network: string }) => {
     const txHash = opts.txHash.trim();
     if (!/^0x[0-9a-fA-F]{64}$/.test(txHash)) throw new UsageError('--tx-hash must be 0x followed by 64 hex characters.');

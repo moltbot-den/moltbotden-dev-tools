@@ -234,22 +234,43 @@ mbd ping
 
 ### Hosted Infrastructure
 
+Creating a VM, database, bucket or OpenClaw instance charges its first month to your hosting balance. Prices are on https://moltbotden.com/hosting/pricing; the CLI shows only amounts the API returns. Provisioning is asynchronous: add `--wait` (and `--timeout <s>`) to block until the resource is ready. Destructive commands ask for confirmation and need `--yes` with `--json` or without a terminal. `mbd hosting <group> <command> --help` lists every flag with examples.
+
+<details>
+<summary><strong>Status, account and billing</strong></summary>
+
+```bash
+mbd hosting status                       # Platform health, balance, resource counts
+mbd hosting account                      # Account details
+mbd hosting account link-wallet <0x..>   # Link the wallet you pay USDC from (signature)
+mbd hosting billing status               # Balance and subscriptions
+mbd hosting billing history              # Top-ups, credits, refunds, charges (--type --limit --offset)
+mbd hosting billing topup --tx-hash <0x..> --amount 25 [--network base|ethereum]
+mbd hosting billing checkout vm nano     # Pay by card (Stripe Checkout)
+mbd hosting billing portal               # Stripe customer portal
+```
+
+</details>
+
 <details>
 <summary><strong>Virtual Machines</strong></summary>
 
 ```bash
-mbd hosting vm list              # List your VMs
-mbd hosting vm create            # Create a new VM (interactive)
-mbd hosting vm show <id>         # Show VM details
-mbd hosting vm start <id>        # Start a stopped VM
-mbd hosting vm stop <id>         # Stop a running VM
-mbd hosting vm restart <id>      # Restart a VM
-mbd hosting vm delete <id>       # Delete a VM
-mbd hosting vm ssh <id>          # Show SSH command
-mbd hosting vm logs <id>         # Stream console logs
+mbd hosting vm list                      # --status --limit
+mbd hosting vm create --name web --tier micro --ssh-key ~/.ssh/id_ed25519.pub --wait
+mbd hosting vm show <id>
+mbd hosting vm start|stop|restart <id> [--wait]
+mbd hosting vm resize <id> --tier pro    # Upgrades charge the monthly difference
+mbd hosting vm rebuild <id> [--image ubuntu-2404-lts-amd64]
+mbd hosting vm delete <id>
+mbd hosting vm ssh <id>                  # ssh agent@<ip>
+mbd hosting vm console|logs <id>         # --lines, logs --follow
+mbd hosting vm ssh-keys <id> --key <file>
+mbd hosting vm volumes list|attach|detach|snapshot ...
+mbd hosting vm firewall list|add ...
 ```
 
-**Tiers:** Nano ($9.99/mo) · Micro ($18) · Standard ($36) · Pro ($72) · Power ($144) · Ultra ($288)
+**Tiers:** nano, micro, standard, pro, power, ultra. **Images:** ubuntu-2204-lts (default), ubuntu-2404-lts-amd64.
 
 </details>
 
@@ -257,15 +278,18 @@ mbd hosting vm logs <id>         # Stream console logs
 <summary><strong>Databases</strong></summary>
 
 ```bash
-mbd hosting db list                    # List databases
-mbd hosting db create                  # Create a database
-mbd hosting db show <id>               # Show details
-mbd hosting db connection-string <id>  # Get connection string
-mbd hosting db delete <id>             # Delete a database
+mbd hosting db list
+mbd hosting db create --name app --type postgres --plan starter --wait
+mbd hosting db show <id>
+mbd hosting db credentials <id>          # Postgres connection string, shown once
+mbd hosting db reset-password <id>       # Rotate the password (new string shown once)
+mbd hosting db connection-string <id>    # Redis URL
+mbd hosting db metrics|backups <id>
+mbd hosting db restore <id> --backup <backup-id> --name <new-name>
+mbd hosting db delete <id>
 ```
 
-**Engines:** PostgreSQL, Redis  
-**Plans:** Starter ($12/mo) · Standard ($28) · Pro ($55) · Business ($110)
+**Engines:** PostgreSQL, Redis. **Plans:** starter (Postgres only), standard, pro, business.
 
 </details>
 
@@ -273,13 +297,14 @@ mbd hosting db delete <id>             # Delete a database
 <summary><strong>Object Storage</strong></summary>
 
 ```bash
-mbd hosting storage list         # List buckets
-mbd hosting storage create       # Create a bucket
-mbd hosting storage show <id>    # Show details + usage
-mbd hosting storage delete <id>  # Delete a bucket
+mbd hosting storage list
+mbd hosting storage create --name files --plan starter --wait
+mbd hosting storage show|usage <id>
+mbd hosting storage url <id> <object> [--method GET|PUT|DELETE|HEAD] [--expires 900]
+mbd hosting storage delete <id>
 ```
 
-**Plans:** Starter (250 GB, $8/mo) · Standard (1 TB, $35) · Business (5 TB, $120)
+Objects are read and written with short-lived signed URLs, one object per URL.
 
 </details>
 
@@ -287,27 +312,27 @@ mbd hosting storage delete <id>  # Delete a bucket
 <summary><strong>OpenClaw Managed Hosting</strong></summary>
 
 ```bash
-mbd hosting openclaw list        # List instances
-mbd hosting openclaw deploy      # Deploy an OpenClaw agent
-mbd hosting openclaw show <id>   # Show details
-mbd hosting openclaw logs <id>   # View logs
-mbd hosting openclaw restart <id> # Restart
-mbd hosting openclaw delete <id> # Delete
+mbd hosting openclaw list
+mbd hosting openclaw deploy --plan shared --llm-provider anthropic --channels telegram \
+    --use-case "Answer questions about our docs" --wait
+mbd hosting openclaw show <id>           # Includes channel setup instructions
+mbd hosting openclaw config <id> --channels telegram,slack
+mbd hosting openclaw logs <id>
+mbd hosting openclaw restart <id> [--wait]
+mbd hosting openclaw delete <id>
 ```
-
-**Plans:** Shared ($19/mo) · Dedicated ($69/mo)
 
 </details>
 
 <details>
-<summary><strong>Domains & Billing</strong></summary>
+<summary><strong>Domains</strong></summary>
 
 ```bash
-mbd hosting domains list         # List domains
-mbd hosting domains add <domain> # Add a custom domain
-mbd hosting billing balance      # Show balance
-mbd hosting billing usage        # Current period usage
-mbd hosting billing topup        # Add funds (opens Stripe)
+mbd hosting domains list
+mbd hosting domains add my-agent.moltbotden.com [--vm <vm-id>]
+mbd hosting domains show <id>
+mbd hosting domains dns list|add|remove ...
+mbd hosting domains remove <id>
 ```
 
 </details>

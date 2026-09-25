@@ -160,6 +160,9 @@ describe('destructive commands never run unconfirmed', () => {
     [['hosting', 'domains', 'remove', 'd-1']],
     [['hosting', 'domains', 'dns', 'remove', 'd-1', 'r-1']],
     [['hosting', 'vm', 'volumes', 'detach', 'vm-1', 'vol-1']],
+    [['hosting', 'vm', 'rebuild', 'vm-1']],
+    [['hosting', 'vm', 'stop', 'vm-1']],
+    [['hosting', 'vm', 'ssh-keys', 'vm-1', '--key', 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl x']],
   ])('%j with --json but no --yes refuses (exit 2) and sends nothing', async (args) => {
     const { code, stdout, stderr } = await mbd('--json', ...args);
     expect(code).toBe(2);
@@ -259,5 +262,72 @@ describe('read commands use the real paths and fields', () => {
     expect(out.balance_cents).toBe(0);
     expect(out.resources.vms).toEqual({ count: 1, running: 1 });
     expect(out.resources.databases).toEqual({ error: "Hosting databases isn't enabled on this server yet." });
+  });
+});
+
+describe('credentials, signed URLs and wallet linking', () => {
+  it('db credentials prints the one-time connection string', async () => {
+    api.on('POST', '/v1/hosting/databases/db-1/credentials', { status: 200, body: { connection_string: 'postgresql://u:p@h:5432/d' } });
+    const { code, stdout } = await mbd('--json', 'hosting', 'db', 'credentials', 'db-1');
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout)).toEqual({ connection_string: 'postgresql://u:p@h:5432/d' });
+  });
+
+  it('db credentials after the one-time reveal points to reset-password instead of a bare 410', async () => {
+    api.on('POST', '/v1/hosting/databases/db-1/credentials', { status: 410, body: { detail: 'Initial credentials were already shown.' } });
+    const { code, stderr } = await mbd('--json', 'hosting', 'db', 'credentials', 'db-1');
+    expect(code).toBe(1);
+    const e = envelope(stderr);
+    expect(e.message).toContain('already shown once');
+    expect(e.hint).toContain('mbd hosting db reset-password db-1');
+  });
+
+  it('db restore sends the backup id and new name, and rejects a non-numeric backup id first', async () => {
+    const bad = await mbd('--json', 'hosting', 'db', 'restore', 'db-1', '--backup', 'abc', '--name', 'copy');
+    expect(bad.code).toBe(2);
+    expect(api.requests).toHaveLength(0);
+    api.on('POST', '/v1/hosting/databases/db-1/restore', { status: 200, body: { restore_id: 'db-2', target_db_id: 'db-2', source_db_id: 'db-1', backup_id: '42', target_name: 'copy', status: 'pending' } });
+    const { code } = await mbd('--json', 'hosting', 'db', 'restore', 'db-1', '--backup', '42', '--name', 'copy');
+    expect(code).toBe(0);
+    expect(bodyOf('POST', '/v1/hosting/databases/db-1/restore')).toEqual({ backup_id: '42', target_name: 'copy' });
+  });
+
+  it('storage url requests a signed URL for one object with the chosen method and lifetime', async () => {
+    api.on('POST', '/v1/hosting/storage/buckets/b-1/signed-url', { status: 200, body: { url: 'https://storage.googleapis.com/x?sig', method: 'PUT', object_name: 'a.txt', expires_at: '2026-09-25T00:10:00Z' } });
+    const { code, stdout } = await mbd('--json', 'hosting', 'storage', 'url', 'b-1', 'a.txt', '--method', 'put', '--expires', '600');
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout)).toMatchObject({ url: 'https://storage.googleapis.com/x?sig' });
+    expect(bodyOf('POST', '/v1/hosting/storage/buckets/b-1/signed-url')).toEqual({ object_name: 'a.txt', method: 'PUT', expires_in_seconds: 600 });
+  });
+
+  it('storage url refuses a lifetime over the 1 hour the API allows', async () => {
+    const { code } = await mbd('--json', 'hosting', 'storage', 'url', 'b-1', 'a.txt', '--expires', '7200');
+    expect(code).toBe(2);
+    expect(api.requests).toHaveLength(0);
+  });
+
+  it('account link-wallet without --signature returns the text to sign and changes nothing', async () => {
+    const addr = `0x${'a'.repeat(40)}`;
+    api.on('GET', '/v1/hosting/accounts/me/wallet-link-message', { status: 200, body: { address: addr, message: 'Link wallet to account acc-1' } });
+    const { code, stdout } = await mbd('--json', 'hosting', 'account', 'link-wallet', addr);
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout)).toEqual({ address: addr, message: 'Link wallet to account acc-1' });
+    expect(api.requests.some((r) => r.method === 'PATCH')).toBe(false);
+  });
+
+  it('account link-wallet --signature sends the address with its proof', async () => {
+    const addr = `0x${'a'.repeat(40)}`;
+    const sig = `0x${'b'.repeat(130)}`;
+    api.on('PATCH', '/v1/hosting/accounts/me', { status: 200, body: { status: 'updated' } });
+    const { code } = await mbd('--json', 'hosting', 'account', 'link-wallet', addr, '--signature', sig);
+    expect(code).toBe(0);
+    expect(bodyOf('PATCH', '/v1/hosting/accounts/me')).toEqual({ wallet_address: addr, wallet_signature: sig });
+  });
+
+  it('vm resize sends the new tier', async () => {
+    api.on('POST', '/v1/hosting/compute/vms/vm-1/resize', { status: 200, body: { status: 'resizing', from_tier: 'nano', to_tier: 'pro', new_machine_type: 'e2-standard-2' } });
+    const { code } = await mbd('--json', 'hosting', 'vm', 'resize', 'vm-1', '--tier', 'pro');
+    expect(code).toBe(0);
+    expect(bodyOf('POST', '/v1/hosting/compute/vms/vm-1/resize')).toEqual({ tier: 'pro' });
   });
 });

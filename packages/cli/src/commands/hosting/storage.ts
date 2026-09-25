@@ -8,7 +8,10 @@ import * as clack from '@clack/prompts';
 import chalk from 'chalk';
 import { print, statusBadge } from '../../lib/output.js';
 import { confirmDestructive, isInteractive, requireInteractive } from '../../lib/prompts.js';
-import { STORAGE_PLAN_SPECS, type Bucket, type BucketUsage, type StoragePlan } from '../../types/hosting.js';
+import {
+  SIGNED_URL_EXPIRES_S, SIGNED_URL_METHODS, STORAGE_PLAN_SPECS, type Bucket, type BucketUsage, type StoragePlan,
+} from '../../types/hosting.js';
+import { UsageError } from '../../lib/errors.js';
 import {
   cancelled, examples, formatBytes, hostingAction, money, moreHint, nameProblem, parseIntOption, parseTimeout,
   relTime, validateChoice, validateName, waitWithSpinner, withSpinner, withWaitOptions,
@@ -31,7 +34,7 @@ function printUsage(u: Pick<BucketUsage, 'storage_bytes' | 'max_storage_bytes' |
 
 export function addStorageCommands(parent: Command, program: Command): void {
   const storageCmd = parent.command('storage').description('Manage object storage buckets');
-  examples(storageCmd, ['mbd hosting storage list', 'mbd hosting storage create --name agent-files --plan starter']);
+  examples(storageCmd, ['mbd hosting storage list', 'mbd hosting storage create --name agent-files --plan starter --wait', 'mbd hosting storage url <bucket-id> path/to/file.txt']);
 
   // ─── list ──────────────────────────────────────────────────────────────────
   examples(
@@ -121,12 +124,13 @@ export function addStorageCommands(parent: Command, program: Command): void {
         showCommand: `mbd hosting storage show ${created.id}`,
       });
       if (h.json) return print.json(bucket);
-      print.success(`Bucket "${chalk.cyan(bucket.name)}" is active (${bucket.gcs_bucket_name})`);
+      print.success(`Bucket "${chalk.cyan(bucket.name)}" is active`);
+      print.hint(`Read or write objects with signed URLs:  mbd hosting storage url ${bucket.id} <object>`);
       return;
     }
     if (h.json) return print.json(created);
-    print.success(`Bucket "${chalk.cyan(created.name)}" created (${created.id})`);
-    print.hint(`Details:  mbd hosting storage show ${created.id}`);
+    print.success(`Bucket "${chalk.cyan(created.name)}" queued for provisioning (${created.id})`);
+    print.hint(`Watch it:  mbd hosting storage show ${created.id}   (buckets are usable once active)`);
   }));
 
   // ─── show ──────────────────────────────────────────────────────────────────
@@ -156,6 +160,31 @@ export function addStorageCommands(parent: Command, program: Command): void {
     const u = await withSpinner('Fetching usage', () => h.api.getBucketUsage(bucketId));
     if (h.json) return print.json(u);
     printUsage(u);
+  }));
+
+  // ─── url ───────────────────────────────────────────────────────────────────
+  examples(
+    storageCmd
+      .command('url <bucket-id> <object>')
+      .alias('signed-url')
+      .description('Get a short-lived signed URL to read or write one object')
+      .option('--method <method>', `HTTP method the URL allows: ${SIGNED_URL_METHODS.join('|')}`, 'GET')
+      .option('--expires <seconds>', `Lifetime in seconds (${SIGNED_URL_EXPIRES_S.min}-${SIGNED_URL_EXPIRES_S.max})`, String(SIGNED_URL_EXPIRES_S.default))
+      .option('--content-type <type>', 'Content-Type the upload must use (PUT only)'),
+    [
+      'curl -o report.pdf "$(mbd --json hosting storage url <bucket-id> reports/q3.pdf | jq -r .url)"',
+      'curl -X PUT -T data.json -H "Content-Type: application/json" \\\n      "$(mbd --json hosting storage url <bucket-id> data.json --method PUT --content-type application/json | jq -r .url)"',
+    ],
+  ).action(hostingAction(program, 'storage', async (h, bucketId: string, object: string, opts: { method: string; expires: string; contentType?: string }) => {
+    const method = validateChoice(opts.method.toUpperCase(), SIGNED_URL_METHODS, '--method');
+    const expires = parseIntOption(opts.expires, '--expires', SIGNED_URL_EXPIRES_S.min, SIGNED_URL_EXPIRES_S.max);
+    if (opts.contentType && method !== 'PUT') throw new UsageError('--content-type only applies to --method PUT.');
+    const result = await withSpinner('Signing URL', () => h.api.createSignedUrl(bucketId, {
+      object_name: object, method, expires_in_seconds: expires, content_type: opts.contentType,
+    }));
+    if (h.json) return print.json(result);
+    console.log(`\n  ${chalk.cyan(result.url)}\n`);
+    print.hint(`${result.method} ${result.object_name}; expires ${new Date(result.expires_at).toLocaleString()}. Anyone with this URL can use it until then.`);
   }));
 
   // ─── delete ────────────────────────────────────────────────────────────────

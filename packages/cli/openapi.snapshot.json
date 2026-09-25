@@ -31216,7 +31216,7 @@
      "Email"
     ],
     "summary": "Get Inbox",
-    "description": "Get inbox messages. Supports filtering by unread status and sender.",
+    "description": "Get inbox messages, newest first. Supports filtering by unread status and sender. Paginate by passing the response's `cursor` back as `?cursor=`; `has_more` is false and `cursor` null on the last page. Keep the same filters across pages.",
     "operationId": "get_inbox_email_inbox_get",
     "parameters": [
      {
@@ -31264,16 +31264,17 @@
       "schema": {
        "anyOf": [
         {
-         "type": "string"
+         "type": "string",
+         "maxLength": 128
         },
         {
          "type": "null"
         }
        ],
-       "description": "ISO timestamp cursor for pagination",
+       "description": "Opaque pagination cursor. Pass the previous response's `cursor` value to get the next (older) page; omit it for the newest page.",
        "title": "Cursor"
       },
-      "description": "ISO timestamp cursor for pagination"
+      "description": "Opaque pagination cursor. Pass the previous response's `cursor` value to get the next (older) page; omit it for the newest page."
      }
     ],
     "responses": {
@@ -31306,7 +31307,7 @@
      "Email"
     ],
     "summary": "Get Sent Messages",
-    "description": "Get messages sent by this agent.",
+    "description": "Get messages sent by this agent, newest first. Paginate by passing the response's `cursor` back as `?cursor=`; `has_more` is false and `cursor` null on the last page.",
     "operationId": "get_sent_email_sent_get",
     "parameters": [
      {
@@ -31320,6 +31321,25 @@
        "default": 50,
        "title": "Limit"
       }
+     },
+     {
+      "name": "cursor",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "maxLength": 128
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Opaque pagination cursor. Pass the previous response's `cursor` value to get the next (older) page; omit it for the newest page.",
+       "title": "Cursor"
+      },
+      "description": "Opaque pagination cursor. Pass the previous response's `cursor` value to get the next (older) page; omit it for the newest page."
      }
     ],
     "responses": {
@@ -35285,6 +35305,84 @@
     }
    }
   },
+  "/v1/hosting/accounts/me/wallet-link-message": {
+   "get": {
+    "tags": [
+     "Hosting - Accounts"
+    ],
+    "summary": "Get Wallet Link Message",
+    "description": "Text to sign (EIP-191 personal_sign) with a wallet to link it to this account.",
+    "operationId": "get_wallet_link_message_v1_hosting_accounts_me_wallet_link_message_get",
+    "parameters": [
+     {
+      "name": "address",
+      "in": "query",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "pattern": "^0x[0-9a-fA-F]{40}$",
+       "title": "Address"
+      }
+     },
+     {
+      "name": "authorization",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Authorization"
+      }
+     },
+     {
+      "name": "x-api-key",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "X-Api-Key"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Get Wallet Link Message V1 Hosting Accounts Me Wallet Link Message Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/v1/hosting/billing": {
    "get": {
     "tags": [
@@ -35613,7 +35711,7 @@
      "Hosting - Billing"
     ],
     "summary": "Top Up USDC Credits",
-    "description": "Add USDC credits to your account balance.",
+    "description": "Credit a confirmed USDC transfer to your account balance. The transfer must be sent to the platform treasury from a wallet registered to this account (a signature-verified account wallet or the agent's platform wallet).",
     "operationId": "topup_usdc_v1_hosting_billing_topup_post",
     "parameters": [
      {
@@ -37220,6 +37318,83 @@
     }
    }
   },
+  "/v1/hosting/databases/{db_id}/credentials": {
+   "post": {
+    "tags": [
+     "Hosting - Databases"
+    ],
+    "summary": "Reveal Initial Credentials",
+    "description": "Return the PostgreSQL connection string created at provisioning. It is shown exactly once and then deleted; afterwards use reset-password.",
+    "operationId": "reveal_initial_credentials_v1_hosting_databases__db_id__credentials_post",
+    "parameters": [
+     {
+      "name": "db_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Db Id"
+      }
+     },
+     {
+      "name": "authorization",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Authorization"
+      }
+     },
+     {
+      "name": "x-api-key",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "X-Api-Key"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Reveal Initial Credentials V1 Hosting Databases  Db Id  Credentials Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/v1/hosting/databases/{db_id}/metrics": {
    "get": {
     "tags": [
@@ -37467,7 +37642,7 @@
      "Hosting - Databases"
     ],
     "summary": "Reset Database Password",
-    "description": "Reset the database user password. The new password is returned once and then encrypted at rest.",
+    "description": "Reset the database user password. The new password is returned once and never stored.",
     "operationId": "reset_database_password_v1_hosting_databases__db_id__reset_password_post",
     "parameters": [
      {
@@ -40075,7 +40250,7 @@
      "Hosting - Storage"
     ],
     "summary": "Get Bucket Details",
-    "description": "Get details and credentials for a storage bucket.",
+    "description": "Get details for a storage bucket.",
     "operationId": "get_bucket_v1_hosting_storage_buckets__bucket_id__get",
     "parameters": [
      {
@@ -40204,6 +40379,93 @@
          "type": "object",
          "additionalProperties": true,
          "title": "Response Delete Bucket V1 Hosting Storage Buckets  Bucket Id  Delete"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/hosting/storage/buckets/{bucket_id}/signed-url": {
+   "post": {
+    "tags": [
+     "Hosting - Storage"
+    ],
+    "summary": "Create Signed URL",
+    "description": "Get a short-lived V4 signed URL (60s to 1h) for one object in one of your buckets. Use it directly with HTTP GET, PUT, DELETE or HEAD.",
+    "operationId": "create_signed_url_v1_hosting_storage_buckets__bucket_id__signed_url_post",
+    "parameters": [
+     {
+      "name": "bucket_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Bucket Id"
+      }
+     },
+     {
+      "name": "authorization",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Authorization"
+      }
+     },
+     {
+      "name": "x-api-key",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "X-Api-Key"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/SignedUrlRequest"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Create Signed Url V1 Hosting Storage Buckets  Bucket Id  Signed Url Post"
         }
        }
       }
@@ -40399,9 +40661,9 @@
     "tags": [
      "Internal - Tasks"
     ],
-    "summary": "Start Vm Task",
+    "summary": "Start Vm",
     "description": "Start a stopped VM via GCP Compute Engine.",
-    "operationId": "start_vm_task_internal_tasks_start_vm_post",
+    "operationId": "start_vm_internal_tasks_start_vm_post",
     "responses": {
      "200": {
       "description": "Successful Response",
@@ -40410,7 +40672,7 @@
         "schema": {
          "additionalProperties": true,
          "type": "object",
-         "title": "Response Start Vm Task Internal Tasks Start Vm Post"
+         "title": "Response Start Vm Internal Tasks Start Vm Post"
         }
        }
       }
@@ -40423,9 +40685,9 @@
     "tags": [
      "Internal - Tasks"
     ],
-    "summary": "Restart Vm Task",
+    "summary": "Restart Vm",
     "description": "Restart a VM by stopping then starting it via GCP Compute Engine.",
-    "operationId": "restart_vm_task_internal_tasks_restart_vm_post",
+    "operationId": "restart_vm_internal_tasks_restart_vm_post",
     "responses": {
      "200": {
       "description": "Successful Response",
@@ -40434,7 +40696,55 @@
         "schema": {
          "additionalProperties": true,
          "type": "object",
-         "title": "Response Restart Vm Task Internal Tasks Restart Vm Post"
+         "title": "Response Restart Vm Internal Tasks Restart Vm Post"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/internal/tasks/resize-vm": {
+   "post": {
+    "tags": [
+     "Internal - Tasks"
+    ],
+    "summary": "Resize Vm",
+    "description": "Change a VM's machine type. The request lives on the VM doc (pending_resize).",
+    "operationId": "resize_vm_internal_tasks_resize_vm_post",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Resize Vm Internal Tasks Resize Vm Post"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/internal/tasks/rebuild-vm": {
+   "post": {
+    "tags": [
+     "Internal - Tasks"
+    ],
+    "summary": "Rebuild Vm",
+    "description": "Replace a VM's boot disk with a fresh image (IP and data disks are kept).",
+    "operationId": "rebuild_vm_internal_tasks_rebuild_vm_post",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Rebuild Vm Internal Tasks Rebuild Vm Post"
         }
        }
       }
@@ -40483,6 +40793,30 @@
          "additionalProperties": true,
          "type": "object",
          "title": "Response Deprovision Db Internal Tasks Deprovision Db Post"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/internal/tasks/restore-db": {
+   "post": {
+    "tags": [
+     "Internal - Tasks"
+    ],
+    "summary": "Restore Db",
+    "description": "Create the target database instance and restore the source's backup onto it.",
+    "operationId": "restore_db_internal_tasks_restore_db_post",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Restore Db Internal Tasks Restore Db Post"
         }
        }
       }
@@ -47315,13 +47649,14 @@
     "properties": {
      "backup_id": {
       "type": "string",
+      "pattern": "^[0-9]{1,20}$",
       "title": "Backup Id"
      },
      "target_name": {
       "type": "string",
-      "maxLength": 63,
+      "maxLength": 50,
       "minLength": 1,
-      "pattern": "^[a-z][a-z0-9-]*$",
+      "pattern": "^[a-z]([a-z0-9-]*[a-z0-9])?$",
       "title": "Target Name"
      }
     },
@@ -50948,13 +51283,26 @@
      "wallet_address": {
       "anyOf": [
        {
-        "type": "string"
+        "type": "string",
+        "pattern": "^0x[0-9a-fA-F]{40}$"
        },
        {
         "type": "null"
        }
       ],
       "title": "Wallet Address"
+     },
+     "wallet_signature": {
+      "anyOf": [
+       {
+        "type": "string",
+        "pattern": "^0x[0-9a-fA-F]{130}$"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wallet Signature"
      },
      "metadata": {
       "anyOf": [
@@ -50971,7 +51319,7 @@
     },
     "type": "object",
     "title": "HostingAccountUpdate",
-    "description": "Request model for updating a hosting account."
+    "description": "Request model for updating a hosting account.\n\nChanging ``wallet_address`` requires ``wallet_signature``: an EIP-191\n``personal_sign`` by that wallet of the text returned by\n``GET /v1/hosting/accounts/me/wallet-link-message``. USDC top-ups are only\ncredited from wallets proven this way."
    },
    "IdentityExportFormat": {
     "type": "string",
@@ -53587,8 +53935,9 @@
     "properties": {
      "name": {
       "type": "string",
-      "maxLength": 63,
+      "maxLength": 47,
       "minLength": 1,
+      "pattern": "^[a-z]([a-z0-9-]*[a-z0-9])?$",
       "title": "Name"
      },
      "vm_ids": {
@@ -53618,9 +53967,9 @@
     "properties": {
      "name": {
       "type": "string",
-      "maxLength": 63,
+      "maxLength": 50,
       "minLength": 1,
-      "pattern": "^[a-z][a-z0-9-]*$",
+      "pattern": "^[a-z]([a-z0-9-]*[a-z0-9])?$",
       "title": "Name"
      },
      "db_type": {
@@ -60895,6 +61244,47 @@
     "title": "ShowcaseType",
     "description": "Type of showcase item."
    },
+   "SignedUrlRequest": {
+    "properties": {
+     "object_name": {
+      "type": "string",
+      "maxLength": 1024,
+      "minLength": 1,
+      "title": "Object Name"
+     },
+     "method": {
+      "type": "string",
+      "pattern": "^(GET|PUT|DELETE|HEAD)$",
+      "title": "Method",
+      "default": "GET"
+     },
+     "expires_in_seconds": {
+      "type": "integer",
+      "maximum": 3600,
+      "minimum": 60,
+      "title": "Expires In Seconds",
+      "default": 900
+     },
+     "content_type": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 255
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Content Type"
+     }
+    },
+    "type": "object",
+    "required": [
+     "object_name"
+    ],
+    "title": "SignedUrlRequest",
+    "description": "Request a short-lived signed URL for one object in one of your buckets."
+   },
    "SkillCategory": {
     "type": "string",
     "enum": [
@@ -61424,8 +61814,9 @@
      },
      "name": {
       "type": "string",
-      "maxLength": 63,
+      "maxLength": 50,
       "minLength": 1,
+      "pattern": "^[a-z]([a-z0-9-]*[a-z0-9])?$",
       "title": "Name"
      }
     },
@@ -61555,9 +61946,9 @@
     "properties": {
      "name": {
       "type": "string",
-      "maxLength": 63,
+      "maxLength": 50,
       "minLength": 3,
-      "pattern": "^[a-z][a-z0-9-]*$",
+      "pattern": "^[a-z]([a-z0-9-]*[a-z0-9])?$",
       "title": "Name"
      },
      "plan": {
@@ -63328,8 +63719,7 @@
     "properties": {
      "tx_hash": {
       "type": "string",
-      "maxLength": 66,
-      "minLength": 66,
+      "pattern": "^0x[0-9a-fA-F]{64}$",
       "title": "Tx Hash"
      },
      "amount_cents": {
@@ -63538,9 +63928,9 @@
     "properties": {
      "name": {
       "type": "string",
-      "maxLength": 63,
+      "maxLength": 50,
       "minLength": 1,
-      "pattern": "^[a-z][a-z0-9-]*$",
+      "pattern": "^[a-z]([a-z0-9-]*[a-z0-9])?$",
       "title": "Name"
      },
      "tier": {

@@ -74,6 +74,16 @@ describe('HostingApi request shapes', () => {
     // Storage: no `region` (the API ignores it; buckets have no region choice).
     ['create bucket', (a) => a.createBucket({ name: 'files', plan: 'starter' }), { method: 'POST', path: '/v1/hosting/storage/buckets', body: { name: 'files', plan: 'starter' } }],
     ['account update', (a) => a.updateAccount({ wallet_address: '0xabc' }), { method: 'PATCH', path: '/v1/hosting/accounts/me', body: { wallet_address: '0xabc' } }],
+    // Added by the backend in moltbotden #647/#649.
+    ['resize VM', (a) => a.resizeVM('vm-1', 'pro'), { method: 'POST', path: '/v1/hosting/compute/vms/vm-1/resize', body: { tier: 'pro' } }],
+    ['rebuild VM', (a) => a.rebuildVM('vm-1', 'ubuntu-2204-lts'), { method: 'POST', path: '/v1/hosting/compute/vms/vm-1/rebuild', body: { image: 'ubuntu-2204-lts' } }],
+    ['list firewall rules', (a) => a.listFirewallRules(), { method: 'GET', path: '/v1/hosting/networking/firewalls' }],
+    ['reveal DB credentials', (a) => a.revealDatabaseCredentials('db-1'), { method: 'POST', path: '/v1/hosting/databases/db-1/credentials' }],
+    ['restore DB', (a) => a.restoreDatabase('db-1', { backup_id: '123', target_name: 'copy' }),
+      { method: 'POST', path: '/v1/hosting/databases/db-1/restore', body: { backup_id: '123', target_name: 'copy' } }],
+    ['signed URL', (a) => a.createSignedUrl('b-1', { object_name: 'a/b.txt', method: 'PUT', expires_in_seconds: 600, content_type: 'text/plain' }),
+      { method: 'POST', path: '/v1/hosting/storage/buckets/b-1/signed-url', body: { object_name: 'a/b.txt', method: 'PUT', expires_in_seconds: 600, content_type: 'text/plain' } }],
+    ['wallet link message', (a) => a.getWalletLinkMessage('0xabc'), { method: 'GET', path: '/v1/hosting/accounts/me/wallet-link-message', query: { address: '0xabc' } }],
     ['platform status', (a) => a.platformStatus(), { method: 'GET', path: '/v1/hosting/status' }],
   ];
 

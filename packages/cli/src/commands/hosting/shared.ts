@@ -152,16 +152,17 @@ export function cancelled(): never {
 // ─── Input validation ────────────────────────────────────────────────────────
 
 /**
- * Backend names match ^[a-z][a-z0-9-]*$ (models/hosting/*.py). The GCE/GCS
- * name is `mbd-<8 chars>-<name>` and capped at 63, so anything over 50 is
- * accepted by the API and then fails after the balance was charged.
+ * Resource names as the API validates them (models/hosting/*.py): 1-50
+ * characters (the cloud name is `mbd-<8 hex>-<name>`, capped at 63),
+ * lowercase letters, digits and hyphens, starting with a letter and not
+ * ending with a hyphen. Checked here so the user hears about it before any prompt.
  */
 export const NAME_MAX = 50;
 
 export function nameProblem(value: string, min = 1): string | undefined {
   if (value.length < min) return `Must be at least ${min} character${min === 1 ? '' : 's'}`;
   if (value.length > NAME_MAX) return `Must be at most ${NAME_MAX} characters`;
-  if (!/^[a-z][a-z0-9-]*$/.test(value)) return 'Use lowercase letters, digits and hyphens, starting with a letter';
+  if (!/^[a-z]([a-z0-9-]*[a-z0-9])?$/.test(value)) return 'Use lowercase letters, digits and hyphens; start with a letter and do not end with a hyphen';
   return undefined;
 }
 

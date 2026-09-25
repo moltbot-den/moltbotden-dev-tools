@@ -10,7 +10,7 @@ import type { MoltbotDenClient, QueryValue } from '../api-client.js';
 import type {
   BillingHistory, BillingStatus, Bucket, BucketCreateResponse, BucketUsage,
   CheckoutSessionRequest, Database, DatabaseBackup, DatabaseCreateResponse, DatabaseMetrics,
-  DatabasePlan, DatabaseType, DiskType, DnsRecord, DnsRecordCreateRequest, Domain,
+  DatabasePlan, DatabaseRestoreResponse, DatabaseType, DiskType, FirewallRule, SignedUrlRequest, SignedUrlResponse, VMTier, DnsRecord, DnsRecordCreateRequest, Domain,
   DomainCreateResponse, DomainType, FirewallRuleRequest, HostingAccount, HostingAccountUpdate,
   OpenClawCreateRequest, OpenClawCreateResponse, OpenClawInstance, OpenClawLogs,
   OpenClawUpdateRequest, PlatformStatus, StoragePlan, UsdcTopupRequest, UsdcTopupResponse,
@@ -35,6 +35,11 @@ export class HostingApi {
 
   updateAccount(body: HostingAccountUpdate): Promise<{ status: string }> {
     return this.client.request('PATCH', '/v1/hosting/accounts/me', { body });
+  }
+
+  /** Text the wallet must personal_sign (EIP-191) before PATCH /accounts/me links it. */
+  getWalletLinkMessage(address: string): Promise<{ address: string; message: string }> {
+    return this.client.request('GET', '/v1/hosting/accounts/me/wallet-link-message', { query: { address } });
   }
 
   // ─── VMs ──────────────────────────────────────────────────────────────────
@@ -72,6 +77,16 @@ export class HostingApi {
     return this.client.request('GET', `/v1/hosting/compute/vms/${seg(vmId)}/console`);
   }
 
+  /** Charges the monthly price difference on upgrade; the VM restarts on the new machine type. */
+  resizeVM(vmId: string, tier: VMTier): Promise<{ status: string; from_tier: string; to_tier: string; new_machine_type: string }> {
+    return this.client.request('POST', `/v1/hosting/compute/vms/${seg(vmId)}/resize`, { body: { tier } });
+  }
+
+  /** Reinstalls the boot disk from a fresh image; data on the boot disk is lost. */
+  rebuildVM(vmId: string, image: string): Promise<{ status: string; image: string }> {
+    return this.client.request('POST', `/v1/hosting/compute/vms/${seg(vmId)}/rebuild`, { body: { image } });
+  }
+
   /** Replaces every SSH key on a running VM. */
   setVMSshKeys(vmId: string, keys: string[]): Promise<{ status: string; key_count: number }> {
     return this.client.request('PUT', `/v1/hosting/compute/vms/${seg(vmId)}/ssh-keys`, {
@@ -100,6 +115,10 @@ export class HostingApi {
     return this.client.request('POST', '/v1/hosting/networking/firewalls', { body });
   }
 
+  listFirewallRules(): Promise<{ rules: FirewallRule[] }> {
+    return this.client.request('GET', '/v1/hosting/networking/firewalls');
+  }
+
   // ─── Databases ────────────────────────────────────────────────────────────
 
   listDatabases(opts: { limit?: number } = {}): Promise<{ databases: Database[]; count: number }> {
@@ -126,7 +145,17 @@ export class HostingApi {
     return this.client.request('GET', `/v1/hosting/databases/${seg(dbId)}/backups`);
   }
 
-  /** Rotates the Postgres password; the only call that returns it (once). */
+  /** The connection string created at provisioning. Returned once, then deleted (410 afterwards). */
+  revealDatabaseCredentials(dbId: string): Promise<{ connection_string: string }> {
+    return this.client.request('POST', `/v1/hosting/databases/${seg(dbId)}/credentials`);
+  }
+
+  /** Restores a backup into a NEW database of the same plan (charged like a create). */
+  restoreDatabase(dbId: string, body: { backup_id: string; target_name: string }): Promise<DatabaseRestoreResponse> {
+    return this.client.request('POST', `/v1/hosting/databases/${seg(dbId)}/restore`, { body });
+  }
+
+  /** Rotates the Postgres password and returns it once; nothing is stored. */
   resetDatabasePassword(dbId: string): Promise<{ password: string; connection_string: string }> {
     return this.client.request('POST', `/v1/hosting/databases/${seg(dbId)}/reset-password`);
   }
@@ -147,6 +176,11 @@ export class HostingApi {
 
   getBucketUsage(bucketId: string): Promise<BucketUsage> {
     return this.client.request('GET', `/v1/hosting/storage/buckets/${seg(bucketId)}/usage`);
+  }
+
+  /** A V4 signed URL for one object (60s to 1h). */
+  createSignedUrl(bucketId: string, body: SignedUrlRequest): Promise<SignedUrlResponse> {
+    return this.client.request('POST', `/v1/hosting/storage/buckets/${seg(bucketId)}/signed-url`, { body });
   }
 
   deleteBucket(bucketId: string): Promise<{ status: string }> {

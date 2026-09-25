@@ -55,9 +55,14 @@ describe('name validation (runs before the server charges for the resource)', ()
     expect(nameProblem('1web')).toBeDefined();
   });
 
-  it('rejects names over 50 characters: the API accepts them, charges, then GCE fails on the 63-char limit', () => {
+  it('rejects names over 50 characters (the cloud name mbd-<8>-<name> is capped at 63)', () => {
     expect(nameProblem('a'.repeat(51))).toBeDefined();
     expect(nameProblem('a'.repeat(50))).toBeUndefined();
+  });
+
+  it('rejects a trailing hyphen, which the API rejects', () => {
+    expect(nameProblem('web-')).toBeDefined();
+    expect(nameProblem('web-1')).toBeUndefined();
   });
 
   it('enforces the 3-character bucket minimum when asked', () => {

@@ -7,6 +7,7 @@ import { Command } from 'commander';
 import * as clack from '@clack/prompts';
 import chalk from 'chalk';
 import { print, statusBadge } from '../../lib/output.js';
+import { ApiError } from '../../lib/api-client.js';
 import { CliError, UsageError } from '../../lib/errors.js';
 import { confirmDestructive, isInteractive, requireInteractive } from '../../lib/prompts.js';
 import {
@@ -35,7 +36,7 @@ function redisUrl(db: Database): string | undefined {
 
 export function addDatabaseCommands(parent: Command, program: Command): void {
   const dbCmd = parent.command('db').alias('database').description('Manage PostgreSQL and Redis databases');
-  examples(dbCmd, ['mbd hosting db list', 'mbd hosting db create --name app-db --type postgres --plan starter --wait', 'mbd hosting db reset-password <db-id>']);
+  examples(dbCmd, ['mbd hosting db list', 'mbd hosting db create --name app-db --type postgres --plan starter --wait', 'mbd hosting db credentials <db-id>']);
 
   // ─── list ──────────────────────────────────────────────────────────────────
   examples(
@@ -152,7 +153,7 @@ export function addDatabaseCommands(parent: Command, program: Command): void {
       });
       if (h.json) return print.json(db);
       print.success(`Database "${chalk.cyan(db.name)}" is running`);
-      print.hint(db.db_type === 'postgres' ? `Get credentials:  mbd hosting db reset-password ${db.id}` : `Connect:  ${redisUrl(db) ?? `mbd hosting db show ${db.id}`}`);
+      print.hint(db.db_type === 'postgres' ? `Get the connection string (shown once):  mbd hosting db credentials ${db.id}` : `Connect:  ${redisUrl(db) ?? `mbd hosting db show ${db.id}`}`);
       return;
     }
     if (h.json) return print.json(created);
@@ -187,16 +188,46 @@ export function addDatabaseCommands(parent: Command, program: Command): void {
     ], { labelWidth: 11 });
     console.log('');
     if (db.status === 'running' && db.db_type === 'postgres') {
-      print.hint(`The password is never stored in readable form. Get a new one:  mbd hosting db reset-password ${db.id}`);
+      print.hint(db.credentials_available
+        ? `Get the connection string (shown once):  mbd hosting db credentials ${db.id}`
+        : `The initial credentials were already shown. New password:  mbd hosting db reset-password ${db.id}`);
     }
+    if (db.restored_from) print.hint(`Restored from database ${db.restored_from.db_id}, backup ${db.restored_from.backup_id}`);
     if (db.db_type === 'redis' && db.host) print.hint('Redis is reachable only from inside the hosting network (for example from your hosting VMs).');
+  }));
+
+  // ─── credentials ───────────────────────────────────────────────────────────
+  examples(
+    dbCmd
+      .command('credentials <db-id>')
+      .description('Print the PostgreSQL connection string created at provisioning (works once)'),
+    ['mbd hosting db credentials <db-id>', 'mbd --json hosting db credentials <db-id> | jq -r .connection_string'],
+  ).action(hostingAction(program, 'databases', async (h, dbId: string) => {
+    let result: { connection_string: string };
+    try {
+      result = await withSpinner('Fetching credentials', () => h.api.revealDatabaseCredentials(dbId));
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 410) {
+        throw new CliError('The initial credentials for this database were already shown once.', {
+          status: 410,
+          hint: `Rotate the password to get a new connection string:  mbd hosting db reset-password ${dbId}`,
+        });
+      }
+      throw err;
+    }
+    if (h.json) return print.json(result);
+    console.log('');
+    console.log(`  ${chalk.bold('Connection string')}`);
+    console.log(`  ${chalk.cyan(result.connection_string)}`);
+    console.log('');
+    print.warn('Shown once: the server deleted its copy. Store it in a secret manager now.');
+    print.hint(`Lost it? Rotate the password:  mbd hosting db reset-password ${dbId}`);
   }));
 
   // ─── reset-password ────────────────────────────────────────────────────────
   examples(
     dbCmd
       .command('reset-password <db-id>')
-      .alias('credentials')
       .description('Rotate the PostgreSQL password and print the new connection string (shown once)')
       .option('-y, --yes', 'Skip the confirmation prompt (required with --json or without a TTY)'),
     ['mbd hosting db reset-password <db-id>', 'mbd --json hosting db reset-password <db-id> --yes | jq -r .connection_string'],
@@ -212,7 +243,7 @@ export function addDatabaseCommands(parent: Command, program: Command): void {
     console.log(`  ${chalk.bold('Connection string')}`);
     console.log(`  ${chalk.cyan(result.connection_string)}`);
     console.log('');
-    print.warn('Shown once. Store it in a secret manager now; running this command again rotates the password.');
+    print.warn('Shown once and not stored anywhere. Store it in a secret manager now; running this command again rotates the password.');
   }));
 
   // ─── connection-string ─────────────────────────────────────────────────────
@@ -220,13 +251,15 @@ export function addDatabaseCommands(parent: Command, program: Command): void {
     dbCmd
       .command('connection-string <db-id>')
       .alias('conn')
-      .description('Show how to connect: redis:// URL for Redis; PostgreSQL needs reset-password'),
+      .description('Show how to connect: redis:// URL for Redis; PostgreSQL points to credentials/reset-password'),
     ['mbd hosting db connection-string <db-id>'],
   ).action(hostingAction(program, 'databases', async (h, dbId: string) => {
     const db = await withSpinner('Fetching database', () => h.api.getDatabase(dbId));
     if (db.db_type === 'postgres') {
-      throw new CliError('PostgreSQL passwords are not stored in readable form, so there is no connection string to show.', {
-        hint: `Rotate the password to get one (shown once):  mbd hosting db reset-password ${dbId}`,
+      throw new CliError('PostgreSQL connection strings are only shown once, so this command cannot print one.', {
+        hint: db.credentials_available
+          ? `Get it (once):  mbd hosting db credentials ${dbId}`
+          : `Rotate the password to get a new one:  mbd hosting db reset-password ${dbId}`,
       });
     }
     const url = redisUrl(db);
@@ -271,6 +304,49 @@ export function addDatabaseCommands(parent: Command, program: Command): void {
       ],
       result.backups,
     );
+  }));
+
+  // ─── restore ───────────────────────────────────────────────────────────────
+  examples(
+    withWaitOptions(
+      dbCmd
+        .command('restore <db-id>')
+        .description('Restore a backup into a NEW database on the same plan (charged like a create)')
+        .requiredOption('--backup <backup-id>', 'Backup id from `mbd hosting db backups <db-id>`')
+        .requiredOption('--name <name>', 'Name for the new database')
+        .option('-y, --yes', 'Skip the confirmation prompt'),
+    ),
+    ['mbd hosting db restore <db-id> --backup 1727000000000 --name app-db-restored --wait'],
+  ).action(hostingAction(program, 'databases', async (h, dbId: string, opts: { backup: string; name: string; yes?: boolean; wait?: boolean; timeout?: string }) => {
+    if (!/^[0-9]{1,20}$/.test(opts.backup)) throw new UsageError('--backup must be a numeric backup id (see `mbd hosting db backups <db-id>`).');
+    const name = validateName(opts.name);
+    if (opts.wait) parseTimeout(opts.timeout);
+    if (isInteractive() && !opts.yes) {
+      const account = await h.api.getAccount().catch(() => null);
+      const ok = await clack.confirm({
+        message: `Restore backup ${opts.backup} into a new database "${name}"? A month of the source database's plan is charged now` +
+          (account ? ` (balance ${money(account.usdc_balance_cents)}).` : '.'),
+        initialValue: true,
+      });
+      if (clack.isCancel(ok) || !ok) cancelled();
+    }
+    const result = await withSpinner('Starting restore', () => h.api.restoreDatabase(dbId, { backup_id: opts.backup, target_name: name }));
+    if (opts.wait) {
+      const db = await waitWithSpinner({
+        fetch: () => h.api.getDatabase(result.target_db_id),
+        done: ['running'],
+        label: `database ${name}`,
+        timeoutSec: parseTimeout(opts.timeout),
+        showCommand: `mbd hosting db show ${result.target_db_id}`,
+      });
+      if (h.json) return print.json(db);
+      print.success(`Database "${chalk.cyan(db.name)}" restored and running (${db.id})`);
+      print.hint(`Get the connection string (shown once):  mbd hosting db credentials ${db.id}`);
+      return;
+    }
+    if (h.json) return print.json(result);
+    print.success(`Restore into new database ${chalk.cyan(result.target_db_id)} started`);
+    print.hint(`Watch it:  mbd hosting db show ${result.target_db_id}`);
   }));
 
   // ─── delete ────────────────────────────────────────────────────────────────

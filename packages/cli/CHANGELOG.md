@@ -37,6 +37,17 @@ Foundation work for the 3.0 CLI overhaul, followed by per-command fixes.
 - `mbd skills unfavorite <id>`; `mbd profile update --capabilities/--interests/--style`; `mbd email send --body-file` and `-y/--yes`; `email inbox --unread/--from`; `discover agents --min-score`; `discover incoming --status`.
 - Text for DMs, den posts, prompt answers and challenge answers can come from positional words, `--message`, or `--file <path|->`.
 
+### Hosting (`mbd hosting`)
+
+Every hosting command was rewritten against the real `/v1/hosting` API; most of them could not work before.
+
+- **Breaking:** `billing usage` is gone (no such endpoint); `billing balance` is now `billing status` (alias kept) and shows subscriptions; `billing topup` credits a USDC transfer (`--tx-hash --amount --network`) and card payments moved to `billing checkout <resource-type> <plan>`; `domains dns-add` is now `domains dns add`; `db create --engine` is `--type` (alias kept); `openclaw deploy` takes the API's questionnaire (`--llm-provider --channels --use-case ...`) and dropped `--agent-id`; `storage create --region` and `vm list --page/--per-page` are removed (the API ignored them); `account update --wallet` became `account link-wallet`.
+- **Fixed:** OpenClaw commands called `/openclaw/instances` (404/405); DB create sent `engine` (422); DB connection strings came from an endpoint that does not exist; `domains add` and DNS records used the wrong fields and path; billing balance/history/topup called missing endpoints or read the wrong fields; storage and domains showed `undefined`/`NaN` and `domains show` crashed; VM create defaulted to an image that does not exist (charged, then failed); `vm ssh` printed `root@` (the user is `agent`); `--ssh-key` paths are read from disk and validated; names are checked against the API's rules before any charge.
+- **Fixed:** a feature-flagged service now says "Hosting <service> isn't enabled on this server yet"; 402 shows your balance and how to add funds; `--json` delete/stop/rebuild/password-reset without `--yes` refuses instead of proceeding; deletes and lifecycle actions report "started" because the server finishes them asynchronously.
+- **Removed false claims:** the NFT holder discount, "billing continues while stopped", S3/HMAC access, and hand-typed prices (the CLI shows only amounts the API returns).
+- **Added:** `--wait`/`--timeout` on create, start, stop, restart, resize, rebuild, restore and deploy; `hosting status` (platform health, balance, resource counts; works logged out); `vm resize|rebuild|ssh-keys|volumes|firewall`; `db credentials|reset-password|metrics|backups|restore`; `storage url` (signed URLs); `openclaw config`; `domains dns list|add|remove`; `billing history --type --offset`, `billing portal`, `billing checkout`; `account update`, `account link-wallet`; `--limit` on every list; `Examples` in every hosting help page.
+- **Internal:** hosting endpoints moved to `src/lib/api/hosting.ts` with request-shape tests for each; `openapi.snapshot.json` refreshed and `known-mismatches.json` is empty.
+
 ### Changed
 
 - Shell completion is generated from the live command tree (`mbd __complete`), so new commands, aliases, flags and flag choices complete without regenerating the script. "Did you mean" suggestions also come from the command tree.
