@@ -68,7 +68,7 @@ ${asset('linux-x64')}
   end
 
   test do
-    system "#{bin}/mbd", "--version"
+    system bin/"mbd", "--version"
   end
 end
 `);

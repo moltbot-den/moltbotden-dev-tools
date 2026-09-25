@@ -1,16 +1,17 @@
 #!/usr/bin/env node
 /**
  * Smoke-test a standalone `mbd` binary (scripts/build-binary.mjs) the way a
- * user without Node would run it. Used by the binaries workflow on every
- * target runner:
+ * user without Node would run it. publish.yml runs it on every target before
+ * a binary is released:
  *
- *   node scripts/smoke-binary.mjs release/mbd-linux-x64/mbd
+ *   node scripts/smoke-binary.mjs release/mbd-linux-x64/mbd [--live]
  *
  * Checks the features that break when something is missing from the binary:
  * version injection, the command tree, doctor, `api --jq` (jq-wasm must be
- * embedded) against the live API, `update` (must not reach for npm), and the
- * offline SKILL.md fallback (an embedded SEA asset) via `init` against a local
- * stub API.
+ * embedded), `update` (must not reach for npm), and the offline SKILL.md
+ * fallback (an embedded SEA asset) via `init`. Every request goes to a local
+ * stub API and registry, so a production blip cannot fail a release; `--live`
+ * additionally runs `api /health --jq .status` against the production API.
  */
 
 import { spawn } from 'node:child_process';
@@ -19,20 +20,42 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 
-const exe = path.resolve(process.argv[2] ?? '');
-if (!process.argv[2] || !fs.existsSync(exe)) {
-  console.error('usage: node scripts/smoke-binary.mjs <path-to-mbd>');
+const args = process.argv.slice(2);
+const live = args.includes('--live');
+const exeArg = args.find((a) => a !== '--live');
+const exe = path.resolve(exeArg ?? '');
+if (!exeArg || !fs.existsSync(exe)) {
+  console.error('usage: node scripts/smoke-binary.mjs <path-to-mbd> [--live]');
   process.exit(2);
 }
 const expectedVersion = JSON.parse(
   fs.readFileSync(new URL('../package.json', import.meta.url), 'utf-8'),
 ).version;
 
+// A local stub API and npm registry: /health for `api` and doctor, the
+// agent profile for `init`, a newer "latest" version for `update`, and a
+// non-skill body for the skill URL (forcing the embedded fallback).
+const server = http.createServer((req, res) => {
+  res.setHeader('content-type', 'application/json');
+  const body = req.url === '/health'
+    ? { status: 'healthy' }
+    : { agent_id: 'smoke-agent', display_name: 'Smoke', status: 'active', version: '99.0.0' };
+  res.end(JSON.stringify(body));
+});
+await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+const stubUrl = `http://127.0.0.1:${server.address().port}`;
+
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'mbd-smoke-'));
 // A clean config dir and no inherited credentials, so results do not depend on the runner.
-const baseEnv = { ...process.env, MOLTBOTDEN_CONFIG_DIR: path.join(scratch, 'config'), NO_COLOR: '1' };
+const baseEnv = {
+  ...process.env,
+  MOLTBOTDEN_CONFIG_DIR: path.join(scratch, 'config'),
+  MOLTBOTDEN_API_URL: stubUrl,
+  MBD_NPM_REGISTRY: stubUrl,
+  MBD_NO_UPDATE_CHECK: '1',
+  NO_COLOR: '1',
+};
 delete baseEnv.MOLTBOTDEN_API_KEY;
-delete baseEnv.MOLTBOTDEN_API_URL;
 delete baseEnv.MOLTBOTDEN_SKILL_URL;
 
 /** Run the binary from the scratch dir, so nothing next to the repo (templates/, node_modules/) can be picked up. */
@@ -90,23 +113,22 @@ await check('doctor --json', async () => {
   assert(api?.status === 'pass', `API reachability: ${JSON.stringify(api)}`);
 });
 
-await check('api /health --jq .status (live API, embedded jq-wasm)', async () => {
+await check('api /health --jq .status (embedded jq-wasm)', async () => {
   const res = await run(['api', '/health', '--jq', '.status']);
   assert(res.status === 0, `exit ${res.status}: ${res.stderr}`);
-  assert(res.stdout.trim().length > 0 && !res.stdout.includes('{'), `unexpected output "${res.stdout.trim()}"`);
+  assert(res.stdout.trim() === 'healthy', `unexpected output "${res.stdout.trim()}"`);
 });
 
-// A local stub API: answers /agents/me for `init`, serves a newer "latest"
-// for the npm registry lookup, and a non-skill body for the skill URL.
-const server = http.createServer((_req, res) => {
-  res.setHeader('content-type', 'application/json');
-  res.end(JSON.stringify({ agent_id: 'smoke-agent', display_name: 'Smoke', status: 'active', version: '99.0.0' }));
-});
-await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-const stubUrl = `http://127.0.0.1:${server.address().port}`;
+if (live) {
+  await check('api /health --jq .status (production API)', async () => {
+    const res = await run(['api', '/health', '--jq', '.status'], { env: { MOLTBOTDEN_API_URL: 'https://api.moltbotden.com' } });
+    assert(res.status === 0, `exit ${res.status}: ${res.stderr}`);
+    assert(res.stdout.trim().length > 0 && !res.stdout.includes('{'), `unexpected output "${res.stdout.trim()}"`);
+  });
+}
 
 await check('update prints the installer command instead of running npm', async () => {
-  const res = await run(['update', '--json'], { env: { MBD_NPM_REGISTRY: stubUrl } });
+  const res = await run(['update', '--json']);
   assert(res.status === 0, `exit ${res.status}: ${res.stderr}`);
   const out = JSON.parse(res.stdout);
   assert(out.install_method === 'standalone' && out.latest_version === '99.0.0', `update output: ${res.stdout}`);
@@ -119,7 +141,6 @@ await check('init offline SKILL.md fallback (embedded asset)', async () => {
     cwd: project,
     env: {
       MOLTBOTDEN_API_KEY: 'moltbotden_sk_smoke',
-      MOLTBOTDEN_API_URL: stubUrl,
       MOLTBOTDEN_SKILL_URL: `${stubUrl}/not-a-skill-file`,
     },
   });

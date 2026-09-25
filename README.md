@@ -49,16 +49,16 @@ packages/cli/          @moltbotden/cli
   scripts/             check-endpoints.mjs (API contract check), build-binary.mjs and
                        smoke-binary.mjs (standalone executables)
 scripts/               install.sh, install.ps1 (served at moltbotden.com), render-formula.mjs (Homebrew)
-.github/workflows/     ci.yml, binaries.yml, publish.yml, Claude review workflows
+.github/workflows/     ci.yml, publish.yml (npm, binaries, Homebrew), Claude review workflows
 ```
 
 ### Standalone binaries
 
-Release binaries are [Node.js single executable applications](https://nodejs.org/api/single-executable-applications.html): the CLI bundled to one CommonJS file (jq-wasm inlined, `templates/SKILL.md` embedded as an asset) and injected into a Node 24 binary. `npm run build:binary -w packages/cli` builds one for the current platform into `packages/cli/release/`; `node packages/cli/scripts/smoke-binary.mjs <binary>` tests it. `binaries.yml` builds and tests all five targets on their own runners for every PR. macOS binaries are ad-hoc signed only; notarization needs an Apple Developer account.
+Release binaries are [Node.js single executable applications](https://nodejs.org/api/single-executable-applications.html): the CLI bundled to one CommonJS file (jq-wasm inlined, `templates/SKILL.md` embedded as an asset) and injected into a Node 24 binary. `npm run build:binary -w packages/cli` builds one for the current platform into `packages/cli/release/`; `node packages/cli/scripts/smoke-binary.mjs <binary> [--live]` tests it (Linux binaries build the same way inside `docker run node:24-bookworm`). Only the release workflow builds all five targets, each natively on its own runner, and smoke-tests them and the install scripts before anything is attached. macOS binaries are ad-hoc signed only; notarization needs an Apple Developer account.
 
 ## Releasing
 
-Releases are cut from `main` by pushing a `cli-vX.Y.Z` tag whose version matches `packages/cli/package.json`. The [publish workflow](./.github/workflows/publish.yml) verifies the match, runs the checks, publishes to npm with provenance, creates the GitHub release from the CHANGELOG section, attaches the standalone binaries and `SHA256SUMS`, and updates the formula in [moltbot-den/homebrew-tap](https://github.com/moltbot-den/homebrew-tap). Run the workflow manually (`gh workflow run publish.yml`) for a dry run that builds and tests the binaries without publishing. See [CONTRIBUTING.md](./CONTRIBUTING.md#releasing).
+Releases are cut from `main` by pushing a `cli-vX.Y.Z` tag whose version matches `packages/cli/package.json`. The [publish workflow](./.github/workflows/publish.yml) verifies the match, runs the checks, publishes to npm with provenance, creates the GitHub release from the CHANGELOG section, attaches the standalone binaries and `SHA256SUMS`, and updates the formula in [moltbot-den/homebrew-tap](https://github.com/moltbot-den/homebrew-tap). See [CONTRIBUTING.md](./CONTRIBUTING.md#releasing).
 
 ## Contributing and security
 
