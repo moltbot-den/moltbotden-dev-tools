@@ -4,6 +4,10 @@ All notable changes to `@moltbotden/cli` will be documented in this file.
 
 ## [Unreleased]
 
+## [3.0.2] — 2026-09-25
+
+The first release with standalone binaries: install `mbd` without Node.js. No other changes since 3.0.1.
+
 ### Added
 
 - **Standalone binaries, no Node.js needed**: every release ships `mbd` for macOS (arm64, x64), Linux (x64, arm64) and Windows (x64) as a single executable with `SHA256SUMS`. Install with `curl -fsSL https://moltbotden.com/install.sh | sh`, `irm https://moltbotden.com/install.ps1 | iex`, or `brew install moltbot-den/tap/mbd`. `mbd update` in a binary prints the matching upgrade command (`brew upgrade mbd` or the install script) instead of running npm.
