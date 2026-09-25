@@ -1,272 +1,202 @@
 /**
- * Hosting domain commands: list, add, show, dns, remove
+ * mbd hosting domains: subdomains of moltbotden.com, custom domains and DNS records.
+ * API: /v1/hosting/domains (routers/hosting/domains.py, models/hosting/domain.py).
  */
 
 import { Command } from 'commander';
-import * as clack from '@clack/prompts';
 import chalk from 'chalk';
-import { MoltbotDenClient } from '../../lib/api-client.js';
 import { print, statusBadge } from '../../lib/output.js';
-import { fail } from '../../lib/errors.js';
+import { UsageError } from '../../lib/errors.js';
+import { confirmDestructive } from '../../lib/prompts.js';
+import { DNS_RECORD_TYPES, DNS_TTL, type DnsRecord, type Domain, type DomainType } from '../../types/hosting.js';
+import {
+  cancelled, examples, hostingAction, moreHint, parseIntOption, relTime, validateChoice, withSpinner,
+} from './shared.js';
 
-export function addDomainCommands(parent: Command, getClient: () => Promise<MoltbotDenClient>, jsonMode: () => boolean): void {
+const DOMAIN_TYPES: readonly DomainType[] = ['subdomain', 'custom'];
+const HOSTNAME_RE = /^(?=.{3,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 
-  const domainsCmd = parent
-    .command('domains')
-    .alias('domain')
-    .description('Manage custom domains');
+export function defaultDomainType(hostname: string): DomainType {
+  return hostname.endsWith('.moltbotden.com') ? 'subdomain' : 'custom';
+}
 
-  // ─── list ─────────────────────────────────────────────────────────────────────
-  domainsCmd
-    .command('list')
-    .alias('ls')
-    .description('List your registered domains')
-    .action(async () => {
-      const client = await getClient();
-      const json = jsonMode();
-      const spinner = json ? null : clack.spinner();
-      if (spinner) spinner.start('Loading domains...');
+function printRecords(records: DnsRecord[]): void {
+  print.table(
+    [
+      { header: 'ID',      key: 'id', format: (v) => (v ? chalk.gray(String(v)) : chalk.gray('–')) },
+      { header: 'TYPE',    key: 'record_type' },
+      { header: 'NAME',    key: 'name', format: (v) => chalk.cyan(String(v)) },
+      { header: 'VALUE',   key: 'value' },
+      { header: 'TTL',     key: 'ttl', align: 'right' },
+      { header: 'PROXIED', key: 'proxied', format: (v) => (v ? 'yes' : 'no') },
+    ],
+    records,
+  );
+}
 
-      let result: Awaited<ReturnType<typeof client.listDomains>>;
-      try {
-        result = await client.listDomains();
-        if (spinner) spinner.stop('');
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Failed to list domains');
-      }
+export function addDomainCommands(parent: Command, program: Command): void {
+  const domCmd = parent.command('domains').alias('domain').description('Manage domains and DNS records');
+  examples(domCmd, ['mbd hosting domains add my-agent.moltbotden.com', 'mbd hosting domains dns list <domain-id>']);
 
-      if (json) { console.log(JSON.stringify(result)); return; }
+  // ─── list ──────────────────────────────────────────────────────────────────
+  examples(
+    domCmd
+      .command('list')
+      .alias('ls')
+      .description('List your domains')
+      .option('--limit <n>', 'Maximum domains to return (1-100)', '50'),
+    ['mbd hosting domains list'],
+  ).action(hostingAction(program, 'domains', async (h, opts: { limit: string }) => {
+    const limit = parseIntOption(opts.limit, '--limit', 1, 100);
+    const result = await withSpinner('Loading domains', () => h.api.listDomains({ limit }));
+    if (h.json) return print.json(result);
+    print.header(`Domains  ${chalk.gray(`(${result.domains.length})`)}`);
+    console.log('');
+    if (result.domains.length === 0) {
+      print.empty('No domains yet', 'Add one:  mbd hosting domains add my-agent.moltbotden.com');
+      return;
+    }
+    print.table(
+      [
+        { header: 'ID',       key: 'id',          format: (v) => chalk.gray(String(v)) },
+        { header: 'HOSTNAME', key: 'hostname',    format: (v) => chalk.cyan(String(v)) },
+        { header: 'TYPE',     key: 'domain_type' },
+        { header: 'SSL',      key: 'ssl_status',  format: (v) => statusBadge(String(v ?? 'pending')) },
+        { header: 'RECORDS',  key: 'dns_records', align: 'right', format: (v) => String(Array.isArray(v) ? v.length : 0) },
+        { header: 'CREATED',  key: 'created_at',  format: (v) => chalk.gray(relTime(v)) },
+      ],
+      result.domains,
+    );
+    console.log('');
+    moreHint(result.count, limit, 'mbd hosting domains list');
+    print.hint('Details and records:  mbd hosting domains show <id>');
+  }));
 
-      const { domains } = result;
-      print.header(`Domains  ${chalk.gray(`(${domains.length})`)}`);
-      console.log('');
+  // ─── add ───────────────────────────────────────────────────────────────────
+  examples(
+    domCmd
+      .command('add <hostname>')
+      .description('Register a moltbotden.com subdomain or a custom domain')
+      .option('--type <type>', 'subdomain|custom (default: subdomain for *.moltbotden.com, else custom)')
+      .option('--vm <vm-id>', 'Point the domain at this VM'),
+    ['mbd hosting domains add my-agent.moltbotden.com --vm <vm-id>', 'mbd hosting domains add agent.example.com --type custom'],
+  ).action(hostingAction(program, 'domains', async (h, rawHostname: string, opts: { type?: string; vm?: string }) => {
+    const hostname = rawHostname.trim().toLowerCase().replace(/\.$/, '');
+    if (!HOSTNAME_RE.test(hostname)) throw new UsageError(`"${rawHostname}" is not a valid hostname.`);
+    const domainType = opts.type !== undefined ? validateChoice(opts.type, DOMAIN_TYPES, '--type') : defaultDomainType(hostname);
+    const result = await withSpinner('Registering domain', () =>
+      h.api.addDomain({ hostname, domain_type: domainType, target_vm_id: opts.vm }));
+    if (h.json) return print.json(result);
+    print.success(`Registered ${chalk.cyan(result.hostname)} (${result.id}); SSL is ${result.ssl_status}`);
+    print.hint(`Add records:  mbd hosting domains dns add ${result.id} --type A --name ${hostname} --value <ip>`);
+  }));
 
-      if (domains.length === 0) {
-        print.empty(
-          'No domains registered yet',
-          'Add one with:  mbd hosting domains add <domain>'
-        );
-        return;
-      }
+  // ─── show ──────────────────────────────────────────────────────────────────
+  examples(
+    domCmd.command('show <domain-id>').alias('get').description('Show a domain and its DNS records'),
+    ['mbd hosting domains show <domain-id>'],
+  ).action(hostingAction(program, 'domains', async (h, domainId: string) => {
+    const d: Domain = await withSpinner('Fetching domain', () => h.api.getDomain(domainId));
+    if (h.json) return print.json(d);
+    console.log('');
+    console.log(`  ${chalk.bold(d.hostname)}  ${statusBadge(d.ssl_status ?? 'pending')}`);
+    console.log(`  ${chalk.gray(d.id)}`);
+    console.log('');
+    print.keyValue([
+      { label: 'Type',      value: d.domain_type },
+      { label: 'SSL',       value: d.ssl_status },
+      { label: 'Target IP', value: d.target_ip ?? undefined },
+      { label: 'Target VM', value: d.target_vm_id ?? undefined },
+      { label: 'Created',   value: relTime(d.created_at) },
+    ], { labelWidth: 9 });
+    console.log('');
+    const records = d.dns_records ?? [];
+    if (records.length === 0) {
+      print.empty('No DNS records', `Add one:  mbd hosting domains dns add ${d.id} --type A --name ${d.hostname} --value <ip>`);
+      return;
+    }
+    printRecords(records);
+    console.log('');
+    print.hint(`Remove a record:  mbd hosting domains dns remove ${d.id} <record-id>`);
+  }));
 
-      print.table(
-        [
-          { header: 'DOMAIN',   key: 'domain',      width: 30, format: (v) => chalk.cyan(String(v)) },
-          { header: 'STATUS',   key: 'status',      width: 24, format: (v) => statusBadge(String(v)) },
-          { header: 'VERIFIED', key: 'verified',    width: 10, format: (v) => v ? chalk.green('✓ yes') : chalk.yellow('✗ no') },
-          { header: 'ADDED',    key: 'created_at',             format: (v) => chalk.gray(print.relativeTime(String(v))) },
-        ],
-        domains
-      );
+  // ─── remove ────────────────────────────────────────────────────────────────
+  examples(
+    domCmd
+      .command('remove <domain-id>')
+      .alias('rm')
+      .alias('delete')
+      .description('Release a domain and delete its DNS records')
+      .option('-y, --yes', 'Skip the confirmation prompt (required with --json or without a TTY)'),
+    ['mbd hosting domains remove <domain-id>', 'mbd --json hosting domains remove <domain-id> --yes'],
+  ).action(hostingAction(program, 'domains', async (h, domainId: string, opts: { yes?: boolean }) => {
+    const ok = await confirmDestructive({ yes: opts.yes, json: h.json, message: `Release domain ${domainId} and delete all of its DNS records?` });
+    if (!ok) cancelled();
+    const result = await withSpinner('Releasing domain', () => h.api.removeDomain(domainId));
+    if (h.json) return print.json(result);
+    print.success(`Domain ${chalk.cyan(domainId)} released`);
+  }));
 
-      console.log('');
-      print.hint(`Show DNS records:  mbd hosting domains show <id>`);
-      print.hint(`Add a domain:      mbd hosting domains add <domain>`);
-      console.log('');
-    });
+  // ─── dns ───────────────────────────────────────────────────────────────────
+  const dns = domCmd.command('dns').description('Manage DNS records of a domain');
+  examples(dns, ['mbd hosting domains dns list <domain-id>', 'mbd hosting domains dns add <domain-id> --type A --name <hostname> --value <ip>']);
 
-  // ─── add ──────────────────────────────────────────────────────────────────────
-  domainsCmd
-    .command('add [domain]')
-    .description('Add a custom domain')
-    .action(async (domainArg?: string) => {
-      const client = await getClient();
-      const json = jsonMode();
+  examples(
+    dns.command('list <domain-id>').alias('ls').description('List DNS records'),
+    ['mbd hosting domains dns list <domain-id>'],
+  ).action(hostingAction(program, 'domains', async (h, domainId: string) => {
+    const d = await withSpinner('Fetching records', () => h.api.getDomain(domainId));
+    const records = d.dns_records ?? [];
+    if (h.json) return print.json({ domain_id: d.id, hostname: d.hostname, records });
+    if (records.length === 0) {
+      print.empty(`No DNS records on ${d.hostname}`, `Add one:  mbd hosting domains dns add ${d.id} --type A --name ${d.hostname} --value <ip>`);
+      return;
+    }
+    printRecords(records);
+  }));
 
-      let domain = domainArg ?? '';
+  const addDns = dns
+    .command('add <domain-id>')
+    .description('Add a DNS record')
+    .requiredOption('--type <type>', `Record type: ${DNS_RECORD_TYPES.join('|')}`)
+    .requiredOption('--name <name>', 'Record name, within the domain (e.g. www.my-agent.moltbotden.com)')
+    .requiredOption('--value <value>', 'Record value (IP, hostname or text)')
+    .option('--ttl <seconds>', `TTL in seconds (${DNS_TTL.min}-${DNS_TTL.max})`, String(DNS_TTL.default))
+    .option('--proxied', 'Proxy through Cloudflare (A/AAAA/CNAME only)');
+  examples(addDns, [
+    'mbd hosting domains dns add <domain-id> --type A --name my-agent.moltbotden.com --value 203.0.113.10',
+    'mbd hosting domains dns add <domain-id> --type TXT --name my-agent.moltbotden.com --value "v=spf1 -all" --ttl 300',
+  ]).action(hostingAction(program, 'domains', async (h, domainId: string, opts: {
+    type: string; name: string; value: string; ttl: string; proxied?: boolean;
+  }) => {
+    const recordType = validateChoice(opts.type.toUpperCase(), DNS_RECORD_TYPES, '--type');
+    const ttl = parseIntOption(opts.ttl, '--ttl', DNS_TTL.min, DNS_TTL.max);
+    if (opts.proxied && !['A', 'AAAA', 'CNAME'].includes(recordType)) {
+      throw new UsageError('--proxied only applies to A, AAAA and CNAME records.');
+    }
+    const record = await withSpinner('Adding record', () => h.api.addDnsRecord(domainId, {
+      record_type: recordType,
+      name: opts.name,
+      value: opts.value,
+      ttl,
+      proxied: Boolean(opts.proxied),
+    }));
+    if (h.json) return print.json(record);
+    print.success(`Added ${record.record_type} ${chalk.cyan(record.name)} → ${record.value}${record.id ? ` (${record.id})` : ''}`);
+  }));
 
-      if (!domain && !json) {
-        const d = await clack.text({
-          message: 'Domain name:',
-          placeholder: 'api.myagent.com',
-          validate: (v) => {
-            if (!v || v.trim().length < 3) return 'Enter a valid domain name';
-            if (!/^[a-zA-Z0-9][a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(v.trim())) {
-              return 'Must be a valid domain (e.g. api.myagent.com)';
-            }
-            return undefined;
-          },
-        });
-        if (clack.isCancel(d)) { clack.cancel('Cancelled'); process.exit(0); }
-        domain = (d as string).trim();
-      }
-
-      if (!domain) {
-        print.error('Domain name is required');
-        process.exit(1);
-      }
-
-      const spinner = json ? null : clack.spinner();
-      if (spinner) spinner.start(`Adding domain ${chalk.cyan(domain)}...`);
-
-      try {
-        const result = await client.addDomain(domain);
-        if (spinner) spinner.stop('');
-
-        if (json) {
-          console.log(JSON.stringify(result));
-        } else {
-          print.success(`Domain ${chalk.cyan(domain)} added`);
-          console.log('');
-
-          if (result.nameservers && result.nameservers.length > 0) {
-            console.log('  ' + chalk.bold('Update your DNS — point these nameservers at your registrar:'));
-            console.log('');
-            for (const ns of result.nameservers) {
-              console.log('  ' + chalk.cyan(ns));
-            }
-          } else if (result.dns_records && result.dns_records.length > 0) {
-            console.log('  ' + chalk.bold('Add these DNS records at your domain registrar:'));
-            console.log('');
-            for (const rec of result.dns_records) {
-              console.log(`  ${chalk.gray(rec.type.padEnd(6))} ${chalk.white(rec.name.padEnd(30))} ${chalk.cyan(rec.value)}`);
-            }
-          }
-
-          console.log('');
-          print.info('DNS changes can take up to 48 hours to propagate');
-          print.hint(`Check status:  mbd hosting domains show ${result.id}`);
-          console.log('');
-        }
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Failed to add domain');
-      }
-    });
-
-  // ─── show ─────────────────────────────────────────────────────────────────────
-  domainsCmd
-    .command('show <domain-id>')
-    .description('Show domain details and DNS records')
-    .action(async (domainId: string) => {
-      const client = await getClient();
-      const json = jsonMode();
-      const spinner = json ? null : clack.spinner();
-      if (spinner) spinner.start('Fetching domain...');
-
-      let domain: Awaited<ReturnType<typeof client.getDomain>>;
-      try {
-        domain = await client.getDomain(domainId);
-        if (spinner) spinner.stop('');
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Domain not found');
-      }
-
-      if (json) { console.log(JSON.stringify(domain)); return; }
-
-      console.log('');
-      console.log(`  ${chalk.bold(domain.domain)}  ${statusBadge(domain.status)}`);
-      console.log(`  ${chalk.gray(domain.id)}`);
-      console.log('');
-      print.divider(52);
-      console.log('');
-
-      print.keyValue([
-        { label: 'Domain',    value: chalk.cyan(domain.domain) },
-        { label: 'Status',    value: statusBadge(domain.status) },
-        { label: 'Verified',  value: domain.verified ? chalk.green('Yes ✓') : chalk.yellow('Not yet') },
-        { label: 'Verified At', value: domain.verified_at ? print.relativeTime(domain.verified_at) : undefined },
-        { label: 'Added',     value: print.relativeTime(domain.created_at) },
-      ], { labelWidth: 12 });
-
-      if (domain.nameservers?.length > 0) {
-        console.log('');
-        console.log('  ' + chalk.bold('Nameservers'));
-        for (const ns of domain.nameservers) {
-          console.log('  ' + chalk.cyan(ns));
-        }
-      }
-
-      if (domain.dns_records?.length > 0) {
-        console.log('');
-        console.log('  ' + chalk.bold('DNS Records'));
-        console.log('');
-        console.log('  ' + chalk.gray('TYPE    NAME                           VALUE'));
-        console.log('  ' + chalk.gray('─'.repeat(60)));
-        for (const rec of domain.dns_records) {
-          console.log(`  ${chalk.gray(rec.type.padEnd(8))}${chalk.white(rec.name.padEnd(31))} ${chalk.cyan(rec.value)}`);
-        }
-      }
-
-      console.log('');
-    });
-
-  // ─── remove ───────────────────────────────────────────────────────────────────
-  domainsCmd
-    .command('remove <domain-id>')
-    .alias('rm')
-    .alias('delete')
-    .description('Release a domain from your account')
-    .option('--yes', 'Skip confirmation')
-    .action(async (domainId: string, opts) => {
-      const json = jsonMode();
-
-      if (!opts.yes && !json) {
-        const ok = await clack.confirm({
-          message: chalk.red(`Release domain ${chalk.bold(domainId)}? DNS records will be deleted.`),
-          initialValue: false,
-        });
-        if (clack.isCancel(ok) || !ok) { clack.cancel('Cancelled'); process.exit(0); }
-      }
-
-      const client = await getClient();
-      const spinner = json ? null : clack.spinner();
-      if (spinner) spinner.start(`Releasing domain ${chalk.cyan(domainId)}...`);
-
-      try {
-        await client.removeDomain(domainId);
-        if (spinner) spinner.stop('');
-
-        if (json) {
-          console.log(JSON.stringify({ success: true, domain_id: domainId }));
-        } else {
-          print.success(`Domain ${chalk.cyan(domainId)} released`);
-        }
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Failed to release domain');
-      }
-    });
-
-  // ─── dns add ──────────────────────────────────────────────────────────────────
-  domainsCmd
-    .command('dns-add <domain-id>')
-    .description('Add a DNS record to a domain')
-    .option('--type <type>',  'Record type: A|CNAME|TXT|MX|NS')
-    .option('--name <name>',  'Record name (@ for root)')
-    .option('--value <value>', 'Record value')
-    .option('--ttl <ttl>',    'TTL in seconds', '300')
-    .action(async (domainId: string, opts) => {
-      const client = await getClient();
-      const json = jsonMode();
-
-      if (!opts.type || !opts.name || !opts.value) {
-        print.error('--type, --name, and --value are required');
-        process.exit(1);
-      }
-
-      const spinner = json ? null : clack.spinner();
-      if (spinner) spinner.start('Adding DNS record...');
-
-      try {
-        const result = await client.addDnsRecord(domainId, {
-          type: opts.type as string,
-          name: opts.name as string,
-          value: opts.value as string,
-          ttl: Number(opts.ttl),
-        });
-        if (spinner) spinner.stop('');
-
-        if (json) {
-          console.log(JSON.stringify(result));
-        } else {
-          print.success('DNS record added');
-        }
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Failed to add DNS record');
-      }
-    });
+  examples(
+    dns
+      .command('remove <domain-id> <record-id>')
+      .alias('rm')
+      .description('Delete a DNS record')
+      .option('-y, --yes', 'Skip the confirmation prompt (required with --json or without a TTY)'),
+    ['mbd hosting domains dns remove <domain-id> <record-id>'],
+  ).action(hostingAction(program, 'domains', async (h, domainId: string, recordId: string, opts: { yes?: boolean }) => {
+    const ok = await confirmDestructive({ yes: opts.yes, json: h.json, message: `Delete DNS record ${recordId} from domain ${domainId}?` });
+    if (!ok) cancelled();
+    const result = await withSpinner('Removing record', () => h.api.removeDnsRecord(domainId, recordId));
+    if (h.json) return print.json(result);
+    print.success(`DNS record ${chalk.cyan(recordId)} removed`);
+  }));
 }

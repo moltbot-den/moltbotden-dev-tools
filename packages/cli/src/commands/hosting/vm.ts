@@ -1,551 +1,557 @@
 /**
- * Hosting VM commands: list, create, show, start, stop, restart, delete, ssh, console
+ * mbd hosting vm: compute VMs, their SSH keys, volumes and firewall rules.
+ * API: /v1/hosting/compute/vms (routers/hosting/compute.py) and
+ * /v1/hosting/networking/firewalls (routers/hosting/networking.py).
  */
 
 import { Command } from 'commander';
 import * as clack from '@clack/prompts';
 import chalk from 'chalk';
-import { MoltbotDenClient } from '../../lib/api-client.js';
 import { print, statusBadge } from '../../lib/output.js';
-import { CliError, fail, reportError, UsageError } from '../../lib/errors.js';
-import { VM_TIER_SPECS, type VMTier } from '../../types/hosting.js';
+import { CliError, reportError, UsageError } from '../../lib/errors.js';
+import { confirmDestructive, isInteractive, requireInteractive } from '../../lib/prompts.js';
+import {
+  DEFAULT_VM_IMAGE, DISK_TYPES, VM_IMAGES, VM_SSH_USER, VM_TIER_SPECS, VOLUME_SIZE_GB,
+  type DiskType, type FirewallRule, type VM, type VMTier,
+} from '../../types/hosting.js';
+import {
+  cancelled, collect, examples, hostingAction, money, moreHint, nameProblem, parseIntOption, parseTimeout,
+  readSshKey, relTime, validateChoice, validateName, waitWithSpinner, withSpinner, withWaitOptions,
+  type Hosting,
+} from './shared.js';
 
-export function addVMCommands(parent: Command, getClient: () => Promise<MoltbotDenClient>, jsonMode: () => boolean): void {
+const TIERS = Object.keys(VM_TIER_SPECS) as VMTier[];
 
-  const vmCmd = parent
-    .command('vm')
-    .description('Manage compute virtual machines');
-
-  // ─── list ─────────────────────────────────────────────────────────────────────
-  vmCmd
-    .command('list')
-    .alias('ls')
-    .description('List your virtual machines')
-    .option('--status <status>', 'Filter by status (running, stopped, etc.)')
-    .option('--per-page <n>', 'Results per page', '20')
-    .option('--page <n>', 'Page number (1-indexed)', '1')
-    .action(async (opts) => {
-      const client = await getClient();
-      const json = jsonMode();
-      const spinner = json ? null : clack.spinner();
-      if (spinner) spinner.start('Loading VMs...');
-
-      let result: Awaited<ReturnType<typeof client.listVMs>>;
-      try {
-        result = await client.listVMs(opts.status as string);
-        if (spinner) spinner.stop('');
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Failed to list VMs');
-      }
-
-      if (json) { console.log(JSON.stringify(result)); return; }
-
-      const { vms } = result;
-      const running = vms.filter((v) => v.status === 'running').length;
-
-      print.header(
-        `Virtual Machines  ${chalk.gray(`(${vms.length} total · ${running} running)`)}`,
-        'Compute instances powered by GCP'
-      );
-      console.log('');
-
-      if (vms.length === 0) {
-        print.empty('No VMs yet', 'Create one with:  mbd hosting vm create');
-        return;
-      }
-
-      print.table(
-        [
-          { header: 'NAME',       key: 'name',       width: 20, format: (v) => chalk.cyan(String(v)) },
-          { header: 'TIER',       key: 'tier',       width: 10, format: (v) => tierLabel(String(v) as VMTier) },
-          { header: 'STATUS',     key: 'status',     width: 18, format: (v) => statusBadge(String(v)) },
-          { header: 'IP',         key: 'ip_address', width: 16, format: (v) => v ? chalk.white(String(v)) : chalk.gray('–') },
-          { header: 'ZONE',       key: 'gcp_zone',   width: 16, format: (v) => chalk.gray(String(v)) },
-          { header: 'CREATED',    key: 'created_at',            format: (v) => chalk.gray(print.relativeTime(String(v))) },
-        ],
-        result.vms
-      );
-
-      console.log('');
-      print.hint(`Show details:  mbd hosting vm show <name>`);
-      print.hint(`SSH into a VM: mbd hosting vm ssh <name>`);
-      console.log('');
-    });
-
-  // ─── create ───────────────────────────────────────────────────────────────────
-  vmCmd
-    .command('create')
-    .description('Create a new virtual machine')
-    .option('--name <name>',        'VM name')
-    .option('--tier <tier>',        'Tier: nano|micro|standard|pro|power|ultra')
-    .option('--ssh-key <key>',      'SSH public key (file path or raw key)')
-    .option('--image <image>',      'OS image', 'ubuntu-22-04-x64')
-    .action(async (opts) => {
-      const client = await getClient();
-      const json = jsonMode();
-
-      let name: string = opts.name as string;
-      let tier: VMTier = opts.tier as VMTier;
-      let sshKey: string = opts.sshKey as string;
-
-      if (!json) {
-        if (!name) {
-          const n = await clack.text({
-            message: 'VM name:',
-            placeholder: 'my-agent-vm',
-            validate: (v) => {
-              if (!v || v.trim().length < 2) return 'Name must be at least 2 characters';
-              if (!/^[a-z0-9][a-z0-9-]*[a-z0-9]?$/.test(v)) return 'Use lowercase letters, numbers, and hyphens';
-              if (v.length > 30) return 'Name must be at most 30 characters';
-              return undefined;
-            },
-          });
-          if (clack.isCancel(n)) { clack.cancel('Cancelled'); process.exit(0); }
-          name = (n as string).trim();
-        }
-
-        if (!tier) {
-          const t = await clack.select({
-            message: 'Select tier:',
-            options: (Object.entries(VM_TIER_SPECS) as [VMTier, typeof VM_TIER_SPECS[VMTier]][]).map(([key, spec]) => ({
-              value: key,
-              label: `${spec.name.padEnd(9)}  ${String(spec.vcpus) + ' vCPU · ' + spec.ram_gb + ' GB RAM · ' + spec.ssd_gb + ' GB SSD'}`,
-              hint: `$${(spec.price_cents / 100).toFixed(2)}/mo`,
-            })),
-          });
-          if (clack.isCancel(t)) { clack.cancel('Cancelled'); process.exit(0); }
-          tier = t as VMTier;
-        }
-
-        if (!sshKey) {
-          const key = await clack.text({
-            message: 'SSH public key (optional — paste content or press Enter to skip):',
-            placeholder: 'ssh-rsa AAAA...',
-          });
-          if (clack.isCancel(key)) { clack.cancel('Cancelled'); process.exit(0); }
-          sshKey = (key as string).trim();
-        }
-
-        // Confirmation
-        const spec = VM_TIER_SPECS[tier];
-        console.log('');
-        const confirmed = await clack.confirm({
-          message: `Create ${chalk.cyan(tier)} VM "${chalk.white(name)}" for ${chalk.yellow('$' + (spec.price_cents / 100).toFixed(2) + '/mo')}?`,
-          initialValue: true,
-        });
-        if (clack.isCancel(confirmed) || !confirmed) {
-          clack.cancel('Cancelled');
-          process.exit(0);
-        }
-      } else {
-        // JSON mode — require all options
-        if (!name || !tier) {
-          fail(new UsageError('--name and --tier are required in --json mode'));
-        }
-      }
-
-      const spinner = json ? null : clack.spinner();
-      if (spinner) spinner.start('Provisioning VM (this takes ~60 seconds)...');
-
-      try {
-        const result = await client.createVM({
-          name,
-          tier,
-          image: opts.image as string,
-          ssh_public_key: sshKey || undefined,
-        });
-
-        if (spinner) spinner.stop('VM queued for provisioning ✓');
-
-        if (json) {
-          console.log(JSON.stringify(result));
-        } else {
-          print.success(`VM "${chalk.cyan(name)}" is being provisioned`);
-          console.log('');
-          print.keyValue([
-            { label: 'VM ID',   value: chalk.gray(result.id) },
-            { label: 'Tier',    value: tierLabel(result.tier as VMTier) },
-            { label: 'Status',  value: statusBadge(result.status) },
-            { label: 'GCP Name', value: chalk.gray(result.gcp_instance_name) },
-          ]);
-          console.log('');
-          print.info('VM will be ready in ~60 seconds');
-          print.hint(`Watch status:  mbd hosting vm show ${result.id}`);
-          console.log('');
-        }
-      } catch (err) {
-        if (spinner) spinner.stop('Provisioning failed');
-        handleVMError(err);
-      }
-    });
-
-  // ─── show ─────────────────────────────────────────────────────────────────────
-  vmCmd
-    .command('show <vm-id>')
-    .description('Show VM details')
-    .action(async (vmId: string) => {
-      const client = await getClient();
-      const json = jsonMode();
-      const spinner = json ? null : clack.spinner();
-      if (spinner) spinner.start('Fetching VM...');
-
-      let vm: Awaited<ReturnType<typeof client.getVM>>;
-      try {
-        vm = await client.getVM(vmId);
-        if (spinner) spinner.stop('');
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'VM not found');
-      }
-
-      if (json) { console.log(JSON.stringify(vm)); return; }
-
-      const spec = VM_TIER_SPECS[vm.tier];
-
-      console.log('');
-      console.log(`  ${chalk.bold(vm.name)}  ${statusBadge(vm.status)}`);
-      console.log(`  ${chalk.gray(vm.id)}`);
-      console.log('');
-      print.divider(52);
-      console.log('');
-
-      print.keyValue([
-        { label: 'Name',         value: vm.name },
-        { label: 'Status',       value: statusBadge(vm.status) },
-        { label: 'Tier',         value: `${tierLabel(vm.tier)}` },
-        { label: 'Machine Type', value: spec?.machine_type ?? '–' },
-        { label: 'vCPUs',        value: spec ? `${spec.vcpus} vCPU` : '–' },
-        { label: 'Memory',       value: spec ? `${spec.ram_gb} GB RAM` : '–' },
-        { label: 'SSD',          value: spec ? `${spec.ssd_gb} GB` : '–' },
-        { label: 'Transfer',     value: spec ? `${spec.transfer_tb} TB/mo` : '–' },
-        { label: 'Public IP',    value: vm.ip_address ? chalk.white(vm.ip_address) : chalk.gray('Not assigned yet') },
-        { label: 'Internal IP',  value: vm.internal_ip ? chalk.gray(vm.internal_ip) : undefined },
-        { label: 'Zone',         value: chalk.gray(vm.gcp_zone) },
-        { label: 'GCP Name',     value: chalk.gray(vm.gcp_instance_name) },
-        { label: 'Image',        value: chalk.gray(vm.image) },
-        { label: 'Created',      value: print.relativeTime(vm.created_at) },
-        { label: 'Started',      value: vm.started_at ? print.relativeTime(vm.started_at) : undefined },
-        { label: 'Price',        value: spec ? chalk.yellow(`$${(spec.price_cents / 100).toFixed(2)}/mo`) : '–' },
-        { label: 'Error',        value: vm.error_message ? chalk.red(vm.error_message) : undefined },
-      ], { labelWidth: 14 });
-
-      console.log('');
-
-      if (vm.ip_address && vm.status === 'running') {
-        print.hint(`SSH:  ssh root@${vm.ip_address}`);
-      }
-      if (vm.status === 'running') {
-        print.hint(`Stop VM:  mbd hosting vm stop ${vm.id}`);
-      }
-      if (vm.status === 'stopped') {
-        print.hint(`Start VM:  mbd hosting vm start ${vm.id}`);
-      }
-      console.log('');
-    });
-
-  // ─── start ────────────────────────────────────────────────────────────────────
-  vmCmd
-    .command('start <vm-id>')
-    .description('Start a stopped VM')
-    .action(async (vmId: string) => {
-      await vmAction(client => client.startVM(vmId), getClient, jsonMode,
-        `Starting VM ${chalk.cyan(vmId)}...`, `VM ${chalk.cyan(vmId)} started`);
-    });
-
-  // ─── stop ─────────────────────────────────────────────────────────────────────
-  vmCmd
-    .command('stop <vm-id>')
-    .description('Stop a running VM')
-    .option('--yes', 'Skip confirmation')
-    .action(async (vmId: string, opts) => {
-      if (!opts.yes && !jsonMode()) {
-        const ok = await clack.confirm({
-          message: `Stop VM ${chalk.cyan(vmId)}? Billing continues while stopped.`,
-          initialValue: false,
-        });
-        if (clack.isCancel(ok) || !ok) { clack.cancel('Cancelled'); process.exit(0); }
-      }
-      await vmAction(client => client.stopVM(vmId), getClient, jsonMode,
-        `Stopping VM ${chalk.cyan(vmId)}...`, `VM ${chalk.cyan(vmId)} stopped`);
-    });
-
-  // ─── restart ──────────────────────────────────────────────────────────────────
-  vmCmd
-    .command('restart <vm-id>')
-    .description('Restart a VM')
-    .action(async (vmId: string) => {
-      await vmAction(client => client.restartVM(vmId), getClient, jsonMode,
-        `Restarting VM ${chalk.cyan(vmId)}...`, `VM ${chalk.cyan(vmId)} restarted`);
-    });
-
-  // ─── delete ───────────────────────────────────────────────────────────────────
-  vmCmd
-    .command('delete <vm-id>')
-    .alias('rm')
-    .description('Delete a VM permanently')
-    .option('--yes', 'Skip confirmation')
-    .action(async (vmId: string, opts) => {
-      const json = jsonMode();
-
-      if (!opts.yes && !json) {
-        const ok = await clack.confirm({
-          message: chalk.red(`Permanently delete VM ${chalk.bold(vmId)}? This cannot be undone.`),
-          initialValue: false,
-        });
-        if (clack.isCancel(ok) || !ok) { clack.cancel('Cancelled'); process.exit(0); }
-      }
-
-      const client = await getClient();
-      const spinner = json ? null : clack.spinner();
-      if (spinner) spinner.start(`Deleting VM ${chalk.cyan(vmId)}...`);
-
-      try {
-        await client.deleteVM(vmId);
-        if (spinner) spinner.stop('');
-
-        if (json) {
-          console.log(JSON.stringify({ success: true, vm_id: vmId }));
-        } else {
-          print.success(`VM ${chalk.cyan(vmId)} deleted`);
-        }
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Delete failed');
-      }
-    });
-
-  // ─── ssh ──────────────────────────────────────────────────────────────────────
-  vmCmd
-    .command('ssh <vm-id>')
-    .description('Show SSH command for a VM')
-    .option('--user <user>', 'SSH user', 'root')
-    .action(async (vmId: string, opts) => {
-      const client = await getClient();
-      const spinner = clack.spinner();
-      spinner.start('Fetching VM details...');
-
-      let vm: Awaited<ReturnType<typeof client.getVM>>;
-      try {
-        vm = await client.getVM(vmId);
-        spinner.stop('');
-      } catch (err) {
-        spinner.stop('Failed');
-        fail(err, 'VM not found');
-      }
-
-      if (vm.status !== 'running') {
-        throw new CliError(`VM is ${vm.status}, not running. Start it first.`, {
-          details: { vm_id: vmId, status: vm.status },
-          hint: `mbd hosting vm start ${vmId}`,
-        });
-      }
-
-      if (!vm.ip_address) {
-        throw new CliError('VM has no public IP address yet. Wait a moment and try again.', {
-          details: { vm_id: vmId },
-        });
-      }
-
-      const cmd = `ssh ${opts.user}@${vm.ip_address}`;
-      console.log('');
-      console.log(`  ${chalk.cyan(cmd)}`);
-      console.log('');
-      print.hint('Copy the command above and run it in your terminal');
-    });
-
-  // ─── console ──────────────────────────────────────────────────────────────────
-  vmCmd
-    .command('console <vm-id>')
-    .description('Show recent console output from a VM')
-    .option('--lines <n>', 'Number of lines', '50')
-    .action(async (vmId: string, opts) => {
-      const client = await getClient();
-      const json = jsonMode();
-      const spinner = json ? null : clack.spinner();
-      if (spinner) spinner.start('Fetching console output...');
-
-      try {
-        const result = await client.getVMConsole(vmId, Number(opts.lines));
-        if (spinner) spinner.stop('');
-
-        if (json) {
-          console.log(JSON.stringify(result));
-        } else {
-          print.header(`Console: ${vmId}`);
-          print.divider(52);
-          console.log(chalk.gray(result.output || '(no output)'));
-          print.divider(52);
-        }
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Failed to get console output');
-      }
-    });
-
-  // ─── logs ─────────────────────────────────────────────────────────────────────
-  vmCmd
-    .command('logs <vm-id>')
-    .description('Stream logs from a VM (polls the console endpoint)')
-    .option('--lines <n>',  'Initial lines to show', '50')
-    .option('--follow',     'Keep streaming new output (polls every 3s)')
-    .option('--interval <ms>', 'Poll interval in ms when using --follow', '3000')
-    .action(async (vmId: string, opts) => {
-      const client = await getClient();
-      const json = jsonMode();
-      const lines = Number(opts.lines);
-      const follow = Boolean(opts.follow);
-      const interval = Number(opts.interval);
-
-      if (!json) {
-        if (follow) {
-          console.log(chalk.gray(`  Streaming logs for ${chalk.cyan(vmId)} (Ctrl+C to stop)...\n`));
-        } else {
-          console.log(chalk.gray(`  Last ${lines} lines from ${chalk.cyan(vmId)}:\n`));
-        }
-      }
-
-      // Fetch initial output
-      let lastOutput = '';
-
-      const fetchAndPrint = async (isInitial = false): Promise<boolean> => {
-        try {
-          const result = await client.getVMConsole(vmId, isInitial ? lines : Math.min(lines, 200));
-          const output = result.output ?? '';
-
-          if (json) {
-            console.log(JSON.stringify({ vm_id: vmId, output, timestamp: new Date().toISOString() }));
-            return true;
-          }
-
-          if (isInitial) {
-            if (!output.trim()) {
-              print.empty('No console output yet');
-            } else {
-              printLogLines(output, undefined, follow);
-              lastOutput = output;
-            }
-          } else {
-            // Only print new lines (diff)
-            const newContent = getNewContent(lastOutput, output);
-            if (newContent) {
-              printLogLines(newContent, undefined, follow);
-              lastOutput = output;
-            }
-          }
-          return true;
-        } catch (err) {
-          // The first fetch fails the command with the mapped exit code;
-          // later --follow polls only report, so the stream keeps going.
-          if (isInitial) fail(err, 'Failed to fetch logs');
-          reportError(err, 'Failed to fetch logs');
-          return false;
-        }
-      };
-
-      // Initial fetch (exits via fail() on error)
-      await fetchAndPrint(true);
-
-      // Polling loop for --follow
-      if (follow) {
-        process.on('SIGINT', () => {
-          if (!json) console.log(chalk.gray('\n  Log stream stopped.'));
-          process.exit(0);
-        });
-
-        // eslint-disable-next-line no-constant-condition
-        while (true) {
-          await sleep(interval);
-          await fetchAndPrint(false);
-        }
-      }
-    });
-}
-
-// ─── Log Helpers ──────────────────────────────────────────────────────────────
-
-function printLogLines(text: string, _prefix?: string, _dimTimestamps = false): void {
-  const lines = text.split('\n').filter(Boolean);
-  for (const line of lines) {
-    // Detect log levels for color coding
-    if (/\b(ERROR|FATAL|CRIT)\b/i.test(line)) {
-      console.log('  ' + chalk.red(line));
-    } else if (/\b(WARN|WARNING)\b/i.test(line)) {
-      console.log('  ' + chalk.yellow(line));
-    } else if (/\b(INFO|DEBUG)\b/i.test(line)) {
-      console.log('  ' + chalk.gray(line));
-    } else {
-      console.log('  ' + chalk.gray(line));
-    }
-  }
-}
-
-function getNewContent(prev: string, curr: string): string {
-  if (!prev) return curr;
-  // Find the overlap — return only lines that are new
-  const prevLines = prev.split('\n');
-  const currLines = curr.split('\n');
-  // Find where prev ends in curr (compare from end)
-  const lastPrevLine = prevLines[prevLines.length - 1];
-  const idx = currLines.lastIndexOf(lastPrevLine);
-  if (idx === -1) return curr; // No overlap found — return all
-  const newLines = currLines.slice(idx + 1);
-  return newLines.join('\n');
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function tierLabel(tier: VMTier): string {
-  const spec = VM_TIER_SPECS[tier];
+function tierLabel(tier: string): string {
+  const spec = VM_TIER_SPECS[tier as VMTier];
   if (!spec) return tier;
-  return `${chalk.white(spec.name)} ${chalk.gray(`(${spec.vcpus}vCPU/${spec.ram_gb}GB)`)}`;
+  return `${chalk.white(spec.name)} ${chalk.gray(`(${spec.vcpus} vCPU / ${spec.ram_gb} GB)`)}`;
 }
 
-async function vmAction(
-  action: (client: MoltbotDenClient) => Promise<{ status: string }>,
-  getClient: () => Promise<MoltbotDenClient>,
-  jsonMode: () => boolean,
-  startMsg: string,
-  successMsg: string
-): Promise<void> {
-  const client = await getClient();
-  const json = jsonMode();
-  const spinner = json ? null : clack.spinner();
-  if (spinner) spinner.start(startMsg);
-
-  try {
-    const result = await action(client);
-    if (spinner) spinner.stop('');
-
-    if (json) {
-      console.log(JSON.stringify(result));
-    } else {
-      print.success(successMsg);
-    }
-  } catch (err) {
-    if (spinner) spinner.stop('Failed');
-    fail(err, 'Operation failed');
-  }
+function waitForVm(h: Hosting, vmId: string, done: string[], label: string, timeoutSec: number): Promise<VM> {
+  return waitWithSpinner({
+    fetch: () => h.api.getVM(vmId),
+    done,
+    label,
+    timeoutSec,
+    showCommand: `mbd hosting vm show ${vmId}`,
+  });
 }
 
-function handleVMError(err: unknown): never {
-  if (err instanceof Error) {
-    const msg = err.message;
-    if (msg.includes('Insufficient balance')) {
-      print.error('Insufficient hosting balance');
-      print.hint('Top up your balance:  mbd hosting billing topup');
-    } else if (msg.includes('limit')) {
-      print.error('VM limit reached for your tier');
-      print.hint('Contact support to increase your limit');
-    } else {
-      print.error(msg);
+export function addVMCommands(parent: Command, program: Command): void {
+  const vmCmd = parent.command('vm').description('Manage compute virtual machines');
+  examples(vmCmd, ['mbd hosting vm list', 'mbd hosting vm create --name web --tier micro --wait', 'mbd hosting vm ssh <vm-id>']);
+
+  // ─── list ──────────────────────────────────────────────────────────────────
+  examples(
+    vmCmd
+      .command('list')
+      .alias('ls')
+      .description('List your virtual machines')
+      .option('--status <status>', 'Only VMs in this status (running, stopped, error, ...)')
+      .option('--limit <n>', 'Maximum VMs to return (1-100)', '50'),
+    ['mbd hosting vm list', 'mbd hosting vm list --status running', 'mbd --json hosting vm list | jq ".vms[].id"'],
+  ).action(hostingAction(program, 'compute', async (h, opts: { status?: string; limit: string }) => {
+    const limit = parseIntOption(opts.limit, '--limit', 1, 100);
+    const result = await withSpinner('Loading VMs', () => h.api.listVMs({ status: opts.status, limit }));
+    if (h.json) return print.json(result);
+
+    const running = result.vms.filter((v) => v.status === 'running').length;
+    print.header(`Virtual Machines  ${chalk.gray(`(${result.vms.length} · ${running} running)`)}`);
+    console.log('');
+    if (result.vms.length === 0) {
+      print.empty(opts.status ? `No VMs with status "${opts.status}"` : 'No VMs yet', 'Create one:  mbd hosting vm create');
+      return;
     }
-  } else {
-    print.error('VM creation failed');
+    print.table(
+      [
+        { header: 'ID',      key: 'id',         format: (v) => chalk.gray(String(v)) },
+        { header: 'NAME',    key: 'name',       format: (v) => chalk.cyan(String(v)) },
+        { header: 'TIER',    key: 'tier',       format: (v) => tierLabel(String(v)) },
+        { header: 'STATUS',  key: 'status',     format: (v) => statusBadge(String(v)) },
+        { header: 'IP',      key: 'ip_address', format: (v) => (v ? String(v) : chalk.gray('–')) },
+        { header: 'CREATED', key: 'created_at', format: (v) => chalk.gray(relTime(v)) },
+      ],
+      result.vms,
+    );
+    console.log('');
+    moreHint(result.count, limit, 'mbd hosting vm list');
+    print.hint('Details:  mbd hosting vm show <id>');
+  }));
+
+  // ─── create ────────────────────────────────────────────────────────────────
+  examples(
+    withWaitOptions(
+      vmCmd
+        .command('create')
+        .description('Create a virtual machine (charges the first month to your hosting balance)')
+        .option('--name <name>', 'VM name: lowercase letters, digits, hyphens; starts with a letter; max 50')
+        .option('--tier <tier>', `Tier: ${TIERS.join('|')}`)
+        .option('--image <image>', `Boot image: ${VM_IMAGES.join('|')}`, DEFAULT_VM_IMAGE)
+        .option('--ssh-key <key-or-file>', `SSH public key, or a path to one (installed for user "${VM_SSH_USER}")`)
+        .option('-y, --yes', 'Skip the confirmation prompt'),
+    ),
+    [
+      'mbd hosting vm create',
+      'mbd hosting vm create --name web-1 --tier micro --ssh-key ~/.ssh/id_ed25519.pub --wait',
+      'mbd --json hosting vm create --name worker --tier nano',
+    ],
+  ).action(hostingAction(program, 'compute', async (h, opts: {
+    name?: string; tier?: string; image: string; sshKey?: string; yes?: boolean; wait?: boolean; timeout?: string;
+  }) => {
+    const image = validateChoice(opts.image, VM_IMAGES, '--image');
+    let name = opts.name !== undefined ? validateName(opts.name) : undefined;
+    let tier = opts.tier !== undefined ? validateChoice(opts.tier, TIERS, '--tier') : undefined;
+    let sshKey = opts.sshKey !== undefined ? readSshKey(opts.sshKey) : undefined;
+    const timeoutSec = opts.wait ? parseTimeout(opts.timeout) : undefined;
+
+    if (!name) {
+      requireInteractive('--name', 'VM name');
+      const n = await clack.text({ message: 'VM name', placeholder: 'my-agent-vm', validate: (v) => nameProblem((v ?? '').trim()) });
+      if (clack.isCancel(n)) cancelled();
+      name = n.trim();
+    }
+    if (!tier) {
+      requireInteractive('--tier', `one of ${TIERS.join(', ')}`);
+      const t = await clack.select({
+        message: 'Tier',
+        options: TIERS.map((key) => {
+          const s = VM_TIER_SPECS[key];
+          return { value: key, label: `${s.name.padEnd(9)} ${s.vcpus} vCPU · ${s.ram_gb} GB RAM · ${s.ssd_gb} GB SSD` };
+        }),
+      });
+      if (clack.isCancel(t)) cancelled();
+      tier = t;
+    }
+    if (sshKey === undefined && isInteractive()) {
+      const k = await clack.text({
+        message: `SSH public key or path to one (optional, for user "${VM_SSH_USER}")`,
+        placeholder: '~/.ssh/id_ed25519.pub',
+        validate: (v) => {
+          if (!v?.trim()) return undefined;
+          try { readSshKey(v); return undefined; } catch (e) { return (e as Error).message; }
+        },
+      });
+      if (clack.isCancel(k)) cancelled();
+      sshKey = k.trim() ? readSshKey(k) : undefined;
+    }
+
+    if (isInteractive() && !opts.yes) {
+      const account = await h.api.getAccount().catch(() => null);
+      const ok = await clack.confirm({
+        message: `Create ${tier} VM "${name}"? The first month is charged to your hosting balance now` +
+          (account ? ` (balance ${money(account.usdc_balance_cents)}).` : '.'),
+        initialValue: true,
+      });
+      if (clack.isCancel(ok) || !ok) cancelled();
+    }
+
+    const created = await withSpinner('Creating VM', () => h.api.createVM({ name: name!, tier: tier!, image, ssh_public_key: sshKey }));
+    if (timeoutSec !== undefined) {
+      const vm = await waitForVm(h, created.id, ['running'], `VM ${created.name}`, timeoutSec);
+      if (h.json) return print.json(vm);
+      print.success(`VM "${chalk.cyan(vm.name)}" is running`);
+      if (vm.ip_address) print.hint(`SSH:  ssh ${VM_SSH_USER}@${vm.ip_address}`);
+      return;
+    }
+    if (h.json) return print.json(created);
+    print.success(`VM "${chalk.cyan(created.name)}" queued for provisioning (${created.id})`);
+    print.hint(`Watch it:  mbd hosting vm show ${created.id}   (pass --wait next time to block until it is running)`);
+  }));
+
+  // ─── show ──────────────────────────────────────────────────────────────────
+  examples(
+    vmCmd.command('show <vm-id>').alias('get').description('Show VM details'),
+    ['mbd hosting vm show <vm-id>', 'mbd --json hosting vm show <vm-id> | jq -r .ip_address'],
+  ).action(hostingAction(program, 'compute', async (h, vmId: string) => {
+    const vm = await withSpinner('Fetching VM', () => h.api.getVM(vmId));
+    if (h.json) return print.json(vm);
+    const spec = VM_TIER_SPECS[vm.tier];
+    console.log('');
+    console.log(`  ${chalk.bold(vm.name)}  ${statusBadge(vm.status)}`);
+    console.log(`  ${chalk.gray(vm.id)}`);
+    console.log('');
+    print.keyValue([
+      { label: 'Tier',        value: tierLabel(vm.tier) },
+      { label: 'Resources',   value: spec ? `${spec.vcpus} vCPU · ${spec.ram_gb} GB RAM · ${spec.ssd_gb} GB SSD · ${spec.transfer_tb} TB transfer` : undefined },
+      { label: 'Public IP',   value: vm.ip_address ?? chalk.gray('not assigned yet') },
+      { label: 'Internal IP', value: vm.internal_ip ?? undefined },
+      { label: 'Zone',        value: vm.gcp_zone },
+      { label: 'Image',       value: vm.image },
+      { label: 'Created',     value: relTime(vm.created_at) },
+      { label: 'Started',     value: vm.started_at ? relTime(vm.started_at) : undefined },
+      { label: 'Error',       value: vm.error_message ? chalk.red(vm.error_message) : undefined },
+    ], { labelWidth: 12 });
+    console.log('');
+    if (vm.status === 'running' && vm.ip_address) print.hint(`SSH:    ssh ${VM_SSH_USER}@${vm.ip_address}`);
+    if (vm.status === 'running') print.hint(`Stop:   mbd hosting vm stop ${vm.id}`);
+    if (vm.status === 'stopped') print.hint(`Start:  mbd hosting vm start ${vm.id}`);
+  }));
+
+  // ─── start / stop / restart ────────────────────────────────────────────────
+  const lifecycle = [
+    { name: 'start',   desc: 'Start a stopped VM',  call: 'startVM',   target: 'running', verb: 'Start' },
+    { name: 'stop',    desc: 'Stop a running VM',   call: 'stopVM',    target: 'stopped', verb: 'Stop' },
+    { name: 'restart', desc: 'Restart a running VM', call: 'restartVM', target: 'running', verb: 'Restart' },
+  ] as const;
+  for (const op of lifecycle) {
+    const cmd = withWaitOptions(vmCmd.command(`${op.name} <vm-id>`).description(op.desc));
+    if (op.name === 'stop') cmd.option('-y, --yes', 'Skip the confirmation prompt');
+    examples(cmd, [`mbd hosting vm ${op.name} <vm-id>`, `mbd hosting vm ${op.name} <vm-id> --wait --timeout 300`])
+      .action(hostingAction(program, 'compute', async (h, vmId: string, opts: { yes?: boolean; wait?: boolean; timeout?: string }) => {
+        const timeoutSec = opts.wait ? parseTimeout(opts.timeout) : undefined;
+        if (op.name === 'stop') {
+          const ok = await confirmDestructive({ yes: opts.yes, json: h.json, message: `Stop VM ${vmId}? Anything running on it goes offline.` });
+          if (!ok) cancelled();
+        }
+        const result = await withSpinner(`${op.verb} VM`, () => h.api[op.call](vmId));
+        if (timeoutSec !== undefined) {
+          const vm = await waitForVm(h, vmId, [op.target], `VM ${vmId}`, timeoutSec);
+          if (h.json) return print.json(vm);
+          print.success(`VM ${chalk.cyan(vmId)} is ${vm.status}`);
+          return;
+        }
+        if (h.json) return print.json(result);
+        print.success(`${op.verb} requested for VM ${chalk.cyan(vmId)} (${result.status})`);
+        print.hint(`Check progress:  mbd hosting vm show ${vmId}`);
+      }));
   }
-  process.exit(1);
+
+  // ─── resize ────────────────────────────────────────────────────────────────
+  examples(
+    withWaitOptions(
+      vmCmd
+        .command('resize <vm-id>')
+        .description('Move a VM to another tier (it is stopped, resized and started again, even if it was stopped; upgrades charge the monthly difference)')
+        .requiredOption('--tier <tier>', `New tier: ${TIERS.join('|')} (the disk cannot shrink)`)
+        .option('-y, --yes', 'Skip the confirmation prompt (required with --json or without a TTY)'),
+    ),
+    ['mbd hosting vm resize <vm-id> --tier standard --wait', 'mbd --json hosting vm resize <vm-id> --tier pro --yes'],
+  ).action(hostingAction(program, 'compute', async (h, vmId: string, opts: { tier: string; yes?: boolean; wait?: boolean; timeout?: string }) => {
+    const tier = validateChoice(opts.tier, TIERS, '--tier');
+    const timeoutSec = opts.wait ? parseTimeout(opts.timeout) : undefined;
+    const ok = await confirmDestructive({
+      yes: opts.yes, json: h.json,
+      message: `Resize VM ${vmId} to ${tier}? It goes offline while it is resized and comes back running; an upgrade charges the monthly price difference now.`,
+    });
+    if (!ok) cancelled();
+    const result = await withSpinner('Resizing VM', () => h.api.resizeVM(vmId, tier));
+    if (timeoutSec !== undefined) {
+      const vm = await waitForVm(h, vmId, ['running'], `VM ${vmId}`, timeoutSec);
+      if (h.json) return print.json(vm);
+      print.success(`VM ${chalk.cyan(vmId)} is now ${tierLabel(vm.tier)} (${vm.status})`);
+      return;
+    }
+    if (h.json) return print.json(result);
+    print.success(`Resize of VM ${chalk.cyan(vmId)} from ${result.from_tier} to ${result.to_tier} started`);
+    print.hint(`Check progress:  mbd hosting vm show ${vmId}`);
+  }));
+
+  // ─── rebuild ───────────────────────────────────────────────────────────────
+  examples(
+    withWaitOptions(
+      vmCmd
+        .command('rebuild <vm-id>')
+        .description('Reinstall the boot disk from a fresh image (keeps the IP and attached volumes)')
+        .option('--image <image>', `Boot image: ${VM_IMAGES.join('|')}`, DEFAULT_VM_IMAGE)
+        .option('-y, --yes', 'Skip the confirmation prompt (required with --json or without a TTY)'),
+    ),
+    ['mbd hosting vm rebuild <vm-id>', 'mbd hosting vm rebuild <vm-id> --image ubuntu-2404-lts-amd64 --yes --wait'],
+  ).action(hostingAction(program, 'compute', async (h, vmId: string, opts: { image: string; yes?: boolean; wait?: boolean; timeout?: string }) => {
+    const image = validateChoice(opts.image, VM_IMAGES, '--image');
+    const timeoutSec = opts.wait ? parseTimeout(opts.timeout) : undefined;
+    const ok = await confirmDestructive({
+      yes: opts.yes, json: h.json,
+      message: `Rebuild VM ${vmId} from ${image}? Everything on its boot disk is erased (attached volumes are kept).`,
+    });
+    if (!ok) cancelled();
+    const result = await withSpinner('Rebuilding VM', () => h.api.rebuildVM(vmId, image));
+    if (timeoutSec !== undefined) {
+      const vm = await waitForVm(h, vmId, ['running'], `VM ${vmId}`, timeoutSec);
+      if (h.json) return print.json(vm);
+      print.success(`VM ${chalk.cyan(vmId)} rebuilt from ${vm.image}`);
+      return;
+    }
+    if (h.json) return print.json(result);
+    print.success(`Rebuild of VM ${chalk.cyan(vmId)} from ${result.image} started`);
+    print.hint(`Check progress:  mbd hosting vm show ${vmId}`);
+  }));
+
+  // ─── delete ────────────────────────────────────────────────────────────────
+  examples(
+    vmCmd
+      .command('delete <vm-id>')
+      .alias('rm')
+      .description('Delete a VM and its boot disk permanently')
+      .option('-y, --yes', 'Skip the confirmation prompt (required with --json or without a TTY)'),
+    ['mbd hosting vm delete <vm-id>', 'mbd --json hosting vm delete <vm-id> --yes'],
+  ).action(hostingAction(program, 'compute', async (h, vmId: string, opts: { yes?: boolean }) => {
+    const ok = await confirmDestructive({ yes: opts.yes, json: h.json, message: `Permanently delete VM ${vmId} and its disk? This cannot be undone.` });
+    if (!ok) cancelled();
+    const result = await withSpinner('Deleting VM', () => h.api.deleteVM(vmId));
+    if (h.json) return print.json(result);
+    print.success(`Deletion of VM ${chalk.cyan(vmId)} started`);
+    print.hint('It disappears from `mbd hosting vm list` once the server finishes.');
+  }));
+
+  // ─── ssh ───────────────────────────────────────────────────────────────────
+  examples(
+    vmCmd
+      .command('ssh <vm-id>')
+      .description('Print the SSH command for a running VM')
+      .option('--user <user>', 'SSH user', VM_SSH_USER),
+    ['mbd hosting vm ssh <vm-id>', '$(mbd hosting vm ssh <vm-id> --json | jq -r .command)'],
+  ).action(hostingAction(program, 'compute', async (h, vmId: string, opts: { user: string }) => {
+    const vm = await withSpinner('Fetching VM', () => h.api.getVM(vmId));
+    if (vm.status !== 'running') {
+      throw new CliError(`VM ${vmId} is ${vm.status}, not running.`, { details: { vm_id: vmId, status: vm.status }, hint: `mbd hosting vm start ${vmId} --wait` });
+    }
+    if (!vm.ip_address) throw new CliError('The VM has no public IP yet. Try again in a moment.', { details: { vm_id: vmId } });
+    const command = `ssh ${opts.user}@${vm.ip_address}`;
+    if (h.json) return print.json({ vm_id: vm.id, user: opts.user, host: vm.ip_address, command });
+    console.log(`\n  ${chalk.cyan(command)}\n`);
+    print.hint(`Keys are installed for "${VM_SSH_USER}". Replace them with: mbd hosting vm ssh-keys ${vm.id} --key <file>`);
+  }));
+
+  // ─── console / logs ────────────────────────────────────────────────────────
+  examples(
+    vmCmd
+      .command('console <vm-id>')
+      .description('Show the tail of the VM serial console')
+      .option('--lines <n>', 'Lines to show from the end (1-10000)', '50'),
+    ['mbd hosting vm console <vm-id>', 'mbd hosting vm console <vm-id> --lines 200'],
+  ).action(hostingAction(program, 'compute', async (h, vmId: string, opts: { lines: string }) => {
+    const lines = parseIntOption(opts.lines, '--lines', 1, 10_000);
+    const result = await withSpinner('Fetching console output', () => h.api.getVMConsole(vmId));
+    const output = tail(result.output ?? '', lines);
+    if (h.json) return print.json({ vm_id: vmId, output });
+    if (!output.trim()) return print.empty('No console output yet');
+    printLogLines(output);
+  }));
+
+  examples(
+    vmCmd
+      .command('logs <vm-id>')
+      .description('Show VM console logs, optionally following new output')
+      .option('--lines <n>', 'Initial lines to show from the end (1-10000)', '50')
+      .option('-f, --follow', 'Keep polling for new output')
+      .option('--interval <ms>', 'Poll interval with --follow (1000-60000)', '3000'),
+    ['mbd hosting vm logs <vm-id> --follow', 'mbd --json hosting vm logs <vm-id> --follow   # one JSON object per new chunk'],
+  ).action(hostingAction(program, 'compute', async (h, vmId: string, opts: { lines: string; follow?: boolean; interval: string }) => {
+    const lines = parseIntOption(opts.lines, '--lines', 1, 10_000);
+    const interval = parseIntOption(opts.interval, '--interval', 1000, 60_000);
+    const emit = (chunk: string): void => {
+      if (!chunk) return;
+      if (h.json) console.log(JSON.stringify({ vm_id: vmId, output: chunk, timestamp: new Date().toISOString() }));
+      else printLogLines(chunk);
+    };
+
+    // The first fetch fails the command (mapped exit code); later polls only report.
+    let last = (await h.api.getVMConsole(vmId)).output ?? '';
+    if (!h.json && !last.trim()) print.empty('No console output yet');
+    emit(tail(last, lines));
+    if (!opts.follow) return;
+
+    if (!h.json) print.hint('Following (Ctrl+C to stop)...');
+    for (;;) {
+      await new Promise((r) => setTimeout(r, interval));
+      try {
+        const current = (await h.api.getVMConsole(vmId)).output ?? '';
+        emit(newContent(last, current));
+        last = current;
+      } catch (err) {
+        reportError(err, 'Failed to fetch logs');
+      }
+    }
+  }));
+
+  // ─── ssh-keys ──────────────────────────────────────────────────────────────
+  examples(
+    vmCmd
+      .command('ssh-keys <vm-id>')
+      .description(`Replace every SSH key on a running VM (user "${VM_SSH_USER}")`)
+      .option('--key <key-or-file>', 'Public key or path to one; repeat for several (max 20)', collect, [])
+      .option('-y, --yes', 'Skip the confirmation prompt (required with --json or without a TTY)'),
+    ['mbd hosting vm ssh-keys <vm-id> --key ~/.ssh/id_ed25519.pub', 'mbd hosting vm ssh-keys <vm-id> --key a.pub --key b.pub --yes'],
+  ).action(hostingAction(program, 'compute', async (h, vmId: string, opts: { key: string[]; yes?: boolean }) => {
+    if (opts.key.length === 0) throw new UsageError('Pass at least one --key <key-or-file>.');
+    if (opts.key.length > 20) throw new UsageError('At most 20 --key values are allowed.');
+    const keys = opts.key.map((k) => readSshKey(k, '--key'));
+    const ok = await confirmDestructive({
+      yes: opts.yes, json: h.json,
+      message: `Replace all SSH keys on VM ${vmId} with ${keys.length} key(s)? Keys not listed stop working.`,
+    });
+    if (!ok) cancelled();
+    const result = await withSpinner('Updating SSH keys', () => h.api.setVMSshKeys(vmId, keys));
+    if (h.json) return print.json(result);
+    print.success(`VM ${chalk.cyan(vmId)} now accepts ${result.key_count} key(s)`);
+    print.hint(`Connect:  mbd hosting vm ssh ${vmId}`);
+  }));
+
+  addVolumeCommands(vmCmd, program);
+  addFirewallCommands(vmCmd, program);
+}
+
+// ─── volumes ─────────────────────────────────────────────────────────────────
+
+function addVolumeCommands(vmCmd: Command, program: Command): void {
+  const vol = vmCmd.command('volumes').alias('volume').description('Manage extra persistent disks attached to a VM');
+  examples(vol, ['mbd hosting vm volumes list <vm-id>', 'mbd hosting vm volumes attach <vm-id> --size 100']);
+
+  examples(
+    vol.command('list <vm-id>').alias('ls').description('List disks attached to a VM'),
+    ['mbd hosting vm volumes list <vm-id>'],
+  ).action(hostingAction(program, 'compute', async (h, vmId: string) => {
+    const result = await withSpinner('Loading volumes', () => h.api.listVolumes(vmId));
+    if (h.json) return print.json(result);
+    if (result.volumes.length === 0) {
+      print.empty('No volumes attached', `Attach one:  mbd hosting vm volumes attach ${vmId} --size 50`);
+      return;
+    }
+    print.table(
+      [
+        { header: 'ID',     key: 'id' },
+        { header: 'DEVICE', key: 'device_name', format: (v) => (v ? String(v) : chalk.gray('–')) },
+        { header: 'SIZE',   key: 'size_gb', align: 'right', format: (v) => (v === undefined ? chalk.gray('–') : `${String(v)} GB`) },
+        { header: 'TYPE',   key: 'disk_type', format: (v) => (v ? String(v) : chalk.gray('–')) },
+      ],
+      result.volumes,
+    );
+  }));
+
+  examples(
+    vol
+      .command('attach <vm-id>')
+      .description('Create and attach a new disk to a running VM (charged to your hosting balance)')
+      .requiredOption('--size <gb>', `Size in GB (${VOLUME_SIZE_GB.min}-${VOLUME_SIZE_GB.max})`)
+      .option('--type <type>', `Disk type: ${DISK_TYPES.join('|')}`, 'pd-ssd')
+      .option('-y, --yes', 'Skip the confirmation prompt'),
+    ['mbd hosting vm volumes attach <vm-id> --size 100', 'mbd hosting vm volumes attach <vm-id> --size 500 --type pd-standard --yes'],
+  ).action(hostingAction(program, 'compute', async (h, vmId: string, opts: { size: string; type: string; yes?: boolean }) => {
+    const size = parseIntOption(opts.size, '--size', VOLUME_SIZE_GB.min, VOLUME_SIZE_GB.max);
+    const type = validateChoice<DiskType>(opts.type, DISK_TYPES, '--type');
+    if (isInteractive() && !opts.yes) {
+      const ok = await clack.confirm({ message: `Attach a ${size} GB ${type} disk to VM ${vmId}? It is charged to your hosting balance.`, initialValue: true });
+      if (clack.isCancel(ok) || !ok) cancelled();
+    }
+    const result = await withSpinner('Attaching volume', () => h.api.attachVolume(vmId, { size_gb: size, disk_type: type }));
+    if (h.json) return print.json(result);
+    print.success(`Attached ${result.size_gb} GB ${result.disk_type} volume ${chalk.cyan(result.volume_id)} (charged ${money(result.monthly_cost_cents)})`);
+    print.hint('Format and mount it on the VM before use (e.g. mkfs.ext4, then mount).');
+  }));
+
+  examples(
+    vol
+      .command('detach <vm-id> <volume-id>')
+      .alias('rm')
+      .description('Detach a volume from a VM and DELETE the disk and its data')
+      .option('-y, --yes', 'Skip the confirmation prompt (required with --json or without a TTY)'),
+    ['mbd hosting vm volumes detach <vm-id> <volume-id>'],
+  ).action(hostingAction(program, 'compute', async (h, vmId: string, volumeId: string, opts: { yes?: boolean }) => {
+    const ok = await confirmDestructive({
+      yes: opts.yes, json: h.json,
+      message: `Detach volume ${volumeId} from VM ${vmId}? The disk and all its data are deleted. Take a snapshot first if you need it.`,
+    });
+    if (!ok) cancelled();
+    const result = await withSpinner('Detaching volume', () => h.api.detachVolume(vmId, volumeId));
+    if (h.json) return print.json(result);
+    print.success(`Volume ${chalk.cyan(volumeId)} detached and deleted`);
+  }));
+
+  examples(
+    vol.command('snapshot <vm-id> <volume-id>').description('Take a point-in-time snapshot of an attached volume'),
+    ['mbd hosting vm volumes snapshot <vm-id> <volume-id>'],
+  ).action(hostingAction(program, 'compute', async (h, vmId: string, volumeId: string) => {
+    const result = await withSpinner('Creating snapshot', () => h.api.snapshotVolume(vmId, volumeId));
+    if (h.json) return print.json(result);
+    print.success(`Snapshot ${chalk.cyan(result.snapshot_name)} created (${result.status})`);
+    print.hint('The API has no endpoint to list or restore snapshots yet; keep this name.');
+  }));
+}
+
+// ─── firewall ────────────────────────────────────────────────────────────────
+
+function addFirewallCommands(vmCmd: Command, program: Command): void {
+  const fw = vmCmd.command('firewall').description('Open ports on your VMs');
+  examples(fw, ['mbd hosting vm firewall list', 'mbd hosting vm firewall add <vm-id> --ports 443']);
+
+  examples(
+    fw.command('list').alias('ls').description('List firewall rules on your VMs'),
+    ['mbd hosting vm firewall list', 'mbd --json hosting vm firewall list'],
+  ).action(hostingAction(program, 'networking', async (h) => {
+    const result = await withSpinner('Loading firewall rules', () => h.api.listFirewallRules());
+    if (h.json) return print.json(result);
+    const rules = result.rules ?? [];
+    if (rules.length === 0) {
+      print.empty('No firewall rules', 'Open a port:  mbd hosting vm firewall add <vm-id> --ports 443');
+      return;
+    }
+    print.table(
+      [
+        { header: 'NAME',      key: 'name' },
+        { header: 'DIRECTION', key: 'direction', format: (v) => String(v ?? '').toLowerCase() },
+        { header: 'ALLOW',     key: 'allowed', format: (v) => (Array.isArray(v)
+          ? (v as FirewallRule['allowed']).map((a) => (a.ports?.length ? `${a.protocol}/${a.ports.join(',')}` : a.protocol)).join(' ')
+          : '–') },
+        { header: 'SOURCES',   key: 'source_ranges', format: (v) => (Array.isArray(v) && v.length ? v.join(', ') : '–') },
+        { header: 'VMS',       key: 'target_tags', format: (v) => (Array.isArray(v) && v.length ? v.join(', ') : '–') },
+      ],
+      rules,
+    );
+  }));
+
+  examples(
+    fw
+      .command('add <vm-id>')
+      .description('Add a firewall rule scoped to one VM (the API cannot remove rules yet)')
+      .requiredOption('--ports <range>', 'Port or range, e.g. 8080 or 3000-3100')
+      .option('--protocol <protocol>', 'tcp|udp|icmp', 'tcp')
+      .option('--direction <direction>', 'ingress|egress', 'ingress')
+      .option('--source <cidr>', 'Allowed source range; repeat for several (default 0.0.0.0/0)', collect, []),
+    ['mbd hosting vm firewall add <vm-id> --ports 443', 'mbd hosting vm firewall add <vm-id> --ports 5432 --source 203.0.113.0/24'],
+  ).action(hostingAction(program, 'networking', async (h, vmId: string, opts: {
+    ports: string; protocol: string; direction: string; source: string[];
+  }) => {
+    const protocol = validateChoice(opts.protocol, ['tcp', 'udp', 'icmp'] as const, '--protocol');
+    const direction = validateChoice(opts.direction, ['ingress', 'egress'] as const, '--direction');
+    if (!/^\d{1,5}(-\d{1,5})?$/.test(opts.ports)) throw new UsageError(`--ports must be a port or range like 8080 or 3000-3100 (got "${opts.ports}").`);
+    const result = await withSpinner('Adding firewall rule', () => h.api.addFirewallRule({
+      vm_id: vmId,
+      direction,
+      protocol,
+      port_range: opts.ports,
+      source_ranges: opts.source.length > 0 ? opts.source : undefined,
+    }));
+    if (h.json) return print.json(result);
+    const ruleName = typeof result.rule?.name === 'string' ? ` ${chalk.gray(result.rule.name)}` : '';
+    print.success(`Opened ${protocol}/${opts.ports} (${direction}) on VM ${chalk.cyan(vmId)}${ruleName}`);
+  }));
+}
+
+// ─── Log helpers ─────────────────────────────────────────────────────────────
+
+export function tail(text: string, lines: number): string {
+  const all = text.split('\n');
+  if (all.length && all[all.length - 1] === '') all.pop();
+  return all.slice(-lines).join('\n');
+}
+
+/** Lines of `curr` that come after the end of `prev` (the console buffer only grows or rotates). */
+export function newContent(prev: string, curr: string): string {
+  if (!prev) return curr;
+  if (curr.startsWith(prev)) return curr.slice(prev.length).replace(/^\n/, '');
+  const prevLines = prev.split('\n').filter(Boolean);
+  const currLines = curr.split('\n');
+  const lastPrev = prevLines[prevLines.length - 1];
+  const idx = lastPrev === undefined ? -1 : currLines.lastIndexOf(lastPrev);
+  if (idx === -1) return curr;
+  return currLines.slice(idx + 1).join('\n');
+}
+
+function printLogLines(text: string): void {
+  for (const line of text.split('\n').filter(Boolean)) {
+    if (/\b(ERROR|FATAL|CRIT)\b/i.test(line)) console.log('  ' + chalk.red(line));
+    else if (/\b(WARN|WARNING)\b/i.test(line)) console.log('  ' + chalk.yellow(line));
+    else console.log('  ' + chalk.gray(line));
+  }
 }

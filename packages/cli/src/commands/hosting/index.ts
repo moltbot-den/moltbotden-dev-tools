@@ -1,208 +1,182 @@
 /**
- * Hosting command group — orchestrates all hosting subcommands.
- *
- * Usage:
- *   mbd hosting vm list
- *   mbd hosting db create
- *   mbd hosting storage list
- *   mbd hosting openclaw deploy
- *   mbd hosting domains list
- *   mbd hosting billing balance
- *   mbd hosting status
+ * mbd hosting: VMs, databases, storage, OpenClaw, domains and billing on
+ * Moltbot Den. Every subcommand talks to /v1/hosting (see lib/api/hosting.ts).
  */
 
 import { Command } from 'commander';
-import * as clack from '@clack/prompts';
 import chalk from 'chalk';
-import { MoltbotDenClient } from '../../lib/api-client.js';
 import { print, statusBadge } from '../../lib/output.js';
-import { fail } from '../../lib/errors.js';
-import { resolveContext } from '../../lib/context.js';
+import { UsageError } from '../../lib/errors.js';
+import type { PlatformStatus } from '../../types/hosting.js';
 import { addVMCommands } from './vm.js';
 import { addDatabaseCommands } from './db.js';
 import { addStorageCommands } from './storage.js';
 import { addOpenClawCommands } from './openclaw.js';
 import { addDomainCommands } from './domains.js';
 import { addBillingCommands } from './billing.js';
+import {
+  TOPUP_HINT, examples, explainHostingError, getHosting, hostingAction, money, relTime, withSpinner,
+  type HostingService,
+} from './shared.js';
+
+/** One row of the `hosting status` resource overview. */
+export interface ResourceSummary {
+  count?: number;
+  running?: number;
+  error?: string;
+}
+
+async function summarize<T extends { status: string }>(
+  service: HostingService,
+  load: () => Promise<{ count: number; items: T[] }>,
+  up: string,
+): Promise<ResourceSummary> {
+  try {
+    const { count, items } = await load();
+    return { count, running: items.filter((i) => i.status === up).length };
+  } catch (err) {
+    const explained = await explainHostingError(err, service);
+    return { error: explained instanceof Error ? explained.message : String(explained) };
+  }
+}
 
 export function addHostingCommands(program: Command): void {
-
   const hostingCmd = program
     .command('hosting')
     .alias('h')
-    .description('Manage hosted infrastructure (VMs, databases, storage, and more)');
+    .description('Manage hosted infrastructure (VMs, databases, storage, OpenClaw, domains, billing)');
+  examples(hostingCmd, ['mbd hosting status', 'mbd hosting vm create', 'mbd hosting openclaw deploy', 'mbd hosting billing status']);
 
-  // ─── Client factory ───────────────────────────────────────────────────────────
-  // Each hosting subcommand calls this to get an authenticated client
+  addVMCommands(hostingCmd, program);
+  addDatabaseCommands(hostingCmd, program);
+  addStorageCommands(hostingCmd, program);
+  addOpenClawCommands(hostingCmd, program);
+  addDomainCommands(hostingCmd, program);
+  addBillingCommands(hostingCmd, program);
 
-  const getClient = async (): Promise<MoltbotDenClient> => {
-    const ctx = await resolveContext(program, { requireAuth: true });
-    return ctx.client;
-  };
+  // ─── status ────────────────────────────────────────────────────────────────
+  examples(
+    hostingCmd
+      .command('status')
+      .description('Platform health, plus your balance and resources when logged in'),
+    ['mbd hosting status', 'mbd --json hosting status'],
+  ).addHelpText('after', `
+--json prints {"platform": <GET /v1/hosting/status>, "balance_cents": number|null,
+"resources": {"vms"|"databases"|"storage"|"openclaw": {"count","running"} | {"error"}} | null}.
+`).action(async () => {
+    const h = await getHosting(program, false);
+    const platform: PlatformStatus = await withSpinner('Checking hosting status', () => h.api.platformStatus());
 
-  const jsonMode = (): boolean => {
-    const globalOpts = program.opts();
-    return Boolean(globalOpts.json);
-  };
+    let balanceCents: number | null = null;
+    let resources: Record<string, ResourceSummary> | null = null;
+    if (h.authed) {
+      const [account, vms, dbs, buckets, oc] = await Promise.all([
+        h.api.getAccount().catch(() => null),
+        summarize('compute', async () => { const r = await h.api.listVMs({ limit: 100 }); return { count: r.count, items: r.vms }; }, 'running'),
+        summarize('databases', async () => { const r = await h.api.listDatabases({ limit: 100 }); return { count: r.count, items: r.databases }; }, 'running'),
+        summarize('storage', async () => { const r = await h.api.listBuckets({ limit: 100 }); return { count: r.count, items: r.buckets }; }, 'active'),
+        summarize('OpenClaw', async () => { const r = await h.api.listOpenClaw({ limit: 100 }); return { count: r.count, items: r.instances }; }, 'running'),
+      ]);
+      balanceCents = account?.usdc_balance_cents ?? null;
+      resources = { vms, databases: dbs, storage: buckets, openclaw: oc };
+    }
 
-  // ─── Subcommand groups ────────────────────────────────────────────────────────
-  addVMCommands(hostingCmd, getClient, jsonMode);
-  addDatabaseCommands(hostingCmd, getClient, jsonMode);
-  addStorageCommands(hostingCmd, getClient, jsonMode);
-  addOpenClawCommands(hostingCmd, getClient, jsonMode);
-  addDomainCommands(hostingCmd, getClient, jsonMode);
-  addBillingCommands(hostingCmd, getClient, jsonMode);
+    if (h.json) return print.json({ platform, balance_cents: balanceCents, resources });
 
-  // ─── hosting status (overview) ────────────────────────────────────────────────
-  hostingCmd
-    .command('status')
-    .description('Show an overview of all your hosted resources')
-    .action(async () => {
-      const client = await getClient();
-      const json = jsonMode();
-      const spinner = json ? null : clack.spinner();
-      if (spinner) spinner.start('Loading hosting status...');
+    console.log('');
+    console.log(`  ${chalk.bold('Hosting platform')}  ${statusBadge(platform.status)}  ${chalk.gray(relTime(platform.timestamp))}`);
+    for (const [name, s] of Object.entries(platform.services ?? {})) {
+      console.log(`    ${chalk.gray(name.padEnd(12))} ${s.status.replace(/_/g, ' ')}${s.error ? chalk.red(`  ${s.error}`) : ''}`);
+    }
+    console.log('');
+    if (!resources) {
+      print.hint('Log in to see your balance and resources:  mbd login');
+      return;
+    }
+    if (balanceCents !== null) console.log(`  ${chalk.gray('Balance'.padEnd(20))} ${chalk.bold(money(balanceCents))}`);
+    const rows: Array<[string, ResourceSummary, string]> = [
+      ['Virtual machines', resources.vms, 'mbd hosting vm list'],
+      ['Databases', resources.databases, 'mbd hosting db list'],
+      ['Storage buckets', resources.storage, 'mbd hosting storage list'],
+      ['OpenClaw instances', resources.openclaw, 'mbd hosting openclaw list'],
+    ];
+    for (const [label, r, cmd] of rows) {
+      let text: string;
+      if (r.error) text = chalk.yellow(r.error);
+      else if (!r.count) text = chalk.gray('none');
+      else text = `${r.count} (${r.running} ${label === 'Storage buckets' ? 'active' : 'running'})  ${chalk.gray(cmd)}`;
+      console.log(`  ${chalk.gray(label.padEnd(20))} ${text}`);
+    }
+    console.log('');
+    if (balanceCents === 0) print.hint(TOPUP_HINT);
+  });
 
-      type SettledResult<T> = { status: 'fulfilled'; value: T } | { status: 'rejected'; reason: unknown };
+  // ─── account ───────────────────────────────────────────────────────────────
+  const accountCmd = hostingCmd.command('account').description('Show or update your hosting account');
+  examples(accountCmd, ['mbd hosting account', 'mbd hosting account link-wallet 0xYourWallet']);
 
-      let vmsResult: Awaited<ReturnType<typeof client.listVMs>> | null = null;
-      let dbsResult: Awaited<ReturnType<typeof client.listDatabases>> | null = null;
-      let bucketsResult: Awaited<ReturnType<typeof client.listBuckets>> | null = null;
-      let ocResult: Awaited<ReturnType<typeof client.listOpenClawInstances>> | null = null;
-      let balanceResult: Awaited<ReturnType<typeof client.getBillingBalance>> | null = null;
+  examples(
+    accountCmd.command('show', { isDefault: true }).description('Show your hosting account'),
+    ['mbd hosting account', 'mbd --json hosting account show'],
+  ).action(hostingAction(program, 'accounts', async (h) => {
+    const a = await withSpinner('Fetching account', () => h.api.getAccount());
+    if (h.json) return print.json(a);
+    console.log('');
+    print.keyValue([
+      { label: 'Account ID',   value: chalk.gray(a.id) },
+      { label: 'Email',        value: a.email },
+      { label: 'Name',         value: a.display_name ?? undefined },
+      { label: 'Status',       value: statusBadge(a.status) },
+      { label: 'Balance',      value: chalk.bold(money(a.usdc_balance_cents)) },
+      { label: 'Wallet',       value: a.wallet_address ? `${a.wallet_address}${a.wallet_verified ? '' : chalk.yellow('  (not verified: mbd hosting account link-wallet)')}` : chalk.gray('not linked') },
+      { label: 'Referral',     value: a.referral_code ?? undefined },
+      { label: 'Member since', value: relTime(a.created_at) },
+    ], { labelWidth: 12 });
+    console.log('');
+    print.hint(TOPUP_HINT);
+  }));
 
-      const [vms, dbs, buckets, oc, balance] = await Promise.allSettled([
-        client.listVMs(),
-        client.listDatabases(),
-        client.listBuckets(),
-        client.listOpenClawInstances(),
-        client.getBillingBalance(),
-      ]) as [
-        SettledResult<Awaited<ReturnType<typeof client.listVMs>>>,
-        SettledResult<Awaited<ReturnType<typeof client.listDatabases>>>,
-        SettledResult<Awaited<ReturnType<typeof client.listBuckets>>>,
-        SettledResult<Awaited<ReturnType<typeof client.listOpenClawInstances>>>,
-        SettledResult<Awaited<ReturnType<typeof client.getBillingBalance>>>,
-      ];
+  examples(
+    accountCmd
+      .command('update')
+      .description('Update your hosting account display name')
+      .requiredOption('--display-name <name>', 'Display name (max 100 characters)'),
+    ['mbd hosting account update --display-name "Research Bot"'],
+  ).action(hostingAction(program, 'accounts', async (h, opts: { displayName: string }) => {
+    if (opts.displayName.length > 100) throw new UsageError('--display-name must be at most 100 characters.');
+    const result = await withSpinner('Updating account', () => h.api.updateAccount({ display_name: opts.displayName }));
+    if (h.json) return print.json(result);
+    print.success('Account updated');
+  }));
 
-      if (vms.status === 'fulfilled') vmsResult = vms.value;
-      if (dbs.status === 'fulfilled') dbsResult = dbs.value;
-      if (buckets.status === 'fulfilled') bucketsResult = buckets.value;
-      if (oc.status === 'fulfilled') ocResult = oc.value;
-      if (balance.status === 'fulfilled') balanceResult = balance.value;
-
-      if (spinner) spinner.stop('');
-
-      if (json) {
-        console.log(JSON.stringify({ vms: vmsResult, databases: dbsResult, storage: bucketsResult, openclaw: ocResult, balance: balanceResult }));
-        return;
-      }
-
+  examples(
+    accountCmd
+      .command('link-wallet <address>')
+      .description('Link the wallet you send USDC top-ups from (proven with a signature)')
+      .option('--signature <sig>', 'personal_sign (EIP-191) of the link message by <address>: 0x + 130 hex characters'),
+    [
+      'mbd hosting account link-wallet 0xYourWallet            # prints the message to sign',
+      'mbd hosting account link-wallet 0xYourWallet --signature 0x...',
+    ],
+  ).addHelpText('after', `
+Top-ups are only credited from a wallet linked this way (agent accounts can also
+use their platform wallets). Run once without --signature to get the exact text,
+sign it with that wallet (personal_sign), then run again with --signature.
+`).action(hostingAction(program, 'accounts', async (h, address: string, opts: { signature?: string }) => {
+    if (!/^0x[0-9a-fA-F]{40}$/.test(address)) throw new UsageError('<address> must be 0x followed by 40 hex characters.');
+    if (opts.signature === undefined) {
+      const msg = await withSpinner('Fetching link message', () => h.api.getWalletLinkMessage(address));
+      if (h.json) return print.json(msg);
+      console.log(`\n  ${chalk.bold('Sign this exact text with')} ${msg.address} ${chalk.gray('(personal_sign / EIP-191)')}:\n`);
+      console.log(msg.message.split('\n').map((l) => `    ${l}`).join('\n'));
       console.log('');
-      console.log(chalk.bold('  Hosting Overview'));
-      console.log('');
-      print.divider(52);
-      console.log('');
-
-      // Balance
-      if (balanceResult) {
-        const dollars = balanceResult.balance_cents / 100;
-        const isLow = dollars < 10;
-        console.log(
-          `  ${chalk.gray('Balance')}  ` +
-          (isLow ? chalk.red.bold(`$${dollars.toFixed(2)}`) : chalk.white.bold(`$${dollars.toFixed(2)}`)) +
-          (isLow ? chalk.red('  ⚠ Low') : '')
-        );
-        console.log('');
-      }
-
-      // Resource summary table
-      const resources: Array<{ type: string; count: number; running: number; hint: string }> = [];
-
-      if (vmsResult) {
-        const running = vmsResult.vms.filter((v) => v.status === 'running').length;
-        resources.push({ type: 'Virtual Machines', count: vmsResult.count, running, hint: 'mbd hosting vm list' });
-      }
-      if (dbsResult) {
-        const ready = dbsResult.databases.filter((d) => d.status === 'ready').length;
-        resources.push({ type: 'Databases', count: dbsResult.count, running: ready, hint: 'mbd hosting db list' });
-      }
-      if (bucketsResult) {
-        const active = bucketsResult.buckets.filter((b) => b.status === 'active').length;
-        resources.push({ type: 'Storage Buckets', count: bucketsResult.count, running: active, hint: 'mbd hosting storage list' });
-      }
-      if (ocResult) {
-        const running = ocResult.instances.filter((i) => i.status === 'running').length;
-        resources.push({ type: 'OpenClaw Instances', count: ocResult.count, running, hint: 'mbd hosting openclaw list' });
-      }
-
-      if (resources.length === 0) {
-        print.empty(
-          'No hosting resources yet',
-          "Get started:  mbd hosting vm create  or  mbd hosting openclaw deploy"
-        );
-      } else {
-        for (const r of resources) {
-          const statusStr = r.count === 0
-            ? chalk.gray('none')
-            : r.running === r.count
-              ? chalk.green(`${r.count} running`)
-              : r.running > 0
-                ? chalk.yellow(`${r.running}/${r.count} running`)
-                : chalk.yellow(`${r.count} stopped`);
-
-          console.log(`  ${chalk.white(r.type.padEnd(22))}  ${statusStr}`);
-          if (r.count > 0) {
-            console.log(`  ${chalk.gray(' '.repeat(22))}  ${chalk.gray(r.hint)}`);
-          }
-          console.log('');
-        }
-      }
-
-      print.divider(52);
-      console.log('');
-      print.hint('Full usage breakdown:  mbd hosting billing usage');
-      console.log('');
-    });
-
-  // ─── hosting account ──────────────────────────────────────────────────────────
-  hostingCmd
-    .command('account')
-    .description('Show your hosting account details')
-    .action(async () => {
-      const client = await getClient();
-      const json = jsonMode();
-      const spinner = json ? null : clack.spinner();
-      if (spinner) spinner.start('Fetching account...');
-
-      let account: Awaited<ReturnType<typeof client.getHostingAccount>>;
-      try {
-        account = await client.getHostingAccount();
-        if (spinner) spinner.stop('');
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Failed to fetch account');
-      }
-
-      if (json) { console.log(JSON.stringify(account)); return; }
-
-      console.log('');
-      console.log(`  ${chalk.bold('Hosting Account')}`);
-      console.log('');
-
-      print.keyValue([
-        { label: 'Account ID',  value: chalk.gray(account.id) },
-        { label: 'Email',       value: account.email },
-        { label: 'Status',      value: statusBadge(account.status) },
-        { label: 'Balance',     value: chalk.white(`$${(account.usdc_balance_cents / 100).toFixed(2)}`) },
-        { label: 'NFT Holder',  value: account.nft_holder ? chalk.green('Yes (10% discount)') : chalk.gray('No') },
-        { label: 'Wallet',      value: account.wallet_address ? chalk.gray(account.wallet_address) : undefined },
-        { label: 'Referral',    value: account.referral_code ? chalk.cyan(account.referral_code) : undefined },
-        { label: 'Member Since', value: print.relativeTime(account.created_at) },
-      ], { labelWidth: 14 });
-
-      console.log('');
-      print.hint('Top up balance:  mbd hosting billing topup');
-      console.log('');
-    });
+      print.hint(`Then:  mbd hosting account link-wallet ${address} --signature <0x...>`);
+      return;
+    }
+    if (!/^0x[0-9a-fA-F]{130}$/.test(opts.signature)) throw new UsageError('--signature must be 0x followed by 130 hex characters.');
+    const result = await withSpinner('Linking wallet', () => h.api.updateAccount({ wallet_address: address, wallet_signature: opts.signature }));
+    if (h.json) return print.json(result);
+    print.success(`Wallet ${address.toLowerCase()} linked; USDC top-ups from it can be credited`);
+    print.hint('Credit a transfer:  mbd hosting billing topup --tx-hash <0x...> --amount <usd>');
+  }));
 }

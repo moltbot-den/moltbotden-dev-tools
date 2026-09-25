@@ -1,8 +1,8 @@
 /**
  * Moltbot Den API client.
  *
- * Endpoint methods here cover the agent itself (profile, heartbeat) and
- * hosting; other domains live in lib/api/<domain>.ts as functions taking a
+ * Endpoint methods here cover the agent itself (profile, heartbeat); other
+ * domains (including hosting) live in lib/api/<domain>.ts as functions taking a
  * client. All are thin wrappers over the public generic
  * `request(method, path, { query, body, headers })`, which owns:
  *   - auth (X-API-Key) and a descriptive User-Agent
@@ -16,11 +16,6 @@ import { debug } from './verbose.js';
 import { maskApiKey } from './sanitize.js';
 import { USER_AGENT } from './version.js';
 import { DEFAULT_RETRY_POLICY, nextRetryDelay, parseRetryAfter, type RetryPolicy } from './retry.js';
-import type {
-  VM, VMTier, Database, DatabasePlan, DatabaseEngine,
-  Bucket, StoragePlan, OpenClawInstance, OpenClawPlan,
-  Domain, HostingAccount, BillingUsage, BillingHistory,
-} from '../types/hosting.js';
 
 export { ApiError };
 
@@ -243,7 +238,6 @@ export class MoltbotDenClient {
 
   private get = <T>(path: string, query?: Record<string, QueryValue>) => this.request<T>('GET', path, { query });
   private post = <T>(path: string, body?: unknown) => this.request<T>('POST', path, { body });
-  private delete = <T>(path: string) => this.request<T>('DELETE', path);
 
   // ─── Auth / Profile ─────────────────────────────────────────────────────────
 
@@ -267,199 +261,7 @@ export class MoltbotDenClient {
     return this.post<HeartbeatResponse>('/heartbeat');
   }
 
-  // ─── Hosting — Account ──────────────────────────────────────────────────────
-
-  async getHostingAccount(): Promise<HostingAccount> {
-    return this.get<HostingAccount>('/v1/hosting/accounts/me');
-  }
-
-  // ─── Hosting — VMs ──────────────────────────────────────────────────────────
-
-  async listVMs(status?: string): Promise<{ vms: VM[]; count: number }> {
-    const q = status ? `?status=${status}` : '';
-    return this.get<{ vms: VM[]; count: number }>(`/v1/hosting/compute/vms${q}`);
-  }
-
-  async getVM(vmId: string): Promise<VM> {
-    return this.get<VM>(`/v1/hosting/compute/vms/${encodeURIComponent(vmId)}`);
-  }
-
-  async createVM(data: {
-    name: string;
-    tier: VMTier;
-    image?: string;
-    ssh_public_key?: string;
-    labels?: Record<string, string>;
-    env_vars?: Record<string, string>;
-  }): Promise<{ id: string; name: string; tier: string; status: string; gcp_instance_name: string }> {
-    return this.post('/v1/hosting/compute/vms', {
-      image: 'ubuntu-22-04-x64',
-      labels: {},
-      env_vars: {},
-      ...data,
-    });
-  }
-
-  async startVM(vmId: string): Promise<{ status: string }> {
-    return this.post(`/v1/hosting/compute/vms/${encodeURIComponent(vmId)}/start`);
-  }
-
-  async stopVM(vmId: string): Promise<{ status: string }> {
-    return this.post(`/v1/hosting/compute/vms/${encodeURIComponent(vmId)}/stop`);
-  }
-
-  async restartVM(vmId: string): Promise<{ status: string }> {
-    return this.post(`/v1/hosting/compute/vms/${encodeURIComponent(vmId)}/restart`);
-  }
-
-  async deleteVM(vmId: string): Promise<void> {
-    return this.delete(`/v1/hosting/compute/vms/${encodeURIComponent(vmId)}`);
-  }
-
-  async getVMConsole(vmId: string, lines = 50): Promise<{ output: string }> {
-    return this.get(`/v1/hosting/compute/vms/${encodeURIComponent(vmId)}/console?lines=${lines}`);
-  }
-
-  // ─── Hosting — Databases ────────────────────────────────────────────────────
-
-  async listDatabases(): Promise<{ databases: Database[]; count: number }> {
-    return this.get<{ databases: Database[]; count: number }>('/v1/hosting/databases');
-  }
-
-  async getDatabase(dbId: string): Promise<Database> {
-    return this.get<Database>(`/v1/hosting/databases/${encodeURIComponent(dbId)}`);
-  }
-
-  async createDatabase(data: {
-    name: string;
-    plan: DatabasePlan;
-    engine: DatabaseEngine;
-  }): Promise<{ id: string; status: string }> {
-    return this.post('/v1/hosting/databases', data);
-  }
-
-  async getDatabaseConnectionString(dbId: string): Promise<{ connection_string: string; read_only_connection_string?: string }> {
-    return this.get(`/v1/hosting/databases/${encodeURIComponent(dbId)}/connection-string`);
-  }
-
-  async getDatabaseMetrics<T = Record<string, unknown>>(dbId: string): Promise<T> {
-    return this.get(`/v1/hosting/databases/${encodeURIComponent(dbId)}/metrics`);
-  }
-
-  async deleteDatabase(dbId: string): Promise<void> {
-    return this.delete(`/v1/hosting/databases/${encodeURIComponent(dbId)}`);
-  }
-
-  // ─── Hosting — Storage ──────────────────────────────────────────────────────
-
-  async listBuckets(): Promise<{ buckets: Bucket[]; count: number }> {
-    return this.get<{ buckets: Bucket[]; count: number }>('/v1/hosting/storage/buckets');
-  }
-
-  async getBucket(bucketId: string): Promise<Bucket> {
-    return this.get<Bucket>(`/v1/hosting/storage/buckets/${encodeURIComponent(bucketId)}`);
-  }
-
-  async createBucket(data: {
-    name: string;
-    plan: StoragePlan;
-    region?: string;
-  }): Promise<{ id: string; status: string }> {
-    return this.post('/v1/hosting/storage/buckets', {
-      region: 'us-central1',
-      ...data,
-    });
-  }
-
-  async getBucketUsage(bucketId: string): Promise<{ storage_used_bytes: number; object_count: number }> {
-    return this.get(`/v1/hosting/storage/buckets/${encodeURIComponent(bucketId)}/usage`);
-  }
-
-  async deleteBucket(bucketId: string): Promise<void> {
-    return this.delete(`/v1/hosting/storage/buckets/${encodeURIComponent(bucketId)}`);
-  }
-
-  // ─── Hosting — OpenClaw ─────────────────────────────────────────────────────
-
-  async listOpenClawInstances(): Promise<{ instances: OpenClawInstance[]; count: number }> {
-    return this.get<{ instances: OpenClawInstance[]; count: number }>('/v1/hosting/openclaw/instances');
-  }
-
-  async getOpenClawInstance(instanceId: string): Promise<OpenClawInstance> {
-    return this.get<OpenClawInstance>(`/v1/hosting/openclaw/instances/${encodeURIComponent(instanceId)}`);
-  }
-
-  async createOpenClawInstance(data: {
-    name: string;
-    plan: OpenClawPlan;
-    agent_id?: string;
-    channels?: string[];
-  }): Promise<{ id: string; status: string }> {
-    return this.post('/v1/hosting/openclaw/instances', {
-      channels: ['telegram'],
-      ...data,
-    });
-  }
-
-  async restartOpenClawInstance(instanceId: string): Promise<{ status: string }> {
-    return this.post(`/v1/hosting/openclaw/instances/${encodeURIComponent(instanceId)}/restart`);
-  }
-
-  async getOpenClawLogs(instanceId: string, limit = 100): Promise<{ logs: string[] }> {
-    return this.get(`/v1/hosting/openclaw/instances/${encodeURIComponent(instanceId)}/logs?limit=${limit}`);
-  }
-
-  async deleteOpenClawInstance(instanceId: string): Promise<void> {
-    return this.delete(`/v1/hosting/openclaw/instances/${encodeURIComponent(instanceId)}`);
-  }
-
-  // ─── Hosting — Domains ──────────────────────────────────────────────────────
-
-  async listDomains(): Promise<{ domains: Domain[]; count: number }> {
-    return this.get<{ domains: Domain[]; count: number }>('/v1/hosting/domains');
-  }
-
-  async getDomain(domainId: string): Promise<Domain> {
-    return this.get<Domain>(`/v1/hosting/domains/${encodeURIComponent(domainId)}`);
-  }
-
-  async addDomain(domain: string): Promise<Domain> {
-    return this.post<Domain>('/v1/hosting/domains', { domain });
-  }
-
-  async addDnsRecord(domainId: string, record: {
-    type: string;
-    name: string;
-    value: string;
-    ttl?: number;
-  }): Promise<{ status: string }> {
-    return this.post(`/v1/hosting/domains/${encodeURIComponent(domainId)}/dns`, {
-      ttl: 300,
-      ...record,
-    });
-  }
-
-  async removeDomain(domainId: string): Promise<void> {
-    return this.delete(`/v1/hosting/domains/${encodeURIComponent(domainId)}`);
-  }
-
-  // ─── Hosting — Billing ──────────────────────────────────────────────────────
-
-  async getBillingBalance(): Promise<{ balance_cents: number; currency: string }> {
-    return this.get('/v1/hosting/billing/balance');
-  }
-
-  async getBillingUsage(): Promise<BillingUsage> {
-    return this.get<BillingUsage>('/v1/hosting/billing/usage');
-  }
-
-  async getBillingHistory(limit = 20): Promise<BillingHistory> {
-    return this.get<BillingHistory>(`/v1/hosting/billing/history?limit=${limit}`);
-  }
-
-  async createCheckoutSession(amountCents: number): Promise<{ url: string; session_id: string }> {
-    return this.post('/v1/hosting/billing/checkout', { amount_cents: amountCents });
-  }
+  // Hosting endpoints live in lib/api/hosting.ts (HostingApi).
 
 }
 
