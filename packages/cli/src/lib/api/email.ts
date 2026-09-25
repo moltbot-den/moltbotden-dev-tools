@@ -61,6 +61,7 @@ export interface EmailSent {
   messages: EmailMessage[];
   total: number;
   has_more: boolean;
+  cursor?: string | null;
 }
 
 export interface EmailThread {
@@ -91,15 +92,19 @@ export async function getEmailAccount(client: MoltbotDenClient): Promise<EmailAc
 
 export async function getInbox(
   client: MoltbotDenClient,
-  opts: { limit: number; unreadOnly?: boolean; from?: string },
+  opts: { limit: number; unreadOnly?: boolean; from?: string; cursor?: string },
 ): Promise<EmailInbox> {
   return client.request<EmailInbox>('GET', '/email/inbox', {
-    query: { limit: opts.limit, unread_only: opts.unreadOnly || undefined, from_address: opts.from },
+    query: { limit: opts.limit, unread_only: opts.unreadOnly || undefined, from_address: opts.from, cursor: opts.cursor },
   });
 }
 
-export async function getSent(client: MoltbotDenClient, limit: number): Promise<EmailSent> {
-  return client.request<EmailSent>('GET', '/email/sent', { query: { limit } });
+/** The cursor is opaque: pass back the previous page's `cursor` unchanged. */
+export async function getSent(
+  client: MoltbotDenClient,
+  opts: { limit: number; cursor?: string },
+): Promise<EmailSent> {
+  return client.request<EmailSent>('GET', '/email/sent', { query: { limit: opts.limit, cursor: opts.cursor } });
 }
 
 /** GET /email/message/{id}. Side effect: the backend marks an inbound message read. */

@@ -12,7 +12,7 @@ import {
   COMMUNICATION_STYLES,
 } from '../constants/defaults.js';
 import { AgentProfile, ProfileDepth, UserType } from '../types/config.js';
-import { isJsonMode } from './output.js';
+import { BRAND_HEX, brand, isJsonMode } from './output.js';
 import { UsageError } from './errors.js';
 
 // ─── Non-interactive safety ───────────────────────────────────────────────────
@@ -86,7 +86,7 @@ export class InteractivePrompts {
   }): Promise<RegistrationData> {
     // ASCII robot art banner matching brand logo (solid style)
     console.log('');
-    console.log(chalk.hex('#FF8C00')('═'.repeat(50)));
+    console.log(brand('═'.repeat(50)));
     console.log('');
     console.log('                    ' + chalk.white('●'));
     console.log('                    ' + chalk.white('█'));
@@ -98,10 +98,10 @@ export class InteractivePrompts {
     console.log('               ' + chalk.white('█') + '    ' + chalk.red('♥') + '    ' + chalk.white('█'));
     console.log('               ' + chalk.white('███████████'));
     console.log('');
-    console.log('                    ' + chalk.white.bold('Moltbot') + chalk.red.bold('Den'));
+    console.log('                    ' + chalk.white.bold('Moltbot') + chalk.hex(BRAND_HEX).bold('Den'));
     console.log('       ' + chalk.gray('The Intelligence Layer for AI Agents'));
     console.log('');
-    console.log(chalk.hex('#FF8C00')('═'.repeat(50)));
+    console.log(brand('═'.repeat(50)));
     console.log('');
 
     // Determine user type
@@ -277,11 +277,11 @@ export class InteractivePrompts {
     }
 
     // Confirmation summary
-    const orange = chalk.hex('#FF8C00');
+    const accent = brand;
     const dim = chalk.gray;
     const val = chalk.white.bold;
     const boxWidth = 56;
-    const line = orange('─'.repeat(boxWidth));
+    const line = accent('─'.repeat(boxWidth));
     const labelWidth = 15; // Column width for labels like "Capabilities   "
     const valueWidth = boxWidth - 3 - labelWidth; // 3 for "│  " prefix
 
@@ -307,14 +307,14 @@ export class InteractivePrompts {
 
     console.log('');
     console.log(`  ${line}`);
-    console.log(`  ${orange('│')}`);
-    console.log(`  ${orange('│')}  ${chalk.white.bold('⚡ Ready to Register')}`);
-    console.log(`  ${orange('│')}`);
-    console.log(`  ${orange('│')}  ${dim('Agent ID')}       ${val(agentId)}`);
-    console.log(`  ${orange('│')}  ${dim('Display Name')}   ${val(displayName)}`);
+    console.log(`  ${accent('│')}`);
+    console.log(`  ${accent('│')}  ${chalk.white.bold('⚡ Ready to Register')}`);
+    console.log(`  ${accent('│')}`);
+    console.log(`  ${accent('│')}  ${dim('Agent ID')}       ${val(agentId)}`);
+    console.log(`  ${accent('│')}  ${dim('Display Name')}   ${val(displayName)}`);
 
     if (profile.tagline) {
-      console.log(`  ${orange('│')}  ${dim('Tagline')}        ${val(profile.tagline)}`);
+      console.log(`  ${accent('│')}  ${dim('Tagline')}        ${val(profile.tagline)}`);
     }
 
     if (profile.capabilities) {
@@ -323,11 +323,11 @@ export class InteractivePrompts {
       const pad = ' '.repeat(labelWidth);
       groups.forEach((group, i) => {
         const isLast = i === groups.length - 1;
-        const styled = group.map(c => orange(c)).join(dim(', ')) + (isLast ? '' : dim(','));
+        const styled = group.map(c => accent(c)).join(dim(', ')) + (isLast ? '' : dim(','));
         if (i === 0) {
-          console.log(`  ${orange('│')}  ${dim('Capabilities')}   ${styled}`);
+          console.log(`  ${accent('│')}  ${dim('Capabilities')}   ${styled}`);
         } else {
-          console.log(`  ${orange('│')}  ${pad}${styled}`);
+          console.log(`  ${accent('│')}  ${pad}${styled}`);
         }
       });
     }
@@ -338,11 +338,11 @@ export class InteractivePrompts {
       const pad = ' '.repeat(labelWidth);
       groups.forEach((group, i) => {
         const isLast = i === groups.length - 1;
-        const styled = group.map(c => orange(c)).join(dim(', ')) + (isLast ? '' : dim(','));
+        const styled = group.map(c => accent(c)).join(dim(', ')) + (isLast ? '' : dim(','));
         if (i === 0) {
-          console.log(`  ${orange('│')}  ${dim('Interests')}      ${styled}`);
+          console.log(`  ${accent('│')}  ${dim('Interests')}      ${styled}`);
         } else {
-          console.log(`  ${orange('│')}  ${pad}${styled}`);
+          console.log(`  ${accent('│')}  ${pad}${styled}`);
         }
       });
     }
@@ -352,14 +352,14 @@ export class InteractivePrompts {
       const desc = profile.description.length > descMax
         ? profile.description.slice(0, descMax) + '...'
         : profile.description;
-      console.log(`  ${orange('│')}  ${dim('Description')}    ${val(desc)}`);
+      console.log(`  ${accent('│')}  ${dim('Description')}    ${val(desc)}`);
     }
 
     if (profile.communication) {
-      console.log(`  ${orange('│')}  ${dim('Style')}          ${val(profile.communication.style)}`);
+      console.log(`  ${accent('│')}  ${dim('Style')}          ${val(profile.communication.style)}`);
     }
 
-    console.log(`  ${orange('│')}`);
+    console.log(`  ${accent('│')}`);
     console.log(`  ${line}`);
     console.log('');
 

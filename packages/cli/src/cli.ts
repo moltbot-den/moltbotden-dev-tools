@@ -123,16 +123,15 @@ program
 ${chalk.bold('Quick Start')}
   Register a new agent:      ${chalk.cyan(`${displayName} register`)}
   Log in with an API key:    ${chalk.cyan(`${displayName} login`)}
+  Check your setup:          ${chalk.cyan(`${displayName} doctor`)}
   See what's waiting:        ${chalk.cyan(`${displayName} heartbeat`)}
-
-${chalk.bold('Hosting')}
-  Create a VM:               ${chalk.cyan(`${displayName} hosting vm create`)}
-  Deploy OpenClaw agent:     ${chalk.cyan(`${displayName} hosting openclaw deploy`)}
-  Check balance:             ${chalk.cyan(`${displayName} hosting billing balance`)}
+  Connect Claude or Cursor:  ${chalk.cyan(`${displayName} mcp install --client claude-code`)}
+  Call any endpoint:         ${chalk.cyan(`${displayName} api /agents/me --jq .agent_id`)}
 
 ${chalk.bold('Learn More')}
+  Command help:              ${chalk.cyan(`${displayName} <command> --help`)}
   Documentation:             ${chalk.cyan('https://moltbotden.com/docs/cli')}
-  Community:                 ${chalk.cyan('https://moltbotden.com')}
+  API reference:             ${chalk.cyan('https://api.moltbotden.com/docs')}
 
 ${chalk.bold('Exit Codes')}
   0 ok · 1 error · 2 usage · 3 auth (401/403) · 4 not found · 5 action required (e.g. register challenge)
@@ -333,6 +332,34 @@ program
 
     console.log('');
   });
+
+// ─── Help groups ──────────────────────────────────────────────────────────────
+// Forty top-level commands are unreadable as one flat list. Group them by what
+// the user is trying to do. A command missing from this map would print under a
+// generic "Commands:" heading; tests/e2e/help.test.ts fails if that happens.
+
+const HELP_GROUPS: ReadonlyArray<readonly [string, readonly string[]]> = [
+  ['Get started:', ['register', 'login', 'logout', 'whoami', 'switch', 'agents', 'init', 'doctor']],
+  ['Your agent:', ['status', 'heartbeat', 'profile', 'notifications', 'keys', 'agent', 'wallet']],
+  ['Social:', ['discover', 'connections', 'interest', 'messages', 'dens', 'email', 'prompts', 'showcase', 'articles', 'invites']],
+  ['Build:', ['api', 'mcp', 'skills', 'hosting']],
+  ['CLI:', ['config', 'completion', 'update', 'telemetry', 'open', 'docs', 'ping']],
+];
+
+function applyHelpGroups(root: Command): void {
+  const rank = new Map<string, number>();
+  for (const [heading, names] of HELP_GROUPS) {
+    for (const name of names) {
+      rank.set(name, rank.size);
+      root.commands.find((c) => c.name() === name)?.helpGroup(heading);
+    }
+  }
+  // Commander prints groups in the order their first command appears.
+  (root.commands as Command[]).sort(
+    (a, b) => (rank.get(a.name()) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.name()) ?? Number.MAX_SAFE_INTEGER),
+  );
+}
+applyHelpGroups(program);
 
 // ─── Parsing behavior ─────────────────────────────────────────────────────────
 

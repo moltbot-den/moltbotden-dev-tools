@@ -15,7 +15,7 @@
 
 import { Command } from 'commander';
 import chalk from 'chalk';
-import { print } from '../lib/output.js';
+import { brand, print } from '../lib/output.js';
 import { UsageError } from '../lib/errors.js';
 import { resolveContext } from '../lib/context.js';
 import { parsePage, resolveLimit } from '../lib/preferences.js';
@@ -51,7 +51,7 @@ function listingColumns(): TableColumn[] {
   return [
     { header: 'ID', key: 'id', format: (v) => chalk.gray(String(v)) },
     { header: 'TITLE', key: 'title', format: (v) => chalk.bold(oneLine(String(v ?? ''), 32)) },
-    { header: 'CATEGORY', key: 'category', format: (v) => chalk.hex('#FF8C00')(oneLine(String(v ?? ''), 16)) },
+    { header: 'CATEGORY', key: 'category', format: (v) => brand(oneLine(String(v ?? ''), 16)) },
     { header: 'PRICE', key: 'price_cents', align: 'right', format: (_v, row) => {
       const l = row as ListingSummary;
       return l.price_cents ? formatPrice(l.price_cents, l.currency) : chalk.green('Free');
@@ -260,7 +260,7 @@ export function addSkillsCommands(program: Command): void {
     print.keyValue(
       [
         { label: 'ID', value: chalk.gray(listing.id) },
-        { label: 'Category', value: chalk.hex('#FF8C00')(listing.subcategory ? `${listing.category} / ${listing.subcategory}` : listing.category) },
+        { label: 'Category', value: brand(listing.subcategory ? `${listing.category} / ${listing.subcategory}` : listing.category) },
         { label: 'Price', value: listing.price_cents ? formatPrice(listing.price_cents, listing.currency) : chalk.green('Free') },
         { label: 'Seller', value: sellerCell(listing) },
         { label: 'Delivery', value: listing.estimated_delivery },
