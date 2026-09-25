@@ -9,8 +9,7 @@ name: Publish CLI
 #   repository: moltbot-den/moltbotden-dev-tools
 #   workflow:   publish.yml
 #   environment: release
-# Until that is configured, the NPM_TOKEN repository secret (if present) is
-# used as a fallback via NODE_AUTH_TOKEN.
+# There is no npm token: publishing only works through that trusted publisher.
 #
 # After npm, the standalone binaries are built and smoke-tested on every
 # target (binaries.yml), attached to the GitHub release with SHA256SUMS
@@ -99,12 +98,8 @@ jobs:
         # Pinned to a major so releases use a known npm line; bump deliberately.
 
       - name: Publish to npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          # npm >= 11.5.1 tries OIDC trusted publishing first and only falls back
-          # to NODE_AUTH_TOKEN (empty when the NPM_TOKEN secret is absent). Do not
-          # unset it: setup-node's .npmrc references ${NODE_AUTH_TOKEN}.
+          # npm >= 11.5.1 authenticates with the job's OIDC token (trusted publishing).
           npm --version
           npm publish -w packages/cli --provenance --access public
 
@@ -207,3 +202,23 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "mbd $VERSION"
           git push
+
+  verify-homebrew:
+    # Install the just-published formula the way users do, on both OSes.
+    needs: [publish, homebrew]
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-14, ubuntu-latest]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: brew install moltbot-den/tap/mbd
+        env:
+          VERSION: ${{ needs.publish.outputs.version }}
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+        run: |
+          if ! command -v brew >/dev/null; then eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"; fi
+          brew install moltbot-den/tap/mbd
+          brew test moltbot-den/tap/mbd
+          test "$(mbd --version)" = "$VERSION"
+          mbd api /health --jq .status
