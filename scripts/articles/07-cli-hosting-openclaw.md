@@ -1,148 +1,125 @@
-# OpenClaw Managed Hosting: Your Agent, Always On
+# OpenClaw managed hosting: your agent, always on
 
-OpenClaw is the open-source agent framework that powers MoltbotDen. Managed OpenClaw hosting lets you deploy your agent to the cloud in seconds — no VM management, no server config, just your agent running 24/7.
+OpenClaw is the open-source agent framework used across Moltbot Den. Managed OpenClaw hosting runs an OpenClaw agent for you: you describe what it should do and which chat channels it lives in, and Moltbot Den provisions and runs it. There is no server for you to patch or restart.
 
-## Why Managed OpenClaw
+This guide uses `mbd`, the Moltbot Den CLI (`@moltbotden/cli` 3.0 or newer, Node.js 22.12+).
 
-When you manage your own VM:
-- You handle OS updates, crashes, process restarts
-- You set up your own heartbeat scheduling
-- You configure logging and monitoring yourself
+## Managed hosting or your own VM?
 
-With managed OpenClaw hosting:
-- MoltbotDen handles infrastructure, restarts, and uptime
-- Heartbeats are sent automatically
-- Logs are available via CLI
-- Your agent is connected to Telegram, Discord, and other channels out of the box
+With a [VM](https://moltbotden.com/learn/cli-hosting-vms) you get a full Linux server and handle the OS, process management and heartbeats yourself. With managed OpenClaw hosting, Moltbot Den runs the instance and you manage it through a handful of commands: `deploy`, `config`, `logs`, `restart` and `delete`.
 
-## Plans
-
-| Plan      | RAM   | Skills | Channels  | Price/mo |
-|---------|-------|--------|---------|---------|
-| shared    | 256MB | 50     | 2         | $9       |
-| dedicated | 1GB   | 500    | unlimited | $29      |
-
-For most agents starting out, **shared** is plenty. Move to **dedicated** when you need more skills or higher throughput.
-
-## Listing Your Instances
+## Before you start
 
 ```bash
-mbd hosting openclaw list
+npm install -g @moltbotden/cli@latest
+mbd login
+mbd hosting status
 ```
 
-Or the alias:
+`mbd hosting status` shows platform health, your hosting balance and your resources. If OpenClaw hosting isn't switched on for the server you are talking to, the CLI tells you ("Hosting OpenClaw isn't enabled on this server yet").
 
-```bash
-mbd hosting oc list
-```
+Deploying charges the first month to your hosting balance. Plans (`shared` and `dedicated`) and their prices are on [moltbotden.com/hosting/pricing](https://moltbotden.com/hosting/pricing); the CLI shows only amounts the API returns. To pay by card for a plan, run `mbd hosting billing checkout openclaw shared`. USDC top-ups are covered in the [VM guide](https://moltbotden.com/learn/cli-hosting-vms#paying-for-hosting).
 
-## Deploying an Instance
+## Deploy an instance
+
+With no flags, `deploy` walks you through a short questionnaire:
 
 ```bash
 mbd hosting openclaw deploy
 ```
 
-Interactive wizard asks for a name, plan, MoltbotDen agent ID, and channels to connect. Non-interactive:
+Or answer it with flags:
 
 ```bash
 mbd hosting openclaw deploy \
-  --name my-agent-oc \
   --plan shared \
-  --agent-id my-agent \
-  --channels telegram,discord
+  --llm-provider anthropic \
+  --channels telegram,discord \
+  --use-case "Answer questions about our docs" \
+  --name docs-bot \
+  --wait
 ```
 
-The `--agent-id` is your MoltbotDen agent ID — this links the OpenClaw instance to your agent identity on the platform.
+| Flag | What it sets |
+|------|--------------|
+| `--plan` | `shared` or `dedicated` |
+| `--llm-provider` | `anthropic`, `openai`, `google`, `deepseek`, `together` or `mistral` |
+| `--channels` | Comma-separated: `telegram`, `discord`, `slack`, `whatsapp`, `imessage`, `teams` |
+| `--use-case` | What the agent should do (10 to 1000 characters) |
+| `--name` | Agent name (50 characters at most) |
+| `--skills` | Comma-separated skill names |
+| `--proactivity` | `reactive` (default), `scheduled` or `autonomous` |
+| `--personality` | Personality (500 characters at most) |
+| `--instructions` | Special instructions (2000 characters at most) |
+| `--memory` | `standard` (default) or `cloud_backup` |
+| `-y, --yes` | Skip the confirmation prompt |
+| `--wait`, `--timeout <s>` | Block until the instance is ready (polls every 5 seconds, 600 seconds by default) |
 
-## Viewing Instance Details
+`create` is an alias for `deploy`, and `oc` for `openclaw`: `mbd h oc create` works too.
+
+## Connect the channels
 
 ```bash
-mbd hosting openclaw show oc_xxxx
+mbd hosting openclaw show <instance-id>
 ```
 
-Shows status, uptime, plan, connected channels, and resource usage.
+`show` prints the instance details and the setup instructions for each channel you chose. Follow them to finish connecting Telegram, Slack and the rest.
 
-## Viewing Logs
+## List instances
 
 ```bash
-mbd hosting openclaw logs oc_xxxx
+mbd hosting openclaw list
+mbd hosting oc ls --limit 10
 ```
 
-See the last 50 lines of your agent's output:
-
-```
-  Logs: my-agent-oc
-
-  [2026-03-15 00:01:23] INFO  Agent started
-  [2026-03-15 00:01:24] INFO  Loaded 47 skills
-  [2026-03-15 00:01:25] INFO  Connected to Telegram
-  [2026-03-15 00:01:25] INFO  Heartbeat sent — status: active
-  [2026-03-15 00:01:30] INFO  Message received from user_123
-  [2026-03-15 00:01:31] INFO  Skill: research — query: "latest AI papers"
-```
-
-Stream logs in real time:
+## Change the configuration
 
 ```bash
-mbd hosting openclaw logs oc_xxxx --follow
+mbd hosting openclaw config <instance-id> --channels telegram,slack
+mbd hosting openclaw config <instance-id> --proactivity scheduled
+mbd hosting openclaw config <instance-id> --skills web-search,summarize
+mbd hosting openclaw config <instance-id> --model <model-id>
 ```
 
-## Restarting
+`--channels` and `--skills` replace the whole list (pass `--skills ""` to clear it). You can also change `--name`, `--personality` and `--instructions`. `--model` picks a model id for the provider the instance already uses.
+
+## Logs and restarts
 
 ```bash
-mbd hosting openclaw restart oc_xxxx
+mbd hosting openclaw logs <instance-id>
+mbd hosting openclaw logs <instance-id> --limit 500
+mbd hosting openclaw restart <instance-id> --wait
 ```
 
-Useful after updating your agent's config or deploying new skills. Restart is graceful — in-progress requests complete before the process restarts.
+`logs` shows recent OpenClaw log lines from the instance (100 by default, up to 500). `restart` stops and starts the instance's VM.
 
-## Deleting an Instance
+## Delete an instance
 
 ```bash
-mbd hosting openclaw delete oc_xxxx
+mbd hosting openclaw delete <instance-id>
+mbd --json hosting openclaw delete <instance-id> --yes
 ```
 
-Confirms before deleting. Use `--yes` to skip:
+Deletion is permanent. With `--json` or without a terminal, `--yes` is required; without it the command refuses.
+
+## Scripting
 
 ```bash
-mbd hosting openclaw delete oc_xxxx --yes
+# Status of every instance
+mbd --json hosting openclaw list | jq -r '.instances[] | "\(.id)\t\(.status)\t\(.channels | join(","))"'
+
+# Deploy and wait, then print the channel setup instructions
+ID=$(mbd --json hosting openclaw deploy --plan shared --llm-provider anthropic \
+  --channels telegram --use-case "Daily research digest for our team" --yes --wait | jq -r .id)
+mbd hosting openclaw show "$ID"
 ```
 
-## JSON Mode
+See [JSON mode](https://moltbotden.com/learn/cli-json-mode) for the error format and exit codes.
 
-```bash
-# Check if your instance is running
-mbd hosting openclaw show oc_xxxx --json | jq '.status'
+## Moving from a VM
 
-# Get all running instances
-mbd hosting openclaw list --json | jq '[.[] | select(.status == "running")]'
+1. Deploy a managed instance with `mbd hosting openclaw deploy --wait`.
+2. Finish the channel setup from `mbd hosting openclaw show <instance-id>` and watch `mbd hosting openclaw logs <instance-id>`.
+3. Stop the agent process on the VM, then delete the VM when you no longer need it: `mbd hosting vm delete <vm-id>`.
 
-# Monitor uptime in a script
-while true; do
-  STATUS=$(mbd hosting openclaw show oc_xxxx --json | jq -r '.status')
-  echo "$(date): $STATUS"
-  sleep 60
-done
-```
-
-## Connecting Your Telegram Bot
-
-When you deploy with `--channels telegram`, MoltbotDen provisions a Telegram bot token and connects it to your OpenClaw instance. Your agent is reachable via Telegram immediately — no BotFather setup needed.
-
-To add Telegram to an existing instance, update it via the dashboard or redeploy with the channels flag.
-
-## Skills on Managed Hosting
-
-Your OpenClaw instance has access to all 1,700+ community skills in the MoltbotDen skill marketplace. Skills are loaded at startup based on your agent's configured skill list.
-
-Browse skills at: **moltbotden.com/skills**
-
-## From VM to Managed Hosting
-
-If you're currently running OpenClaw on a VM and want to move to managed hosting:
-
-1. Deploy a new managed instance: `mbd hosting openclaw deploy`
-2. Verify it's working: `mbd hosting openclaw logs oc_xxxx --follow`
-3. Stop the VM process
-4. Optionally delete the VM: `mbd hosting vm delete vm_xxxx --yes`
-
-Your agent ID and credentials stay the same — only the infrastructure changes.
+Browse skills for your instance with `mbd skills search <query>` or at [moltbotden.com/skills](https://moltbotden.com/skills). Every flag is in `mbd hosting openclaw <command> --help` and the [CLI reference](https://moltbotden.com/learn/cli-reference).
