@@ -96,7 +96,7 @@ export function addDatabaseCommands(parent: Command, program: Command): void {
     const rawType = opts.type ?? opts.engine;
     let type = rawType !== undefined ? validateChoice(rawType, DATABASE_TYPES, '--type') : undefined;
     let plan = opts.plan !== undefined ? validateChoice(opts.plan, PLANS, '--plan') : undefined;
-    if (opts.wait) parseTimeout(opts.timeout);
+    const timeoutSec = opts.wait ? parseTimeout(opts.timeout) : undefined;
 
     if (!name) {
       requireInteractive('--name', 'database name');
@@ -143,12 +143,12 @@ export function addDatabaseCommands(parent: Command, program: Command): void {
     }
 
     const created = await withSpinner('Creating database', () => h.api.createDatabase({ name: name!, db_type: type!, plan: plan! }));
-    if (opts.wait) {
+    if (timeoutSec !== undefined) {
       const db = await waitWithSpinner({
         fetch: () => h.api.getDatabase(created.id),
         done: ['running'],
         label: `database ${created.name}`,
-        timeoutSec: parseTimeout(opts.timeout),
+        timeoutSec: timeoutSec,
         showCommand: `mbd hosting db show ${created.id}`,
       });
       if (h.json) return print.json(db);
@@ -320,7 +320,7 @@ export function addDatabaseCommands(parent: Command, program: Command): void {
   ).action(hostingAction(program, 'databases', async (h, dbId: string, opts: { backup: string; name: string; yes?: boolean; wait?: boolean; timeout?: string }) => {
     if (!/^[0-9]{1,20}$/.test(opts.backup)) throw new UsageError('--backup must be a numeric backup id (see `mbd hosting db backups <db-id>`).');
     const name = validateName(opts.name);
-    if (opts.wait) parseTimeout(opts.timeout);
+    const timeoutSec = opts.wait ? parseTimeout(opts.timeout) : undefined;
     if (isInteractive() && !opts.yes) {
       const account = await h.api.getAccount().catch(() => null);
       const ok = await clack.confirm({
@@ -331,12 +331,12 @@ export function addDatabaseCommands(parent: Command, program: Command): void {
       if (clack.isCancel(ok) || !ok) cancelled();
     }
     const result = await withSpinner('Starting restore', () => h.api.restoreDatabase(dbId, { backup_id: opts.backup, target_name: name }));
-    if (opts.wait) {
+    if (timeoutSec !== undefined) {
       const db = await waitWithSpinner({
         fetch: () => h.api.getDatabase(result.target_db_id),
         done: ['running'],
         label: `database ${name}`,
-        timeoutSec: parseTimeout(opts.timeout),
+        timeoutSec: timeoutSec,
         showCommand: `mbd hosting db show ${result.target_db_id}`,
       });
       if (h.json) return print.json(db);

@@ -28,12 +28,12 @@ function tierLabel(tier: string): string {
   return `${chalk.white(spec.name)} ${chalk.gray(`(${spec.vcpus} vCPU / ${spec.ram_gb} GB)`)}`;
 }
 
-function waitForVm(h: Hosting, vmId: string, done: string[], label: string, timeout: string | undefined): Promise<VM> {
+function waitForVm(h: Hosting, vmId: string, done: string[], label: string, timeoutSec: number): Promise<VM> {
   return waitWithSpinner({
     fetch: () => h.api.getVM(vmId),
     done,
     label,
-    timeoutSec: parseTimeout(timeout),
+    timeoutSec,
     showCommand: `mbd hosting vm show ${vmId}`,
   });
 }
@@ -148,7 +148,7 @@ export function addVMCommands(parent: Command, program: Command): void {
 
     const created = await withSpinner('Creating VM', () => h.api.createVM({ name: name!, tier: tier!, image, ssh_public_key: sshKey }));
     if (timeoutSec !== undefined) {
-      const vm = await waitForVm(h, created.id, ['running'], `VM ${created.name}`, opts.timeout);
+      const vm = await waitForVm(h, created.id, ['running'], `VM ${created.name}`, timeoutSec);
       if (h.json) return print.json(vm);
       print.success(`VM "${chalk.cyan(vm.name)}" is running`);
       if (vm.ip_address) print.hint(`SSH:  ssh ${VM_SSH_USER}@${vm.ip_address}`);
@@ -206,7 +206,7 @@ export function addVMCommands(parent: Command, program: Command): void {
         }
         const result = await withSpinner(`${op.verb} VM`, () => h.api[op.call](vmId));
         if (timeoutSec !== undefined) {
-          const vm = await waitForVm(h, vmId, [op.target], `VM ${vmId}`, opts.timeout);
+          const vm = await waitForVm(h, vmId, [op.target], `VM ${vmId}`, timeoutSec);
           if (h.json) return print.json(vm);
           print.success(`VM ${chalk.cyan(vmId)} is ${vm.status}`);
           return;
@@ -222,24 +222,22 @@ export function addVMCommands(parent: Command, program: Command): void {
     withWaitOptions(
       vmCmd
         .command('resize <vm-id>')
-        .description('Move a VM to another tier (restarts it; upgrades charge the monthly difference)')
+        .description('Move a VM to another tier (it is stopped, resized and started again, even if it was stopped; upgrades charge the monthly difference)')
         .requiredOption('--tier <tier>', `New tier: ${TIERS.join('|')} (the disk cannot shrink)`)
-        .option('-y, --yes', 'Skip the confirmation prompt'),
+        .option('-y, --yes', 'Skip the confirmation prompt (required with --json or without a TTY)'),
     ),
-    ['mbd hosting vm resize <vm-id> --tier standard --wait'],
+    ['mbd hosting vm resize <vm-id> --tier standard --wait', 'mbd --json hosting vm resize <vm-id> --tier pro --yes'],
   ).action(hostingAction(program, 'compute', async (h, vmId: string, opts: { tier: string; yes?: boolean; wait?: boolean; timeout?: string }) => {
     const tier = validateChoice(opts.tier, TIERS, '--tier');
-    if (opts.wait) parseTimeout(opts.timeout);
-    if (isInteractive() && !opts.yes) {
-      const ok = await clack.confirm({
-        message: `Resize VM ${vmId} to ${tier}? It stops briefly, and an upgrade charges the monthly price difference now.`,
-        initialValue: true,
-      });
-      if (clack.isCancel(ok) || !ok) cancelled();
-    }
+    const timeoutSec = opts.wait ? parseTimeout(opts.timeout) : undefined;
+    const ok = await confirmDestructive({
+      yes: opts.yes, json: h.json,
+      message: `Resize VM ${vmId} to ${tier}? It goes offline while it is resized and comes back running; an upgrade charges the monthly price difference now.`,
+    });
+    if (!ok) cancelled();
     const result = await withSpinner('Resizing VM', () => h.api.resizeVM(vmId, tier));
-    if (opts.wait) {
-      const vm = await waitForVm(h, vmId, ['running', 'stopped'], `VM ${vmId}`, opts.timeout);
+    if (timeoutSec !== undefined) {
+      const vm = await waitForVm(h, vmId, ['running'], `VM ${vmId}`, timeoutSec);
       if (h.json) return print.json(vm);
       print.success(`VM ${chalk.cyan(vmId)} is now ${tierLabel(vm.tier)} (${vm.status})`);
       return;
@@ -261,15 +259,15 @@ export function addVMCommands(parent: Command, program: Command): void {
     ['mbd hosting vm rebuild <vm-id>', 'mbd hosting vm rebuild <vm-id> --image ubuntu-2404-lts-amd64 --yes --wait'],
   ).action(hostingAction(program, 'compute', async (h, vmId: string, opts: { image: string; yes?: boolean; wait?: boolean; timeout?: string }) => {
     const image = validateChoice(opts.image, VM_IMAGES, '--image');
-    if (opts.wait) parseTimeout(opts.timeout);
+    const timeoutSec = opts.wait ? parseTimeout(opts.timeout) : undefined;
     const ok = await confirmDestructive({
       yes: opts.yes, json: h.json,
       message: `Rebuild VM ${vmId} from ${image}? Everything on its boot disk is erased (attached volumes are kept).`,
     });
     if (!ok) cancelled();
     const result = await withSpinner('Rebuilding VM', () => h.api.rebuildVM(vmId, image));
-    if (opts.wait) {
-      const vm = await waitForVm(h, vmId, ['running'], `VM ${vmId}`, opts.timeout);
+    if (timeoutSec !== undefined) {
+      const vm = await waitForVm(h, vmId, ['running'], `VM ${vmId}`, timeoutSec);
       if (h.json) return print.json(vm);
       print.success(`VM ${chalk.cyan(vmId)} rebuilt from ${vm.image}`);
       return;

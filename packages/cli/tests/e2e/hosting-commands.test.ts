@@ -162,6 +162,7 @@ describe('destructive commands never run unconfirmed', () => {
     [['hosting', 'vm', 'volumes', 'detach', 'vm-1', 'vol-1']],
     [['hosting', 'vm', 'rebuild', 'vm-1']],
     [['hosting', 'vm', 'stop', 'vm-1']],
+    [['hosting', 'vm', 'resize', 'vm-1', '--tier', 'pro']],
     [['hosting', 'vm', 'ssh-keys', 'vm-1', '--key', 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl x']],
   ])('%j with --json but no --yes refuses (exit 2) and sends nothing', async (args) => {
     const { code, stdout, stderr } = await mbd('--json', ...args);
@@ -326,8 +327,24 @@ describe('credentials, signed URLs and wallet linking', () => {
 
   it('vm resize sends the new tier', async () => {
     api.on('POST', '/v1/hosting/compute/vms/vm-1/resize', { status: 200, body: { status: 'resizing', from_tier: 'nano', to_tier: 'pro', new_machine_type: 'e2-standard-2' } });
-    const { code } = await mbd('--json', 'hosting', 'vm', 'resize', 'vm-1', '--tier', 'pro');
+    const { code } = await mbd('--json', 'hosting', 'vm', 'resize', 'vm-1', '--tier', 'pro', '--yes');
     expect(code).toBe(0);
     expect(bodyOf('POST', '/v1/hosting/compute/vms/vm-1/resize')).toEqual({ tier: 'pro' });
+  });
+
+  it('vm resize --wait does not report success on a stopped VM (the resize task always ends running)', async () => {
+    api.on('POST', '/v1/hosting/compute/vms/vm-1/resize', { status: 200, body: { status: 'resizing', from_tier: 'nano', to_tier: 'pro', new_machine_type: 'e2-standard-2' } });
+    api.on('GET', '/v1/hosting/compute/vms/vm-1', { status: 200, body: { ...VM, status: 'stopped' } });
+    const { code, stderr } = await mbd('--json', 'hosting', 'vm', 'resize', 'vm-1', '--tier', 'pro', '--yes', '--wait', '--timeout', '1');
+    expect(code).toBe(1);
+    expect(envelope(stderr).message).toContain('Timed out');
+  });
+
+  it('openclaw config enforces the instance\'s own plan limit before sending', async () => {
+    api.on('GET', '/v1/hosting/openclaw/oc-1', { status: 200, body: { id: 'oc-1', plan: 'shared', status: 'running', channels: [], skills: [] } });
+    const { code, stderr } = await mbd('--json', 'hosting', 'openclaw', 'config', 'oc-1', '--channels', 'telegram,discord,slack,teams');
+    expect(code).toBe(2);
+    expect(envelope(stderr).message).toContain('shared plan allows at most 3 channels');
+    expect(api.requests.some((r) => r.method === 'PATCH')).toBe(false);
   });
 });

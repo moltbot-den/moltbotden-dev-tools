@@ -84,7 +84,7 @@ export function addStorageCommands(parent: Command, program: Command): void {
   ).action(hostingAction(program, 'storage', async (h, opts: { name?: string; plan?: string; yes?: boolean; wait?: boolean; timeout?: string }) => {
     let name = opts.name !== undefined ? validateName(opts.name, '--name', 3) : undefined;
     let plan = opts.plan !== undefined ? validateChoice(opts.plan, PLANS, '--plan') : undefined;
-    if (opts.wait) parseTimeout(opts.timeout);
+    const timeoutSec = opts.wait ? parseTimeout(opts.timeout) : undefined;
 
     if (!name) {
       requireInteractive('--name', 'bucket name');
@@ -115,12 +115,12 @@ export function addStorageCommands(parent: Command, program: Command): void {
     }
 
     const created = await withSpinner('Creating bucket', () => h.api.createBucket({ name: name!, plan: plan! }));
-    if (opts.wait) {
+    if (timeoutSec !== undefined) {
       const bucket = await waitWithSpinner<Bucket>({
         fetch: () => h.api.getBucket(created.id),
         done: ['active'],
         label: `bucket ${created.name}`,
-        timeoutSec: parseTimeout(opts.timeout),
+        timeoutSec: timeoutSec,
         showCommand: `mbd hosting storage show ${created.id}`,
       });
       if (h.json) return print.json(bucket);

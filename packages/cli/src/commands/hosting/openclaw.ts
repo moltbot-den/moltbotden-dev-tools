@@ -27,19 +27,25 @@ function maxLength(value: string | undefined, max: number, flag: string): string
   return value;
 }
 
-function checkChannels(channels: string[], plan?: OpenClawPlan): string[] {
+/** Same caps the API enforces (routers/hosting/openclaw.py); checked here to fail before any prompt or charge. */
+function planLimits(plan?: string): { channels: number; skills: number; label: string } {
+  const spec = plan ? OPENCLAW_PLAN_SPECS[plan as OpenClawPlan] : undefined;
+  return spec
+    ? { channels: spec.max_channels, skills: spec.max_skills, label: `The ${plan} plan allows` }
+    : { channels: OPENCLAW_CHANNELS.length, skills: 20, label: 'The API allows' };
+}
+
+function checkChannels(channels: string[], plan?: string): string[] {
   for (const c of channels) validateChoice(c, OPENCLAW_CHANNELS, '--channels');
   if (new Set(channels).size !== channels.length) throw new UsageError('--channels lists a channel twice.');
-  // Same caps the API enforces (routers/hosting/openclaw.py); checked here to fail before any prompt.
-  if (plan && channels.length > OPENCLAW_PLAN_SPECS[plan].max_channels) {
-    throw new UsageError(`The ${plan} plan allows at most ${OPENCLAW_PLAN_SPECS[plan].max_channels} channels.`);
-  }
+  const limits = planLimits(plan);
+  if (channels.length > limits.channels) throw new UsageError(`${limits.label} at most ${limits.channels} channels.`);
   return channels;
 }
 
-function checkSkills(skills: string[], plan?: OpenClawPlan): string[] {
-  const max = plan ? OPENCLAW_PLAN_SPECS[plan].max_skills : 20;
-  if (skills.length > max) throw new UsageError(`${plan ? `The ${plan} plan allows` : 'The API allows'} at most ${max} skills.`);
+function checkSkills(skills: string[], plan?: string): string[] {
+  const limits = planLimits(plan);
+  if (skills.length > limits.skills) throw new UsageError(`${limits.label} at most ${limits.skills} skills.`);
   return skills;
 }
 
@@ -123,7 +129,7 @@ export function addOpenClawCommands(parent: Command, program: Command): void {
     const memory = opts.memory !== undefined ? validateChoice(opts.memory, OPENCLAW_MEMORY, '--memory') : undefined;
     const personality = maxLength(opts.personality, 500, '--personality');
     const instructions = maxLength(opts.instructions, 2000, '--instructions');
-    if (opts.wait) parseTimeout(opts.timeout);
+    const timeoutSec = opts.wait ? parseTimeout(opts.timeout) : undefined;
 
     if (!plan) {
       requireInteractive('--plan', PLANS.join(' or '));
@@ -197,13 +203,13 @@ export function addOpenClawCommands(parent: Command, program: Command): void {
       special_instructions: instructions,
       memory_preference: memory,
     }));
-    if (opts.wait) {
+    if (timeoutSec !== undefined) {
       const instance = await waitWithSpinner({
         fetch: () => h.api.getOpenClaw(created.id),
         done: ['running'],
         failed: ['error', 'stopped', 'deleted'],
         label: `OpenClaw ${name ?? shortId(created.id)}`,
-        timeoutSec: parseTimeout(opts.timeout),
+        timeoutSec: timeoutSec,
         showCommand: `mbd hosting openclaw show ${created.id}`,
       });
       if (h.json) return print.json(instance);
@@ -265,12 +271,15 @@ export function addOpenClawCommands(parent: Command, program: Command): void {
     channels?: string; skills?: string; proactivity?: string; name?: string; personality?: string; instructions?: string; model?: string;
   }) => {
     const body: OpenClawUpdateRequest = {};
+    // The plan caps channels and skills; look it up only when those change.
+    const plan = opts.channels !== undefined || opts.skills !== undefined
+      ? (await withSpinner('Fetching instance', () => h.api.getOpenClaw(id))).plan
+      : undefined;
     if (opts.channels !== undefined) {
-      body.channels = checkChannels(parseList(opts.channels));
+      body.channels = checkChannels(parseList(opts.channels), plan);
       if (body.channels.length === 0) throw new UsageError('--channels needs at least one channel.');
-      if (body.channels.length > 6) throw new UsageError('At most 6 channels are allowed.');
     }
-    if (opts.skills !== undefined) body.skills = checkSkills(parseList(opts.skills));
+    if (opts.skills !== undefined) body.skills = checkSkills(parseList(opts.skills), plan);
     if (opts.proactivity !== undefined) body.proactivity_level = validateChoice(opts.proactivity, OPENCLAW_PROACTIVITY, '--proactivity');
     if (opts.name !== undefined) body.agent_name = maxLength(opts.name, 50, '--name');
     if (opts.personality !== undefined) body.agent_personality = maxLength(opts.personality, 500, '--personality');
@@ -306,14 +315,14 @@ export function addOpenClawCommands(parent: Command, program: Command): void {
     withWaitOptions(ocCmd.command('restart <instance-id>').description('Restart an instance (stops and starts its VM)')),
     ['mbd hosting openclaw restart <instance-id> --wait'],
   ).action(hostingAction(program, 'OpenClaw', async (h, id: string, opts: { wait?: boolean; timeout?: string }) => {
-    if (opts.wait) parseTimeout(opts.timeout);
+    const timeoutSec = opts.wait ? parseTimeout(opts.timeout) : undefined;
     const result = await withSpinner('Restarting instance', () => h.api.restartOpenClaw(id));
-    if (opts.wait) {
+    if (timeoutSec !== undefined) {
       const instance = await waitWithSpinner({
         fetch: () => h.api.getOpenClaw(id),
         done: ['running'],
         label: `OpenClaw ${shortId(id)}`,
-        timeoutSec: parseTimeout(opts.timeout),
+        timeoutSec: timeoutSec,
         showCommand: `mbd hosting openclaw show ${id}`,
       });
       if (h.json) return print.json(instance);
