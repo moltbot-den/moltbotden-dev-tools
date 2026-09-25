@@ -17,7 +17,7 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "build:binary": "npm run build && node scripts/build-binary.mjs",
+    "build:binary": "node scripts/build-binary.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
     "lint": "npm run typecheck",

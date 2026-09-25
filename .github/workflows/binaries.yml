@@ -79,8 +79,8 @@ jobs:
         run: |
           (cd dist-bin && node -e 'const c=require("crypto"),f=require("fs");for(const n of f.readdirSync(".")){if(n.startsWith("mbd-"))process.stdout.write(c.createHash("sha256").update(f.readFileSync(n)).digest("hex")+"  "+n+"\n")}' > SHA256SUMS && cat SHA256SUMS)
           node -e 'const f=require("fs"),p=require("path");require("http").createServer((q,r)=>f.readFile(p.join("dist-bin",p.basename(q.url)),(e,d)=>{r.statusCode=e?404:200;r.end(d)})).listen(18666)' &
-          sleep 2
           export MBD_DOWNLOAD_URL=http://127.0.0.1:18666
+          for _ in $(seq 1 50); do curl -fsS -o /dev/null "$MBD_DOWNLOAD_URL/SHA256SUMS" && break; sleep 0.2; done
           if [ "$RUNNER_OS" = Windows ]; then
             for shell in pwsh powershell; do
               dir="$RUNNER_TEMP/mbd-$shell"
