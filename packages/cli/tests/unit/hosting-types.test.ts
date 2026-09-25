@@ -28,12 +28,14 @@ describe('VM Tier Specs', () => {
     }
   });
 
-  it('should have increasing prices', () => {
-    let prevPrice = 0;
-    for (const tier of tiers) {
-      const spec = VM_TIER_SPECS[tier];
-      expect(spec.price_cents).toBeGreaterThan(prevPrice);
-      prevPrice = spec.price_cents;
+  it('carries no prices: the CLI must never show a price it did not get from the API', () => {
+    for (const spec of [
+      ...Object.values(VM_TIER_SPECS),
+      ...Object.values(DB_PLAN_SPECS),
+      ...Object.values(STORAGE_PLAN_SPECS),
+      ...Object.values(OPENCLAW_PLAN_SPECS),
+    ]) {
+      expect(Object.keys(spec).some((k) => /price|cost|cents/.test(k))).toBe(false);
     }
   });
 

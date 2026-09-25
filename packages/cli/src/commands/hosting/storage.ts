@@ -1,242 +1,176 @@
 /**
- * Hosting storage commands: list, create, show, usage, delete
+ * mbd hosting storage: object storage buckets.
+ * API: /v1/hosting/storage/buckets (routers/hosting/storage.py).
  */
 
 import { Command } from 'commander';
 import * as clack from '@clack/prompts';
 import chalk from 'chalk';
-import { MoltbotDenClient } from '../../lib/api-client.js';
 import { print, statusBadge } from '../../lib/output.js';
-import { fail, UsageError } from '../../lib/errors.js';
-import { STORAGE_PLAN_SPECS, type StoragePlan } from '../../types/hosting.js';
+import { confirmDestructive, isInteractive, requireInteractive } from '../../lib/prompts.js';
+import { STORAGE_PLAN_SPECS, type Bucket, type BucketUsage, type StoragePlan } from '../../types/hosting.js';
+import {
+  cancelled, examples, formatBytes, hostingAction, money, moreHint, nameProblem, parseIntOption, parseTimeout,
+  relTime, validateChoice, validateName, waitWithSpinner, withSpinner, withWaitOptions,
+} from './shared.js';
 
-export function addStorageCommands(parent: Command, getClient: () => Promise<MoltbotDenClient>, jsonMode: () => boolean): void {
+const PLANS = Object.keys(STORAGE_PLAN_SPECS) as StoragePlan[];
 
-  const storageCmd = parent
-    .command('storage')
-    .description('Manage object storage buckets');
-
-  // ─── list ─────────────────────────────────────────────────────────────────────
-  storageCmd
-    .command('list')
-    .alias('ls')
-    .description('List your storage buckets')
-    .action(async () => {
-      const client = await getClient();
-      const json = jsonMode();
-      const spinner = json ? null : clack.spinner();
-      if (spinner) spinner.start('Loading buckets...');
-
-      let result: Awaited<ReturnType<typeof client.listBuckets>>;
-      try {
-        result = await client.listBuckets();
-        if (spinner) spinner.stop('');
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Failed to list buckets');
-      }
-
-      if (json) { console.log(JSON.stringify(result)); return; }
-
-      const { buckets } = result;
-      print.header(`Storage Buckets  ${chalk.gray(`(${buckets.length})`)}`);
-      console.log('');
-
-      if (buckets.length === 0) {
-        print.empty('No buckets yet', 'Create one with:  mbd hosting storage create');
-        return;
-      }
-
-      print.table(
-        [
-          { header: 'NAME',    key: 'name',   width: 24, format: (v) => chalk.cyan(String(v)) },
-          { header: 'PLAN',    key: 'plan',   width: 12, format: (v) => String(v) },
-          { header: 'STATUS',  key: 'status', width: 16, format: (v) => statusBadge(String(v)) },
-          { header: 'REGION',  key: 'region', width: 14, format: (v) => chalk.gray(String(v)) },
-          { header: 'OBJECTS', key: 'object_count',       format: (v) => v !== null ? chalk.gray(String(v)) : chalk.gray('–') },
-          { header: 'USED',    key: 'storage_used_bytes',
-            format: (v) => v !== null ? chalk.gray(formatBytes(Number(v))) : chalk.gray('–') },
-          { header: 'CREATED', key: 'created_at', format: (v) => chalk.gray(print.relativeTime(String(v))) },
-        ],
-        buckets
-      );
-
-      console.log('');
-      print.hint(`Show details:  mbd hosting storage show <id>`);
-      console.log('');
-    });
-
-  // ─── create ───────────────────────────────────────────────────────────────────
-  storageCmd
-    .command('create')
-    .description('Create a new storage bucket')
-    .option('--name <name>',     'Bucket name')
-    .option('--plan <plan>',     'Plan: starter|standard|business')
-    .option('--region <region>', 'GCP region', 'us-central1')
-    .action(async (opts) => {
-      const client = await getClient();
-      const json = jsonMode();
-
-      let name: string = opts.name as string;
-      let plan: StoragePlan = opts.plan as StoragePlan;
-
-      if (!json) {
-        if (!name) {
-          const n = await clack.text({
-            message: 'Bucket name:',
-            placeholder: 'my-agent-storage',
-            validate: (v) => {
-              if (!v || v.trim().length < 3) return 'Name must be at least 3 characters';
-              if (!/^[a-z0-9][a-z0-9-]*[a-z0-9]?$/.test(v)) return 'Use lowercase letters, numbers, and hyphens';
-              if (v.length > 40) return 'Name must be at most 40 characters';
-              return undefined;
-            },
-          });
-          if (clack.isCancel(n)) { clack.cancel('Cancelled'); process.exit(0); }
-          name = (n as string).trim();
-        }
-
-        if (!plan) {
-          const p = await clack.select({
-            message: 'Select plan:',
-            options: (Object.entries(STORAGE_PLAN_SPECS) as [StoragePlan, typeof STORAGE_PLAN_SPECS[StoragePlan]][]).map(([key, spec]) => ({
-              value: key,
-              label: `${spec.name.padEnd(10)}  ${spec.storage_gb} GB storage · ${spec.egress_gb} GB egress/mo`,
-              hint: `$${(spec.price_cents / 100).toFixed(2)}/mo`,
-            })),
-          });
-          if (clack.isCancel(p)) { clack.cancel('Cancelled'); process.exit(0); }
-          plan = p as StoragePlan;
-        }
-
-        const spec = STORAGE_PLAN_SPECS[plan];
-        const confirmed = await clack.confirm({
-          message: `Create bucket "${chalk.white(name)}" (${chalk.cyan(plan)}) for ${chalk.yellow('$' + (spec.price_cents / 100).toFixed(2) + '/mo')}?`,
-          initialValue: true,
-        });
-        if (clack.isCancel(confirmed) || !confirmed) { clack.cancel('Cancelled'); process.exit(0); }
-      } else {
-        if (!name || !plan) {
-          fail(new UsageError('--name and --plan are required in --json mode'));
-        }
-      }
-
-      const spinner = json ? null : clack.spinner();
-      if (spinner) spinner.start('Creating bucket...');
-
-      try {
-        const result = await client.createBucket({ name, plan, region: opts.region as string });
-        if (spinner) spinner.stop('Bucket created ✓');
-
-        if (json) {
-          console.log(JSON.stringify(result));
-        } else {
-          print.success(`Bucket "${chalk.cyan(name)}" created`);
-          print.hint(`Show details:  mbd hosting storage show ${result.id}`);
-          console.log('');
-        }
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Bucket creation failed');
-      }
-    });
-
-  // ─── show ─────────────────────────────────────────────────────────────────────
-  storageCmd
-    .command('show <bucket-id>')
-    .description('Show bucket details and usage')
-    .action(async (bucketId: string) => {
-      const client = await getClient();
-      const json = jsonMode();
-      const spinner = json ? null : clack.spinner();
-      if (spinner) spinner.start('Fetching bucket...');
-
-      let bucket: Awaited<ReturnType<typeof client.getBucket>>;
-      let usage: Awaited<ReturnType<typeof client.getBucketUsage>> | null = null;
-
-      try {
-        [bucket, usage] = await Promise.allSettled([
-          client.getBucket(bucketId),
-          client.getBucketUsage(bucketId),
-        ]).then(([b, u]) => [
-          b.status === 'fulfilled' ? b.value : (() => { throw b.reason; })(),
-          u.status === 'fulfilled' ? u.value : null,
-        ]);
-        if (spinner) spinner.stop('');
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Bucket not found');
-      }
-
-      if (json) { console.log(JSON.stringify({ bucket, usage })); return; }
-
-      const spec = STORAGE_PLAN_SPECS[bucket.plan];
-      console.log('');
-      console.log(`  ${chalk.bold(bucket.name)}  ${statusBadge(bucket.status)}`);
-      console.log(`  ${chalk.gray(bucket.id)}`);
-      console.log('');
-      print.divider(52);
-      console.log('');
-
-      print.keyValue([
-        { label: 'Name',      value: bucket.name },
-        { label: 'Plan',      value: chalk.cyan(bucket.plan) },
-        { label: 'Status',    value: statusBadge(bucket.status) },
-        { label: 'Region',    value: chalk.gray(bucket.region) },
-        { label: 'Capacity',  value: spec ? `${spec.storage_gb} GB` : undefined },
-        { label: 'Egress',    value: spec ? `${spec.egress_gb} GB/mo` : undefined },
-        { label: 'Price',     value: spec ? chalk.yellow(`$${(spec.price_cents / 100).toFixed(2)}/mo`) : undefined },
-        { label: 'Objects',   value: usage ? String(usage.object_count) : (bucket.object_count !== null ? String(bucket.object_count) : undefined) },
-        { label: 'Used',      value: usage ? formatBytes(usage.storage_used_bytes) : (bucket.storage_used_bytes !== null ? formatBytes(bucket.storage_used_bytes) : undefined) },
-        { label: 'Created',   value: print.relativeTime(bucket.created_at) },
-      ], { labelWidth: 12 });
-
-      console.log('');
-    });
-
-  // ─── delete ───────────────────────────────────────────────────────────────────
-  storageCmd
-    .command('delete <bucket-id>')
-    .alias('rm')
-    .description('Delete a storage bucket')
-    .option('--yes', 'Skip confirmation')
-    .action(async (bucketId: string, opts) => {
-      const json = jsonMode();
-
-      if (!opts.yes && !json) {
-        const ok = await clack.confirm({
-          message: chalk.red(`Permanently delete bucket ${chalk.bold(bucketId)}? All stored data will be lost.`),
-          initialValue: false,
-        });
-        if (clack.isCancel(ok) || !ok) { clack.cancel('Cancelled'); process.exit(0); }
-      }
-
-      const client = await getClient();
-      const spinner = json ? null : clack.spinner();
-      if (spinner) spinner.start(`Deleting bucket ${chalk.cyan(bucketId)}...`);
-
-      try {
-        await client.deleteBucket(bucketId);
-        if (spinner) spinner.stop('');
-
-        if (json) {
-          console.log(JSON.stringify({ success: true, bucket_id: bucketId }));
-        } else {
-          print.success(`Bucket ${chalk.cyan(bucketId)} deleted`);
-        }
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Delete failed');
-      }
-    });
+/** "used of max"; a 0 means the API has not metered anything yet. */
+function usage(used: number | undefined, max: number | undefined): string {
+  const limit = formatBytes(max);
+  return used ? `${formatBytes(used)} of ${limit}` : `${chalk.gray('not reported yet')} (limit ${limit})`;
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+function printUsage(u: Pick<BucketUsage, 'storage_bytes' | 'max_storage_bytes' | 'egress_bytes_month' | 'max_egress_bytes_month'>): void {
+  print.keyValue([
+    { label: 'Stored', value: usage(u.storage_bytes, u.max_storage_bytes) },
+    { label: 'Egress', value: `${usage(u.egress_bytes_month, u.max_egress_bytes_month)} this month` },
+  ], { labelWidth: 8 });
+}
 
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${units[i]}`;
+export function addStorageCommands(parent: Command, program: Command): void {
+  const storageCmd = parent.command('storage').description('Manage object storage buckets');
+  examples(storageCmd, ['mbd hosting storage list', 'mbd hosting storage create --name agent-files --plan starter']);
+
+  // ─── list ──────────────────────────────────────────────────────────────────
+  examples(
+    storageCmd
+      .command('list')
+      .alias('ls')
+      .description('List your storage buckets')
+      .option('--limit <n>', 'Maximum buckets to return (1-100)', '50'),
+    ['mbd hosting storage list'],
+  ).action(hostingAction(program, 'storage', async (h, opts: { limit: string }) => {
+    const limit = parseIntOption(opts.limit, '--limit', 1, 100);
+    const result = await withSpinner('Loading buckets', () => h.api.listBuckets({ limit }));
+    if (h.json) return print.json(result);
+    print.header(`Storage Buckets  ${chalk.gray(`(${result.buckets.length})`)}`);
+    console.log('');
+    if (result.buckets.length === 0) {
+      print.empty('No buckets yet', 'Create one:  mbd hosting storage create');
+      return;
+    }
+    print.table(
+      [
+        { header: 'ID',      key: 'id',     format: (v) => chalk.gray(String(v)) },
+        { header: 'NAME',    key: 'name',   format: (v) => chalk.cyan(String(v)) },
+        { header: 'PLAN',    key: 'plan' },
+        { header: 'STATUS',  key: 'status', format: (v) => statusBadge(String(v)) },
+        { header: 'LIMIT',   key: 'max_storage_bytes', align: 'right', format: (v) => formatBytes(v) },
+        { header: 'CREATED', key: 'created_at', format: (v) => chalk.gray(relTime(v)) },
+      ],
+      result.buckets,
+    );
+    console.log('');
+    moreHint(result.count, limit, 'mbd hosting storage list');
+    print.hint('Details:  mbd hosting storage show <id>');
+  }));
+
+  // ─── create ────────────────────────────────────────────────────────────────
+  examples(
+    withWaitOptions(
+      storageCmd
+        .command('create')
+        .description('Create a bucket (charges the first month to your hosting balance)')
+        .option('--name <name>', 'Bucket name: 3-50 lowercase letters, digits, hyphens; starts with a letter')
+        .option('--plan <plan>', `Plan: ${PLANS.join('|')}`)
+        .option('-y, --yes', 'Skip the confirmation prompt'),
+    ),
+    ['mbd hosting storage create', 'mbd hosting storage create --name agent-files --plan starter --wait'],
+  ).action(hostingAction(program, 'storage', async (h, opts: { name?: string; plan?: string; yes?: boolean; wait?: boolean; timeout?: string }) => {
+    let name = opts.name !== undefined ? validateName(opts.name, '--name', 3) : undefined;
+    let plan = opts.plan !== undefined ? validateChoice(opts.plan, PLANS, '--plan') : undefined;
+    if (opts.wait) parseTimeout(opts.timeout);
+
+    if (!name) {
+      requireInteractive('--name', 'bucket name');
+      const n = await clack.text({ message: 'Bucket name', placeholder: 'my-agent-files', validate: (v) => nameProblem((v ?? '').trim(), 3) });
+      if (clack.isCancel(n)) cancelled();
+      name = n.trim();
+    }
+    if (!plan) {
+      requireInteractive('--plan', PLANS.join(', '));
+      const p = await clack.select({
+        message: 'Plan',
+        options: PLANS.map((key) => {
+          const s = STORAGE_PLAN_SPECS[key];
+          return { value: key, label: `${s.name.padEnd(9)} ${s.storage_gb} GB stored · ${s.egress_gb} GB egress/month` };
+        }),
+      });
+      if (clack.isCancel(p)) cancelled();
+      plan = p;
+    }
+    if (isInteractive() && !opts.yes) {
+      const account = await h.api.getAccount().catch(() => null);
+      const ok = await clack.confirm({
+        message: `Create bucket "${name}" on the ${plan} plan? The first month is charged to your hosting balance now` +
+          (account ? ` (balance ${money(account.usdc_balance_cents)}).` : '.'),
+        initialValue: true,
+      });
+      if (clack.isCancel(ok) || !ok) cancelled();
+    }
+
+    const created = await withSpinner('Creating bucket', () => h.api.createBucket({ name: name!, plan: plan! }));
+    if (opts.wait) {
+      const bucket = await waitWithSpinner<Bucket>({
+        fetch: () => h.api.getBucket(created.id),
+        done: ['active'],
+        label: `bucket ${created.name}`,
+        timeoutSec: parseTimeout(opts.timeout),
+        showCommand: `mbd hosting storage show ${created.id}`,
+      });
+      if (h.json) return print.json(bucket);
+      print.success(`Bucket "${chalk.cyan(bucket.name)}" is active (${bucket.gcs_bucket_name})`);
+      return;
+    }
+    if (h.json) return print.json(created);
+    print.success(`Bucket "${chalk.cyan(created.name)}" created (${created.id})`);
+    print.hint(`Details:  mbd hosting storage show ${created.id}`);
+  }));
+
+  // ─── show ──────────────────────────────────────────────────────────────────
+  examples(
+    storageCmd.command('show <bucket-id>').alias('get').description('Show bucket details and usage'),
+    ['mbd hosting storage show <bucket-id>'],
+  ).action(hostingAction(program, 'storage', async (h, bucketId: string) => {
+    const bucket = await withSpinner('Fetching bucket', () => h.api.getBucket(bucketId));
+    if (h.json) return print.json(bucket);
+    console.log('');
+    console.log(`  ${chalk.bold(bucket.name)}  ${statusBadge(bucket.status)}`);
+    console.log(`  ${chalk.gray(bucket.id)}`);
+    console.log('');
+    print.keyValue([
+      { label: 'Plan',       value: bucket.plan },
+      { label: 'GCS bucket', value: bucket.gcs_bucket_name },
+      { label: 'Created',    value: relTime(bucket.created_at) },
+    ], { labelWidth: 10 });
+    printUsage(bucket);
+  }));
+
+  // ─── usage ─────────────────────────────────────────────────────────────────
+  examples(
+    storageCmd.command('usage <bucket-id>').description('Show stored bytes and this month\'s egress for a bucket'),
+    ['mbd hosting storage usage <bucket-id>', 'mbd --json hosting storage usage <bucket-id>'],
+  ).action(hostingAction(program, 'storage', async (h, bucketId: string) => {
+    const u = await withSpinner('Fetching usage', () => h.api.getBucketUsage(bucketId));
+    if (h.json) return print.json(u);
+    printUsage(u);
+  }));
+
+  // ─── delete ────────────────────────────────────────────────────────────────
+  examples(
+    storageCmd
+      .command('delete <bucket-id>')
+      .alias('rm')
+      .description('Delete a bucket and every object in it')
+      .option('-y, --yes', 'Skip the confirmation prompt (required with --json or without a TTY)'),
+    ['mbd hosting storage delete <bucket-id>', 'mbd --json hosting storage delete <bucket-id> --yes'],
+  ).action(hostingAction(program, 'storage', async (h, bucketId: string, opts: { yes?: boolean }) => {
+    const ok = await confirmDestructive({ yes: opts.yes, json: h.json, message: `Permanently delete bucket ${bucketId} and all its objects?` });
+    if (!ok) cancelled();
+    const result = await withSpinner('Deleting bucket', () => h.api.deleteBucket(bucketId));
+    if (h.json) return print.json(result);
+    print.success(`Deletion of bucket ${chalk.cyan(bucketId)} started`);
+  }));
 }

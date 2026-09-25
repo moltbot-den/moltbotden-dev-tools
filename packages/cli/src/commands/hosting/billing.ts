@@ -1,256 +1,181 @@
 /**
- * Hosting billing commands: balance, usage, history, topup
+ * mbd hosting billing: balance, subscriptions, history and adding funds.
+ * API: /v1/hosting/billing (routers/hosting/billing.py, models/hosting/billing.py).
+ *
+ * Funding is two separate flows on the server:
+ *   - card: a Stripe Checkout subscription for one resource plan (`checkout`)
+ *   - USDC: credit a confirmed on-chain transfer to the treasury (`topup`)
  */
 
 import { Command } from 'commander';
-import * as clack from '@clack/prompts';
 import chalk from 'chalk';
 import open from 'open';
-import { MoltbotDenClient } from '../../lib/api-client.js';
-import { print } from '../../lib/output.js';
-import { fail, UsageError } from '../../lib/errors.js';
+import { print, statusBadge } from '../../lib/output.js';
+import { UsageError } from '../../lib/errors.js';
+import { isInteractive } from '../../lib/prompts.js';
+import {
+  BILLING_EVENT_TYPES, BILLING_RESOURCE_TYPES, USDC_NETWORKS, type BillingEvent, type BillingResourceType,
+} from '../../types/hosting.js';
+import {
+  TOPUP_HINT, examples, hostingAction, money, parseIntOption, relTime, validateChoice, withSpinner,
+} from './shared.js';
 
-export function addBillingCommands(parent: Command, getClient: () => Promise<MoltbotDenClient>, jsonMode: () => boolean): void {
+/** Stripe redirects here after checkout; the API only accepts moltbotden.com or localhost URLs. */
+export const CHECKOUT_RETURN_URL = 'https://moltbotden.com/hosting/dashboard/billing';
 
-  const billingCmd = parent
-    .command('billing')
-    .description('View and manage hosting billing');
+const CREDIT_EVENTS = new Set(['topup', 'credit', 'refund']);
 
-  // ─── balance ──────────────────────────────────────────────────────────────────
-  billingCmd
-    .command('balance')
-    .description('Show current hosting account balance')
-    .action(async () => {
-      const client = await getClient();
-      const json = jsonMode();
-      const spinner = json ? null : clack.spinner();
-      if (spinner) spinner.start('Fetching balance...');
+export function signedAmount(e: Pick<BillingEvent, 'event_type' | 'amount_cents'>): string {
+  const abs = money(Math.abs(e.amount_cents));
+  return CREDIT_EVENTS.has(e.event_type) ? chalk.green(`+${abs}`) : `-${abs}`;
+}
 
-      let balance: Awaited<ReturnType<typeof client.getBillingBalance>>;
-      let account: Awaited<ReturnType<typeof client.getHostingAccount>>;
+/** "25", "25.5", "$25.50" → 2550 cents. */
+export function parseUsd(value: string, flag: string): number {
+  const cleaned = value.trim().replace(/^\$/, '');
+  if (!/^\d+(\.\d{1,2})?$/.test(cleaned)) throw new UsageError(`${flag} must be a USD amount like 25 or 25.50 (got "${value}").`);
+  const cents = Math.round(Number(cleaned) * 100);
+  if (cents <= 0) throw new UsageError(`${flag} must be greater than 0.`);
+  return cents;
+}
 
-      try {
-        [balance, account] = await Promise.all([
-          client.getBillingBalance(),
-          client.getHostingAccount(),
-        ]);
-        if (spinner) spinner.stop('');
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Failed to fetch balance');
-      }
+async function openUrl(url: string, noOpen: boolean | undefined): Promise<void> {
+  console.log(`\n  ${chalk.cyan(url)}\n`);
+  if (noOpen || !isInteractive()) return;
+  try {
+    await open(url);
+    print.info('Opened in your browser');
+  } catch {
+    print.warn('Could not open a browser; open the link above.');
+  }
+}
 
-      if (json) {
-        console.log(JSON.stringify({ balance, account }));
-        return;
-      }
+export function addBillingCommands(parent: Command, program: Command): void {
+  const billingCmd = parent.command('billing').description('Hosting balance, subscriptions, history and payments');
+  examples(billingCmd, ['mbd hosting billing status', 'mbd hosting billing topup --tx-hash <0x...> --amount 25', 'mbd hosting billing checkout vm nano']);
 
-      const balanceDollars = balance.balance_cents / 100;
-      const isLow = balanceDollars < 10;
-
-      console.log('');
-      console.log(`  ${chalk.bold('Hosting Account Balance')}`);
-      console.log('');
-
-      const balanceStr = `$${balanceDollars.toFixed(2)}`;
-      const balanceColored = isLow
-        ? chalk.red.bold(balanceStr)
-        : balanceDollars > 50
-          ? chalk.green.bold(balanceStr)
-          : chalk.white.bold(balanceStr);
-
-      console.log(`  ${balanceColored}  ${chalk.gray(balance.currency.toUpperCase())}`);
-      console.log('');
-
-      if (isLow) {
-        print.warn('Balance is low — consider adding funds to avoid service interruptions');
-        print.hint('mbd hosting billing topup');
-      }
-
-      print.keyValue([
-        { label: 'Account',   value: account.email },
-        { label: 'Status',    value: account.status === 'active' ? chalk.green('Active') : chalk.yellow(account.status) },
-        { label: 'Wallet',    value: account.wallet_address ? chalk.gray(account.wallet_address.slice(0, 20) + '…') : undefined },
-        { label: 'NFT Holder', value: account.nft_holder ? chalk.green('Yes (10% discount)') : undefined },
-        { label: 'Referral',  value: account.referral_code ? chalk.cyan(account.referral_code) : undefined },
-      ], { labelWidth: 12 });
-
-      console.log('');
-      print.hint('View usage:  mbd hosting billing usage');
-      print.hint('Add funds:   mbd hosting billing topup');
-      console.log('');
-    });
-
-  // ─── usage ────────────────────────────────────────────────────────────────────
-  billingCmd
-    .command('usage')
-    .description('Show current billing period usage')
-    .action(async () => {
-      const client = await getClient();
-      const json = jsonMode();
-      const spinner = json ? null : clack.spinner();
-      if (spinner) spinner.start('Fetching usage...');
-
-      let usage: Awaited<ReturnType<typeof client.getBillingUsage>>;
-      try {
-        usage = await client.getBillingUsage();
-        if (spinner) spinner.stop('');
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Failed to fetch usage');
-      }
-
-      if (json) { console.log(JSON.stringify(usage)); return; }
-
-      const start = new Date(usage.period_start).toLocaleDateString();
-      const end = new Date(usage.period_end).toLocaleDateString();
-
-      print.header(`Usage: ${start} – ${end}`);
-      console.log('');
-      console.log(`  ${chalk.gray('Total this period:')}  ${chalk.bold.white('$' + (usage.total_cents / 100).toFixed(2))}`);
-      console.log('');
-
-      if (!usage.breakdown || usage.breakdown.length === 0) {
-        print.empty('No usage this period');
-        return;
-      }
-
+  // ─── status ────────────────────────────────────────────────────────────────
+  examples(
+    billingCmd.command('status').alias('balance').description('Show your balance and active subscriptions'),
+    ['mbd hosting billing status', 'mbd --json hosting billing status | jq .usdc_balance_cents'],
+  ).action(hostingAction(program, 'billing', async (h) => {
+    const b = await withSpinner('Fetching billing status', () => h.api.getBilling());
+    if (h.json) return print.json(b);
+    console.log('');
+    console.log(`  ${chalk.gray('Balance')}  ${chalk.bold(money(b.usdc_balance_cents))}`);
+    console.log('');
+    const subs = b.subscriptions ?? [];
+    if (subs.length === 0) {
+      print.empty('No active subscriptions');
+    } else {
       print.table(
         [
-          { header: 'RESOURCE',   key: 'resource_name', width: 28, format: (v) => chalk.cyan(String(v)) },
-          { header: 'TYPE',       key: 'resource_type', width: 12, format: (v) => chalk.gray(String(v)) },
-          { header: 'AMOUNT',     key: 'amount_cents',  align: 'right',
-            format: (v) => chalk.white('$' + (Number(v) / 100).toFixed(2)) },
+          { header: 'RESOURCE', key: 'resource_type' },
+          { header: 'ID',       key: 'resource_id', format: (v) => chalk.gray(String(v ?? '–')) },
+          { header: 'PLAN',     key: 'plan' },
+          { header: 'STATUS',   key: 'status', format: (v) => statusBadge(String(v)) },
+          { header: 'RENEWS',   key: 'current_period_end', format: (v) => (v ? new Date(String(v)).toLocaleDateString() : chalk.gray('–')) },
         ],
-        usage.breakdown
+        subs,
       );
-
       console.log('');
-    });
+    }
+    print.hint(TOPUP_HINT);
+    print.hint('History:  mbd hosting billing history');
+  }));
 
-  // ─── history ──────────────────────────────────────────────────────────────────
-  billingCmd
-    .command('history')
-    .description('Show billing transaction history')
-    .option('--limit <n>', 'Number of transactions', '20')
-    .action(async (opts) => {
-      const client = await getClient();
-      const json = jsonMode();
-      const spinner = json ? null : clack.spinner();
-      if (spinner) spinner.start('Fetching billing history...');
+  // ─── history ───────────────────────────────────────────────────────────────
+  examples(
+    billingCmd
+      .command('history')
+      .description('List billing events (top-ups, credits, refunds, charges)')
+      .option('--type <type>', `Only this event type: ${BILLING_EVENT_TYPES.join('|')}`)
+      .option('--limit <n>', 'Events per page (1-100)', '20')
+      .option('--offset <n>', 'Skip this many events (0-10000)', '0'),
+    ['mbd hosting billing history', 'mbd hosting billing history --type topup --limit 50', 'mbd hosting billing history --offset 20'],
+  ).action(hostingAction(program, 'billing', async (h, opts: { type?: string; limit: string; offset: string }) => {
+    const limit = parseIntOption(opts.limit, '--limit', 1, 100);
+    const offset = parseIntOption(opts.offset, '--offset', 0, 10_000);
+    const eventType = opts.type !== undefined ? validateChoice(opts.type, BILLING_EVENT_TYPES, '--type') : undefined;
+    const history = await withSpinner('Fetching billing history', () => h.api.getBillingHistory({ event_type: eventType, limit, offset }));
+    if (h.json) return print.json(history);
+    const events = history.events ?? [];
+    if (events.length === 0) {
+      print.empty(offset > 0 ? 'No more billing events' : 'No billing events yet', offset > 0 ? undefined : 'Add funds:  mbd hosting billing topup --help');
+      return;
+    }
+    print.table(
+      [
+        { header: 'DATE',        key: 'created_at',   format: (v) => chalk.gray(relTime(v)) },
+        { header: 'TYPE',        key: 'event_type' },
+        { header: 'AMOUNT',      align: 'right',      format: (_v, row) => signedAmount(row as BillingEvent) },
+        { header: 'METHOD',      key: 'payment_method' },
+        { header: 'DESCRIPTION', key: 'description',  format: (v) => chalk.gray(String(v ?? '')) },
+      ],
+      events,
+    );
+    console.log('');
+    if (events.length >= limit) {
+      const typeFlag = eventType ? ` --type ${eventType}` : '';
+      print.hint(`More available:  mbd hosting billing history${typeFlag} --limit ${limit} --offset ${offset + limit}`);
+    }
+  }));
 
-      let history: Awaited<ReturnType<typeof client.getBillingHistory>>;
-      try {
-        history = await client.getBillingHistory(Number(opts.limit));
-        if (spinner) spinner.stop('');
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Failed to fetch history');
-      }
+  // ─── portal ────────────────────────────────────────────────────────────────
+  examples(
+    billingCmd
+      .command('portal')
+      .description('Open the Stripe customer portal (cards, invoices, subscriptions)')
+      .option('--no-open', 'Print the URL without opening a browser'),
+    ['mbd hosting billing portal', 'mbd --json hosting billing portal | jq -r .url'],
+  ).action(hostingAction(program, 'billing', async (h, opts: { open?: boolean }) => {
+    const result = await withSpinner('Creating portal session', () => h.api.getBillingPortal());
+    if (h.json) return print.json(result);
+    await openUrl(result.url, opts.open === false);
+  }));
 
-      if (json) { console.log(JSON.stringify(history)); return; }
+  // ─── checkout ──────────────────────────────────────────────────────────────
+  examples(
+    billingCmd
+      .command('checkout <resource-type> <plan>')
+      .description(`Pay by card: open a Stripe Checkout subscription for one plan (resource type: ${BILLING_RESOURCE_TYPES.join('|')})`)
+      .option('--resource-id <id>', 'Existing resource this subscription pays for')
+      .option('--no-open', 'Print the URL without opening a browser'),
+    ['mbd hosting billing checkout vm nano', 'mbd hosting billing checkout openclaw shared --no-open'],
+  ).action(hostingAction(program, 'billing', async (h, resourceType: string, plan: string, opts: { resourceId?: string; open?: boolean }) => {
+    const type = validateChoice<BillingResourceType>(resourceType, BILLING_RESOURCE_TYPES, '<resource-type>');
+    const session = await withSpinner('Creating checkout session', () => h.api.createCheckoutSession({
+      resource_type: type,
+      plan,
+      resource_id: opts.resourceId,
+      success_url: `${CHECKOUT_RETURN_URL}?checkout=success`,
+      cancel_url: `${CHECKOUT_RETURN_URL}?checkout=cancel`,
+    }));
+    if (h.json) return print.json(session);
+    print.success(`Checkout ready for ${type}/${plan}`);
+    await openUrl(session.url, opts.open === false);
+    print.hint('Your balance is credited when Stripe confirms the payment.');
+  }));
 
-      print.header('Billing History');
-      console.log('');
-
-      const { transactions } = history;
-
-      if (!transactions || transactions.length === 0) {
-        print.empty('No billing history yet');
-        return;
-      }
-
-      print.table(
-        [
-          { header: 'DATE',        key: 'created_at',   width: 14, format: (v) => chalk.gray(print.relativeTime(String(v))) },
-          { header: 'TYPE',        key: 'type',         width: 10,
-            format: (v) => {
-              const t = String(v);
-              if (t === 'credit') return chalk.green(t);
-              if (t === 'refund') return chalk.cyan(t);
-              return chalk.gray(t);
-            }
-          },
-          { header: 'AMOUNT',      key: 'amount_cents', align: 'right', width: 12,
-            format: (_v, row) => {
-              const r = row as { type: string; amount_cents: number };
-              const dollars = r.amount_cents / 100;
-              if (r.type === 'credit' || r.type === 'refund') {
-                return chalk.green(`+$${dollars.toFixed(2)}`);
-              }
-              return chalk.white(`-$${dollars.toFixed(2)}`);
-            }
-          },
-          { header: 'DESCRIPTION', key: 'description',  width: 40, format: (v) => chalk.gray(String(v)) },
-        ],
-        transactions
-      );
-
-      console.log('');
-    });
-
-  // ─── topup ────────────────────────────────────────────────────────────────────
-  billingCmd
-    .command('topup')
-    .description('Add funds to your hosting account')
-    .option('--amount <dollars>', 'Amount in USD to add')
-    .action(async (opts) => {
-      const client = await getClient();
-      const json = jsonMode();
-
-      let amountDollars: number;
-
-      if (opts.amount) {
-        amountDollars = parseFloat(opts.amount as string);
-        if (isNaN(amountDollars) || amountDollars < 5) {
-          print.error('Amount must be at least $5.00');
-          process.exit(1);
-        }
-      } else if (!json) {
-        const amt = await clack.select({
-          message: 'How much would you like to add?',
-          options: [
-            { value: '10',  label: '$10.00',  hint: '~1 month Nano VM' },
-            { value: '25',  label: '$25.00',  hint: '~1 month Standard VM' },
-            { value: '50',  label: '$50.00',  hint: '~1 month Pro VM' },
-            { value: '100', label: '$100.00', hint: 'Comfortable buffer for most setups' },
-            { value: '250', label: '$250.00', hint: 'Power user' },
-          ],
-        });
-        if (clack.isCancel(amt)) { clack.cancel('Cancelled'); process.exit(0); }
-        amountDollars = parseFloat(amt as string);
-      } else {
-        fail(new UsageError('--amount is required in --json mode'));
-      }
-
-      const amountCents = Math.round(amountDollars * 100);
-
-      const spinner = json ? null : clack.spinner();
-      if (spinner) spinner.start('Creating checkout session...');
-
-      try {
-        const result = await client.createCheckoutSession(amountCents);
-        if (spinner) spinner.stop('');
-
-        if (json) {
-          console.log(JSON.stringify(result));
-        } else {
-          print.success(`Checkout session created for ${chalk.yellow('$' + amountDollars.toFixed(2))}`);
-          console.log('');
-          print.info('Opening payment page in your browser...');
-          print.hint(result.url);
-          console.log('');
-
-          try {
-            await open(result.url);
-          } catch {
-            print.warn('Could not open browser automatically');
-            print.hint(`Visit: ${result.url}`);
-          }
-        }
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Failed to create checkout session');
-      }
-    });
+  // ─── topup (USDC) ──────────────────────────────────────────────────────────
+  examples(
+    billingCmd
+      .command('topup')
+      .description('Credit a USDC transfer you already sent to the Moltbot Den treasury')
+      .requiredOption('--tx-hash <hash>', 'Transaction hash (0x + 64 hex characters)')
+      .requiredOption('--amount <usd>', 'Exact USD amount of the transfer, e.g. 25 or 25.50')
+      .option('--network <network>', `Chain: ${USDC_NETWORKS.join('|')}`, 'base'),
+    ['mbd hosting billing topup --tx-hash 0xabc...123 --amount 25', 'mbd hosting billing topup --tx-hash 0x... --amount 100 --network ethereum'],
+  ).addHelpText('after', `
+The transfer needs 6 confirmations and the amount must match the chain exactly.
+Each transaction can be credited once. Card payments: mbd hosting billing checkout.
+`).action(hostingAction(program, 'billing', async (h, opts: { txHash: string; amount: string; network: string }) => {
+    const txHash = opts.txHash.trim();
+    if (!/^0x[0-9a-fA-F]{64}$/.test(txHash)) throw new UsageError('--tx-hash must be 0x followed by 64 hex characters.');
+    const amountCents = parseUsd(opts.amount, '--amount');
+    const chain = validateChoice(opts.network, USDC_NETWORKS, '--network');
+    const result = await withSpinner('Verifying transfer on-chain', () => h.api.topupUsdc({ tx_hash: txHash, amount_cents: amountCents, chain }));
+    if (h.json) return print.json(result);
+    print.success(`Credited ${money(result.amount_cents)}; new balance ${chalk.bold(money(result.new_balance_cents))}`);
+  }));
 }
