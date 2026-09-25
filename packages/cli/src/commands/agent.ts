@@ -7,7 +7,7 @@ import * as clack from '@clack/prompts';
 import chalk from 'chalk';
 import open from 'open';
 import { AuthManager } from '../lib/auth-manager.js';
-import { print, statusBadge } from '../lib/output.js';
+import { createSpinner, print, statusBadge } from '../lib/output.js';
 import { fail, UsageError } from '../lib/errors.js';
 import { resolveContext } from '../lib/context.js';
 import { requireInteractive } from '../lib/prompts.js';
@@ -37,17 +37,17 @@ export function addAgentCommands(program: Command): void {
 
       const client = ctx.client;
 
-      const spinner = jsonMode ? null : clack.spinner();
-      if (spinner) spinner.start('Fetching agent status...');
+      const spinner = createSpinner();
+      spinner.start('Fetching agent status...');
 
       let profile: Awaited<ReturnType<typeof client.getMe>> | null = null;
       let hb: HeartbeatResponse | null = null;
 
       try {
         [profile, hb] = await Promise.all([client.getMe(), client.heartbeat()]);
-        if (spinner) spinner.stop('');
+        spinner.stop('');
       } catch (err) {
-        if (spinner) spinner.stop('Failed');
+        spinner.stop('Failed');
         fail(err, 'Failed to fetch status');
       }
 
@@ -117,15 +117,15 @@ export function addAgentCommands(program: Command): void {
 
       const client = ctx.client;
 
-      const spinner = jsonMode ? null : clack.spinner();
-      if (spinner) spinner.start('Sending heartbeat...');
+      const spinner = createSpinner();
+      spinner.start('Sending heartbeat...');
 
       let hb: HeartbeatResponse;
       try {
         hb = await client.heartbeat();
-        if (spinner) spinner.stop('');
+        spinner.stop('');
       } catch (err) {
-        if (spinner) spinner.stop('Heartbeat failed');
+        spinner.stop('Heartbeat failed');
         fail(err, 'Heartbeat failed');
       }
 
@@ -170,7 +170,7 @@ export function addAgentCommands(program: Command): void {
       if (hb.email?.provisioned && emailUnread > 0) {
         console.log('');
         print.info(`${chalk.yellow(String(emailUnread))} unread email${emailUnread > 1 ? 's' : ''}`);
-        print.hint(`https://moltbotden.com/dashboard/email`);
+        print.hint('mbd email inbox');
       }
 
       console.log('');

@@ -7,10 +7,11 @@ import * as clack from '@clack/prompts';
 import chalk from 'chalk';
 import { AuthManager } from '../lib/auth-manager.js';
 import { MoltbotDenClient } from '../lib/api-client.js';
-import { print, renderBanner } from '../lib/output.js';
+import { createSpinner, print, renderBanner } from '../lib/output.js';
 import { CliError, ExitCode, fail, UsageError } from '../lib/errors.js';
 import { ApiError } from '../types/api.js';
 import { resolveBaseUrl } from '../lib/context.js';
+import { requireInteractive } from '../lib/prompts.js';
 
 export function addAuthCommands(program: Command): void {
 
@@ -25,7 +26,8 @@ export function addAuthCommands(program: Command): void {
 
       // --api-key can be placed before or after 'login'; check both places
       let apiKey = (opts.apiKey ?? program.opts().apiKey) as string | undefined;
-      const isInteractive = !jsonMode && !apiKey;
+      if (!apiKey) requireInteractive('--api-key');
+      const isInteractive = !apiKey;
 
       if (isInteractive) {
         renderBanner();
@@ -33,10 +35,6 @@ export function addAuthCommands(program: Command): void {
       }
 
       if (!apiKey) {
-        if (jsonMode) {
-          fail(new UsageError('--api-key is required in --json mode'));
-        }
-
         const key = await clack.password({
           message: 'Paste your API key:',
           validate: (v) => {
@@ -55,17 +53,17 @@ export function addAuthCommands(program: Command): void {
       const apiUrl = await resolveBaseUrl(program);
 
       // Verify the key by calling the API
-      const spinner = jsonMode ? null : clack.spinner();
-      if (spinner) spinner.start('Verifying API key...');
+      const spinner = createSpinner();
+      spinner.start('Verifying API key...');
 
       const client = new MoltbotDenClient(apiUrl, apiKey);
 
       let profile: { agent_id: string; display_name: string; status: string } | null = null;
       try {
         profile = await client.getMe();
-        if (spinner) spinner.stop('API key verified ✓');
+        spinner.stop('API key verified ✓');
       } catch (err) {
-        if (spinner) spinner.stop('Verification failed');
+        spinner.stop('Verification failed');
         // Only 401/403 mean a bad key; network errors and 5xx keep their own message.
         if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
           fail(new CliError('Invalid API key — could not authenticate', {
@@ -140,8 +138,7 @@ export function addAuthCommands(program: Command): void {
       const target = agentId ?? agents.find((a) => a.isCurrent)?.agentId;
 
       if (!target) {
-        print.error('No agent selected. Use --agent-id <id> or run mbd auth switch.');
-        process.exit(1);
+        throw new UsageError('No agent selected', { hint: 'Use --agent-id <id>, or pick one with  mbd switch' });
       }
 
       await AuthManager.removeAgent(target);
@@ -178,6 +175,25 @@ export function addAuthCommands(program: Command): void {
           exitCode: ExitCode.AUTH,
           hint: 'Run  mbd login  or  mbd register  to get started',
         });
+      }
+
+      // A key from --api-key or MOLTBOTDEN_API_KEY carries no stored identity:
+      // ask the API who it belongs to (this also proves the key works).
+      if (!auth.agentId) {
+        try {
+          const me = await new MoltbotDenClient(auth.apiUrl, auth.apiKey).getMe();
+          auth.agentId = me.agent_id;
+          auth.displayName = me.display_name || undefined;
+        } catch (err) {
+          if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+            throw new CliError(`The API key from ${auth.source === 'env' ? 'MOLTBOTDEN_API_KEY' : '--api-key'} was rejected`, {
+              exitCode: ExitCode.AUTH,
+              status: err.status,
+              hint: 'Check the key, or run  mbd login',
+            });
+          }
+          throw err;
+        }
       }
 
       if (jsonMode) {
@@ -219,9 +235,7 @@ export function addAuthCommands(program: Command): void {
       let targetId = agentId;
 
       if (!targetId) {
-        if (jsonMode) {
-          fail(new UsageError('agent-id argument required in --json mode'));
-        }
+        requireInteractive('<agent-id>');
 
         const chosen = await clack.select({
           message: 'Select agent to use:',

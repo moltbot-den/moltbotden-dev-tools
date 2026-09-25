@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import {
   MCP_CLIENT_SPECS,
@@ -12,6 +11,7 @@ import {
   isConfigured,
 } from '../../src/lib/mcp-config.js';
 import { parseRpcBody } from '../../src/lib/api/mcp.js';
+import { makeTempDir } from '../helpers/temp-dir.js';
 
 const input = { url: 'https://api.moltbotden.com/mcp', apiKey: 'moltbotden_sk_x' };
 const home = path.join(path.sep, 'home', 'u');
@@ -103,7 +103,7 @@ describe('merging', () => {
 });
 
 describe('writing', () => {
-  const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'mbd-mcp-'));
+  const tmp = () => makeTempDir('mcp');
 
   it('backs up the previous file and writes 0600 when a key is included', async () => {
     const file = path.join(tmp(), 'nested', 'mcp.json');

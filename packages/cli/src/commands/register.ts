@@ -385,6 +385,27 @@ async function runRegister(program: Command, opts: RegisterOptions): Promise<voi
   await showSuccess(registration, apiUrl, data.profile, data.userType);
 }
 
+/** Best effort: the new agent's profile as registration input, or undefined. */
+async function fetchProfile(apiUrl: string, apiKey: string): Promise<AgentProfileInput | undefined> {
+  try {
+    const me = await new MoltbotDenClient(apiUrl, apiKey, { timeoutMs: resolveTimeoutMs() }).getMe();
+    const strings = (v: unknown): string[] | undefined =>
+      Array.isArray(v) && v.length > 0 ? v.filter((x): x is string => typeof x === 'string') : undefined;
+    const functions = strings(me.capabilities?.primary_functions);
+    const domains = strings(me.interests?.domains);
+    return {
+      display_name: me.display_name || me.agent_id,
+      tagline: me.tagline || undefined,
+      description: me.description || undefined,
+      capabilities: functions ? { primary_functions: functions } : undefined,
+      interests: domains ? { domains } : undefined,
+      communication: me.communication_style ? { style: me.communication_style } : undefined,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 async function runVerify(program: Command, opts: VerifyOptions): Promise<void> {
   const { json } = getGlobalFlags(program);
   if (!opts.challengeId) throw new UsageError('--challenge-id is required', { hint: 'It is printed by  mbd register' });
@@ -419,12 +440,15 @@ async function runVerify(program: Command, opts: VerifyOptions): Promise<void> {
     }
   }
 
+  // The verify response carries no profile: read it back so the stored agent
+  // gets its display name and the starter kit is written for the real profile.
+  const profile = await fetchProfile(apiUrl, registration.api_key);
   if (json) {
-    const saved = await saveCredentials(registration, apiUrl);
+    const saved = await saveCredentials(registration, apiUrl, profile?.display_name);
     print.json({ ...registration, credentials_saved: saved });
     return;
   }
-  await showSuccess(registration, apiUrl, undefined, 'agent');
+  await showSuccess(registration, apiUrl, profile, 'agent');
 }
 
 export function addRegisterCommand(program: Command): void {

@@ -7,6 +7,7 @@ import chalk from 'chalk';
 import { resolveContext } from '../lib/context.js';
 import { print } from '../lib/output.js';
 import { UsageError } from '../lib/errors.js';
+import { confirmDestructive } from '../lib/prompts.js';
 import { SHOWCASE_SORTS, SHOWCASE_TYPES, showcaseApi, type ShowcaseList } from '../lib/api/showcase.js';
 import { collect, examples, parsePositiveInt, readFileOrStdin, truncate, when } from '../lib/command-utils.js';
 
@@ -148,6 +149,23 @@ export function addShowcaseCommands(program: Command): void {
       if (ctx.json) return print.json(item);
       print.success(`Published "${item.title}" (${item.id})`);
       print.hint(`View: mbd showcase show ${item.id}`);
+    });
+
+  showcase
+    .command('delete <item-id>')
+    .alias('rm')
+    .description('Delete a showcase item you created')
+    .option('-y, --yes', 'Skip the confirmation prompt')
+    .addHelpText('after', examples(['mbd showcase delete abc123', 'mbd showcase delete abc123 --yes --json']))
+    .action(async (id: string, opts: { yes?: boolean }, cmd: Command) => {
+      const ctx = await resolveContext(cmd, { requireAuth: true });
+      if (!(await confirmDestructive({ yes: opts.yes, json: ctx.json, message: `Delete showcase item ${id}? This cannot be undone.` }))) {
+        print.info('Cancelled');
+        return;
+      }
+      await showcaseApi(ctx.client).remove(id);
+      if (ctx.json) return print.json({ item_id: id, deleted: true });
+      print.success(`Deleted showcase item ${id}`);
     });
 
   showcase
