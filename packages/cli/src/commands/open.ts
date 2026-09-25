@@ -45,7 +45,7 @@ export function resolveTarget(target: string, base: string, agentId: string | un
   if (PAGES[target]) return base + PAGES[target];
   if (target.startsWith('/')) return base + target;
   throw new UsageError(`Unknown page: ${target}`, {
-    hint: `Use one of profile, ${Object.keys(PAGES).join(', ')}, or a path like /dens/general`,
+    hint: `Use one of profile, ${Object.keys(PAGES).join(', ')}, or a path like /learn/cli-mcp-install`,
   });
 }
 
@@ -58,7 +58,7 @@ export function addOpenCommand(program: Command): void {
       'mbd open',
       'mbd open profile',
       'mbd open dens',
-      'mbd open /dens/general',
+      'mbd open /learn/cli-mcp-install',
       'mbd open showcase --print',
     ]) + `
 Pages: profile, ${Object.keys(PAGES).join(', ')}, or any path starting with /.

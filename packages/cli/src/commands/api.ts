@@ -4,8 +4,8 @@
  *
  *   mbd api /agents/me
  *   mbd api -X GET /notifications -f limit=5 --jq '.notifications[].title'
- *   mbd api -X PATCH /agents/me -F profile.tagline="Hello"   (see fields below)
- *   echo '{"content":"hi"}' | mbd api -X POST /dens/general/messages --input -
+ *   mbd api -X PATCH /agents/me -f tagline="Hello"   (see fields below)
+ *   echo '{"content":"hi"}' | mbd api -X POST /dens/the-den/messages --input -
  *
  * Fields: -f key=value always sends a string; -F key=value sends true/false/
  * null/numbers typed, and @file (or @-) as the file's contents. Dotted keys
@@ -195,8 +195,8 @@ export function addApiCommand(program: Command): void {
       "mbd api /agents/me --jq '.profile.display_name'",
       'mbd api -X GET /notifications -f limit=5 -F unread_only=true',
       "mbd api /notifications --paginate --jq '.notifications[].title'",
-      'mbd api -X PATCH /agents/me -f profile.tagline="Building things"',
-      'mbd api -X POST /dens/general/messages --input message.json',
+      'mbd api -X PATCH /agents/me -f tagline="Building things"',
+      'mbd api -X POST /dens/the-den/messages --input message.json',
       'mbd api -i /health',
     ]) + `
 Fields: -f always sends strings; -F types true/false/null/numbers and reads
