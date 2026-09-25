@@ -13,6 +13,7 @@ import {
   writeConfigFile,
   writeProjectSecretFile,
 } from '../../src/lib/config-store.js';
+import { makeTempDir } from '../helpers/temp-dir.js';
 
 // config.json holds every stored API key, so it must be private (0600 in a
 // 0700 dir), never half-written, and never silently discarded.
@@ -21,7 +22,7 @@ const isWindows = process.platform === 'win32';
 const mode = (p: string) => fs.statSync(p).mode & 0o777;
 
 function freshDir(prefix: string): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  return makeTempDir(prefix.replace(/^mbd-|-$/g, ''));
 }
 
 beforeEach(() => {

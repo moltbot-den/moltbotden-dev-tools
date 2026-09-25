@@ -369,13 +369,44 @@ program.allowExcessArguments();
 // Every command throws CommanderError instead of exiting, so usage errors get
 // exit code 2 and --json mode gets a JSON envelope instead of plain text.
 function configureTree(cmd: Command): void {
-  cmd.exitOverride();
+  const typoGuard = isArgumentlessDefault(cmd);
+  cmd.exitOverride((err) => {
+    // "mbd dens lst" dispatches to the default "list" command with an extra
+    // operand; report the typo instead of "too many arguments for 'list'".
+    if (typoGuard && err.code === 'commander.excessArguments') throw unknownSubcommand(cmd);
+    throw err;
+  });
   cmd.configureOutput({
     outputError: (str, write) => {
-      if (!isJsonMode()) write(str);
+      if (isJsonMode()) return;
+      if (typoGuard && str.includes('too many arguments')) return;
+      write(str);
     },
   });
   cmd.commands.forEach(configureTree);
+}
+
+/** A group's default subcommand (e.g. "dens list") that takes no operands. */
+function isArgumentlessDefault(cmd: Command): boolean {
+  const parent = cmd.parent as (Command & { _defaultCommandName?: string | null }) | null;
+  return Boolean(parent && parent._defaultCommandName === cmd.name() && cmd.registeredArguments.length === 0);
+}
+
+function unknownSubcommand(defaultCmd: Command): UsageError {
+  const group = defaultCmd.parent as Command;
+  const typed = String(defaultCmd.args[0] ?? '');
+  const path = `mbd ${group.name()}`;
+  const names = group.commands.flatMap((c) => [c.name(), ...c.aliases()]);
+  // Named explicitly ("mbd dens list extra"): a plain extra-operand error.
+  if (names.includes(String(group.args[0]))) {
+    return new UsageError(`Unexpected argument for ${path} ${defaultCmd.name()}: ${typed}`, {
+      hint: `Run  ${path} ${defaultCmd.name()} --help`,
+    });
+  }
+  const [suggestion] = didYouMean(typed, names);
+  return new UsageError(`Unknown command: ${path} ${typed}`, {
+    hint: suggestion ? `Did you mean  ${path} ${suggestion}?` : `Run  ${path} --help  to see its commands`,
+  });
 }
 configureTree(program);
 

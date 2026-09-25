@@ -3,10 +3,9 @@
  * no credential env vars from the developer's shell, update checks off.
  */
 import { execFile } from 'node:child_process';
-import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { makeTempDir } from './temp-dir.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const CLI_PATH = path.resolve(__dirname, '../../dist/cli.js');
@@ -24,7 +23,7 @@ export interface Sandbox {
 }
 
 export function makeSandbox(): Sandbox {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mbd-e2e-'));
+  const dir = makeTempDir('e2e');
   return { dir, home: dir, configDir: path.join(dir, 'config') };
 }
 

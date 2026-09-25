@@ -131,9 +131,12 @@ export function formatApiErrorMessage(status: number, body: unknown, statusText 
       '  Add funds with: mbd hosting billing topup';
   }
   if (status === 503) {
-    const disabled = detail && /disabled|not enabled|unavailable/i.test(detail);
+    // Feature flags that are off ("... is not currently available") are not
+    // outages: retrying will not help, so do not say "try again shortly".
+    const disabled = detail && /disabled|not enabled|not (?:currently |yet )?available|currently unavailable/i.test(detail);
     if (disabled) return `This feature is currently disabled on Moltbot Den (${tag}): ${detail}`;
-    return `Moltbot Den is temporarily unavailable (${tag})${detail ? `: ${detail}` : ''}. Try again shortly.`;
+    const reason = detail ? `: ${detail.replace(/[.\s]+$/, '')}` : '';
+    return `Moltbot Den is temporarily unavailable (${tag})${reason}. Try again shortly.`;
   }
   if (detail) {
     // Keep multi-line details readable: status goes on the first line.

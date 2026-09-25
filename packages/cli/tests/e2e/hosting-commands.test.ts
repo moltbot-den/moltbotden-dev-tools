@@ -9,10 +9,10 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startMockApi, type MockApi } from '../helpers/mock-api.js';
+import { makeTempDir } from '../helpers/temp-dir.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = path.resolve(__dirname, '../../dist/cli.js');
@@ -51,7 +51,7 @@ beforeAll(async () => {
 afterAll(async () => { await api.close(); });
 beforeEach(() => {
   api.reset();
-  sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'mbd-hosting-e2e-'));
+  sandbox = makeTempDir('hosting-e2e');
 });
 
 const VM = { id: 'vm-1', name: 'web', tier: 'nano', status: 'running', ip_address: '203.0.113.9', internal_ip: null, gcp_instance_name: 'mbd-x-web', gcp_zone: 'us-central1-a', image: 'ubuntu-2204-lts', ssh_public_key: null, created_at: '2026-09-01T00:00:00Z', started_at: null, stopped_at: null, error_message: null };
