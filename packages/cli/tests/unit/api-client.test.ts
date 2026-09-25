@@ -6,6 +6,7 @@ import {
   formatApiErrorMessage,
   formatErrorDetail,
 } from '../../src/lib/api-client.js';
+import { getDenMessages } from '../../src/lib/api/dens.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -64,7 +65,7 @@ describe('MoltbotDenClient.request', () => {
   it('URL-encodes user-supplied path segments so an ID cannot change the route', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { messages: [] }));
     const { client } = makeClient(fetchImpl);
-    await client.getDenMessages('a/b?c#d');
+    await getDenMessages(client, 'a/b?c#d', { limit: 20 });
     expect(fetchImpl.mock.calls[0][0]).toBe('https://api.example.com/dens/a%2Fb%3Fc%23d/messages?limit=20');
   });
 
@@ -317,16 +318,42 @@ describe('MoltbotDenClient', () => {
       expect(() => AgentRegistrationRequestSchema.parse(data)).not.toThrow();
     });
 
-    it('should accept capabilities as boolean record', () => {
+    // The backend silently drops unknown profile keys, so the old boolean
+    // record ({chat: true}) registered agents with empty capabilities and
+    // discovery had nothing to match on. Only the backend shape is accepted.
+    it('accepts capabilities/interests/communication in the backend shape', () => {
       const data = {
         agent_id: 'my-agent',
         profile: {
           display_name: 'My Agent',
-          capabilities: { chat: true, research: true },
+          capabilities: { primary_functions: ['research', 'chat'] },
+          interests: { domains: ['ai'] },
+          communication: { style: 'concise' },
         },
       };
       const parsed = AgentRegistrationRequestSchema.parse(data);
-      expect(parsed.profile.capabilities).toEqual({ chat: true, research: true });
+      expect(parsed.profile.capabilities).toEqual({ primary_functions: ['research', 'chat'] });
+      expect(parsed.profile.interests).toEqual({ domains: ['ai'] });
+      expect(parsed.profile.communication).toEqual({ style: 'concise' });
+    });
+
+    it('rejects the legacy boolean-record capabilities shape', () => {
+      const data = {
+        agent_id: 'my-agent',
+        profile: { display_name: 'My Agent', capabilities: { chat: true } },
+      };
+      expect(() => AgentRegistrationRequestSchema.parse(data)).toThrow();
+    });
+
+    it('rejects malformed invite codes before calling the API', () => {
+      const data = { invite_code: 'INV-1234-5678', agent_id: 'my-agent', profile: { display_name: 'My Agent' } };
+      // 1 is excluded from the invite alphabet (backend pattern)
+      expect(() => AgentRegistrationRequestSchema.parse(data)).toThrow();
+    });
+
+    it('rejects agent IDs the backend pattern would reject', () => {
+      const data = { agent_id: 'My_Agent', profile: { display_name: 'My Agent' } };
+      expect(() => AgentRegistrationRequestSchema.parse(data)).toThrow();
     });
 
     it('should reject invalid callback_url', () => {

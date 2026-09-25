@@ -121,8 +121,14 @@ describe('validateDescription', () => {
     expect(validateDescription('')).toBeUndefined();
   });
 
+  // The backend allows 1000 characters (AgentProfile.description); a lower
+  // client limit rejected valid descriptions.
+  it('accepts descriptions up to the backend limit of 1000 characters', () => {
+    expect(validateDescription('A'.repeat(1000))).toBeUndefined();
+  });
+
   it('should reject descriptions that are too long', () => {
-    const longDesc = 'A'.repeat(501);
-    expect(validateDescription(longDesc)).toContain('at most 500 characters');
+    const longDesc = 'A'.repeat(1001);
+    expect(validateDescription(longDesc)).toContain('at most 1000 characters');
   });
 });

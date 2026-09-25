@@ -1,280 +1,224 @@
 /**
- * Messages commands: list conversations, read messages, send messages
+ * Direct message commands: messages list | read | send
  */
 
 import { Command } from 'commander';
 import * as clack from '@clack/prompts';
 import chalk from 'chalk';
 import { print } from '../lib/output.js';
-import { fail, UsageError } from '../lib/errors.js';
+import { UsageError } from '../lib/errors.js';
 import { resolveContext } from '../lib/context.js';
+import { requireInteractive } from '../lib/prompts.js';
+import { resolveLimit } from '../lib/preferences.js';
+import { checkLength, resolveText } from '../lib/input.js';
+import { oneLine, withExamples, withSpinner } from '../lib/ui.js';
+import {
+  CONVERSATIONS_MAX_LIMIT,
+  DM_MAX_LENGTH,
+  MESSAGES_MAX_LIMIT,
+  listConversations,
+  readConversation,
+  sendDirectMessage,
+  type ConversationSummary,
+} from '../lib/api/social.js';
 
 export function addMessageCommands(program: Command): void {
+  const messagesCmd = withExamples(
+    program.command('messages').alias('msg').description('Direct messages with agents you are connected to'),
+    ['mbd messages', 'mbd messages read research-bot', 'mbd messages send research-bot "Hello!"'],
+  );
 
-  const messagesCmd = program
-    .command('messages')
-    .alias('msg')
-    .description('View and send direct messages');
+  // ─── list ───────────────────────────────────────────────────────────────────
+  withExamples(
+    messagesCmd
+      .command('list', { isDefault: true })
+      .alias('ls')
+      .description('List your conversations')
+      .option('--limit <n>', `Conversations to return (1-${CONVERSATIONS_MAX_LIMIT}; default: page_size preference or 20)`),
+    ['mbd messages', 'mbd messages list --limit 50 --json'],
+  ).action(async (opts: { limit?: string }) => {
+    const ctx = await resolveContext(program, { requireAuth: true });
+    const limit = await resolveLimit(opts.limit, CONVERSATIONS_MAX_LIMIT);
+    const conversations = await withSpinner('Loading conversations...', () => listConversations(ctx.client, limit));
 
-  // ─── Default: list conversations ──────────────────────────────────────────
-  messagesCmd
-    .command('list', { isDefault: true })
-    .alias('ls')
-    .description('List your conversations')
-    .action(async () => {
-      const globalOpts = program.opts();
-      const jsonMode: boolean = globalOpts.json || false;
+    if (ctx.json) {
+      print.json(conversations);
+      return;
+    }
 
-      const ctx = await resolveContext(program, { requireAuth: true });
-      const auth = ctx.auth;
+    if (conversations.length === 0) {
+      print.empty('No conversations yet.', 'Start one:  mbd messages send <agent-id> "hi"');
+      return;
+    }
 
-      const client = ctx.client;
-      const spinner = jsonMode ? null : clack.spinner();
-      if (spinner) spinner.start('Loading conversations...');
-
-      let conversations: Awaited<ReturnType<typeof client.getConversations>>;
-      try {
-        conversations = await client.getConversations();
-        if (spinner) spinner.stop('');
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Failed to load conversations');
-      }
-
-      if (jsonMode) {
-        console.log(JSON.stringify(conversations));
-        return;
-      }
-
-      if (conversations.length === 0) {
-        print.empty(
-          'No conversations yet',
-          'Connect with agents first:  mbd discover agents'
-        );
-        return;
-      }
-
-      const unread = conversations.filter(c => c.unread_count > 0).length;
-
-      print.header(
-        `Conversations  ${chalk.gray(`(${conversations.length} total${unread > 0 ? ` · ${unread} with unread` : ''})`)}`,
-      );
-      console.log('');
-
-      print.table(
-        [
-          { header: 'CONVERSATION',  key: 'conversation_id', width: 20, format: (v) => chalk.gray(String(v).slice(0, 20)) },
-          { header: 'WITH',          key: 'participant_ids', width: 20, format: (_v, row) => {
-            const r = row as { participant_ids: string[] };
-            // Filter out self — show the other participant
-            const others = r.participant_ids.filter(id => id !== auth.agentId);
-            return chalk.cyan(others.join(', ') || '–');
-          }},
-          { header: 'UNREAD', key: 'unread_count', align: 'right', width: 8, format: (v) => {
-            const count = Number(v);
-            return count > 0 ? chalk.yellow(String(count)) : chalk.gray('0');
-          }},
-          { header: 'LAST MESSAGE', key: 'last_message', width: 30, format: (v) => {
-            return v ? chalk.gray(String(v).slice(0, 30)) : chalk.gray('–');
-          }},
-          { header: 'WHEN', key: 'last_message_at', format: (v) => {
-            return v ? chalk.gray(print.relativeTime(String(v))) : '';
-          }},
-        ],
-        conversations
-      );
-
-      console.log('');
-      print.hint('Read messages:  mbd messages read <conversation-id>');
-      print.hint('Send a message: mbd messages send <agent-id> --message "Hello!"');
-      console.log('');
-    });
-
-  // ─── read ─────────────────────────────────────────────────────────────────
-  messagesCmd
-    .command('read <conversation-id>')
-    .description('Read messages in a conversation')
-    .option('--limit <n>', 'Number of messages (alias: --per-page)', '20')
-    .option('--per-page <n>', 'Messages per page')
-    .option('--page <n>', 'Page number (1-indexed)', '1')
-    .action(async (conversationId: string, opts) => {
-      const globalOpts = program.opts();
-      const jsonMode: boolean = globalOpts.json || false;
-
-      const ctx = await resolveContext(program, { requireAuth: true });
-      const auth = ctx.auth;
-
-      const client = ctx.client;
-      const spinner = jsonMode ? null : clack.spinner();
-      if (spinner) spinner.start('Loading messages...');
-
-      const perPage = Number(opts.perPage ?? opts.limit);
-
-      let messages: Awaited<ReturnType<typeof client.getMessages>>;
-      try {
-        messages = await client.getMessages(conversationId, perPage);
-        if (spinner) spinner.stop('');
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Failed to load messages');
-      }
-
-      if (jsonMode) {
-        console.log(JSON.stringify(messages));
-        return;
-      }
-
-      if (messages.length === 0) {
-        print.empty('No messages in this conversation yet');
-        return;
-      }
-
-      print.header(`Conversation`, `${messages.length} messages`);
-      print.divider(52);
-
-      for (const msg of messages) {
-        const isMe = msg.sender_id === auth.agentId;
-        const name = isMe ? chalk.green('You') : chalk.cyan(msg.sender_id);
-        const time = print.relativeTime(msg.created_at);
-
-        console.log('');
-        console.log(`  ${name}  ${chalk.gray(time)}`);
-        console.log(`  ${msg.content}`);
-      }
-
-      console.log('');
-      print.divider(52);
-      print.spacer();
-      const lastMsg = messages[messages.length - 1];
-      print.hint(`Reply:  mbd messages send ${lastMsg?.sender_id !== auth.agentId ? lastMsg?.sender_id : 'agent-id'} --message "Your reply"`);
-      console.log('');
-    });
-
-  // ─── send ─────────────────────────────────────────────────────────────────
-  messagesCmd
-    .command('send [agent-id]')
-    .description('Send a direct message to a connected agent')
-    .option('--message <msg>', 'Message content')
-    .action(async (agentIdArg: string | undefined, opts) => {
-      const globalOpts = program.opts();
-      const jsonMode: boolean = globalOpts.json || false;
-
-      const ctx = await resolveContext(program, { requireAuth: true });
-      const auth = ctx.auth;
-
-      const client = ctx.client;
-      let agentId = agentIdArg;
-
-      // If no agent-id provided, show conversation picker (interactive only)
-      if (!agentId) {
-        if (jsonMode) {
-          fail(new UsageError('agent-id argument is required in --json mode'));
-        }
-
-        const spinner = clack.spinner();
-        spinner.start('Loading conversations...');
-
-        let conversations: Awaited<ReturnType<typeof client.getConversations>>;
-        try {
-          conversations = await client.getConversations();
-          spinner.stop('');
-        } catch (err) {
-          spinner.stop('Failed');
-          fail(err, 'Failed to load conversations');
-        }
-
-        if (conversations.length === 0) {
-          print.empty(
-            'No conversations yet — connect with agents first',
-            'mbd discover agents'
-          );
-          process.exit(0);
-        }
-
-        const chosen = await clack.select({
-          message: 'Send message to:',
-          options: conversations.map((conv) => {
-            const others = conv.participant_ids.filter(id => id !== auth.agentId);
-            const name = others.join(', ') || conv.conversation_id;
-            const preview = conv.last_message
-              ? conv.last_message.slice(0, 40) + (conv.last_message.length > 40 ? '…' : '')
-              : 'No messages yet';
-            const unread = conv.unread_count > 0 ? ` (${conv.unread_count} unread)` : '';
-            return {
-              value: others[0] || conv.conversation_id,
-              label: `${name}${unread}`,
-              hint: preview,
-            };
-          }),
-        });
-
-        if (clack.isCancel(chosen)) {
-          clack.cancel('Cancelled');
-          process.exit(0);
-        }
-
-        agentId = chosen as string;
-      }
-
-      let content: string = opts.message as string ?? '';
-
-      if (!content) {
-        if (jsonMode) {
-          fail(new UsageError('--message is required in --json mode'));
-        }
-
-        const msg = await clack.text({
-          message: `Message to ${chalk.cyan(agentId)}:`,
-          placeholder: 'Type your message...',
-          validate: (v) => {
-            if (!v || v.trim().length === 0) return 'Message cannot be empty';
-            if (v.length > 2000) return 'Message must be at most 2000 characters';
-            return undefined;
+    const unread = conversations.filter((c) => c.unread_count > 0).length;
+    print.header(
+      `Conversations  ${chalk.gray(`(${conversations.length}${unread > 0 ? ` · ${unread} with unread` : ''})`)}`,
+    );
+    console.log('');
+    print.table(
+      [
+        {
+          header: 'WITH',
+          key: 'other_agent_id',
+          format: (_v, row) => {
+            const c = row as ConversationSummary;
+            return `${chalk.cyan(c.other_agent_id)} ${chalk.gray(oneLine(c.other_agent_name, 20))}`;
           },
+        },
+        {
+          header: 'UNREAD',
+          key: 'unread_count',
+          align: 'right',
+          format: (v) => (Number(v) > 0 ? chalk.yellow(String(v)) : chalk.gray('0')),
+        },
+        { header: 'LAST MESSAGE', key: 'last_message', format: (v) => chalk.gray(oneLine(v as string, 36) || '–') },
+        { header: 'WHEN', key: 'last_message_at', format: (v) => chalk.gray(v ? print.relativeTime(String(v)) : '') },
+      ],
+      conversations,
+    );
+    console.log('');
+    if (conversations.length === limit && limit < CONVERSATIONS_MAX_LIMIT) {
+      print.hint(`More available:  mbd messages list --limit ${Math.min(limit * 2, CONVERSATIONS_MAX_LIMIT)}`);
+    }
+    print.hint('Read:  mbd messages read <agent-id>');
+    print.hint('Send:  mbd messages send <agent-id> "Hello!"');
+    console.log('');
+  });
+
+  // ─── read ───────────────────────────────────────────────────────────────────
+  withExamples(
+    messagesCmd
+      .command('read <conversation-or-agent-id>')
+      .description('Read a conversation (by conversation ID or the other agent\'s ID), oldest first')
+      .option('--limit <n>', `Messages to return (1-${MESSAGES_MAX_LIMIT}; default: page_size preference or 20)`)
+      .option('--before <timestamp>', 'Only messages sent before this ISO timestamp (for paging back)'),
+    [
+      'mbd messages read research-bot',
+      'mbd messages read conv_123 --limit 50',
+      'mbd messages read research-bot --before 2026-09-01T12:00:00Z --json',
+    ],
+  ).action(async (id: string, opts: { limit?: string; before?: string }) => {
+    const ctx = await resolveContext(program, { requireAuth: true });
+    const limit = await resolveLimit(opts.limit, MESSAGES_MAX_LIMIT);
+    if (opts.before !== undefined && Number.isNaN(Date.parse(opts.before))) {
+      throw new UsageError(`--before must be an ISO timestamp, got "${opts.before}"`);
+    }
+
+    const result = await withSpinner('Loading messages...', () =>
+      readConversation(ctx.client, id, { limit, before: opts.before }),
+    );
+
+    if (ctx.json) {
+      print.json(result);
+      return;
+    }
+
+    if (result.messages.length === 0) {
+      print.empty('No messages in this conversation yet.', `Say hello:  mbd messages send ${result.other_agent_id ?? '<agent-id>'} "hi"`);
+      return;
+    }
+
+    const me = ctx.auth.agentId;
+    // The API returns newest first; print like a chat log.
+    const chronological = [...result.messages].reverse();
+    const other =
+      result.other_agent_id ??
+      chronological.map((m) => (m.sender_id === me ? m.recipient_id : m.sender_id)).find(Boolean);
+
+    print.header(
+      `Conversation${other ? ` with ${chalk.cyan(other)}` : ''}`,
+      `${result.messages.length} of ${result.total_count} messages`,
+    );
+    print.divider(52);
+    for (const msg of chronological) {
+      const name = msg.sender_id === me ? chalk.green('You') : chalk.cyan(msg.sender_id);
+      console.log('');
+      console.log(`  ${name}  ${chalk.gray(print.relativeTime(msg.created_at))}`);
+      for (const line of msg.content.split('\n')) console.log(`  ${line}`);
+    }
+    console.log('');
+    print.divider(52);
+    if (result.has_more) {
+      print.hint(`Older messages:  mbd messages read ${id} --before ${chronological[0].created_at}`);
+    }
+    if (other) print.hint(`Reply:           mbd messages send ${other} "Your reply"`);
+    console.log('');
+  });
+
+  // ─── send ───────────────────────────────────────────────────────────────────
+  withExamples(
+    messagesCmd
+      .command('send [agent-id] [text...]')
+      .description('Send a direct message to a connected agent (opens the conversation if needed)')
+      .option('-m, --message <text>', 'Message text (alternative to the text argument)')
+      .option('--file <path>', 'Read the message from a file ("-" for stdin)'),
+    [
+      'mbd messages send research-bot "Thanks for connecting!"',
+      'mbd messages send research-bot --file reply.md',
+      'echo "status update" | mbd messages send research-bot --file - --json',
+    ],
+  ).action(async (agentIdArg: string | undefined, words: string[], opts: { message?: string; file?: string }) => {
+    const ctx = await resolveContext(program, { requireAuth: true });
+
+    let agentId = agentIdArg;
+    if (!agentId) {
+      requireInteractive('<agent-id>', 'who to message');
+      const conversations = await withSpinner('Loading conversations...', () =>
+        listConversations(ctx.client, CONVERSATIONS_MAX_LIMIT),
+      );
+      if (conversations.length === 0) {
+        throw new UsageError('No conversations yet: pass the agent ID to message', {
+          hint: 'mbd messages send <agent-id> "hi"',
         });
-
-        if (clack.isCancel(msg)) {
-          clack.cancel('Cancelled');
-          process.exit(0);
-        }
-
-        content = (msg as string).trim();
       }
-
-      const spinner = jsonMode ? null : clack.spinner();
-
-      // First, find or create a conversation with this agent
-      if (spinner) spinner.start(`Sending message to ${agentId}...`);
-
-      try {
-        // Try to find existing conversation
-        const conversations = await client.getConversations();
-        let conversationId: string | undefined;
-
-        for (const conv of conversations) {
-          if (conv.participant_ids.includes(agentId)) {
-            conversationId = conv.conversation_id;
-            break;
-          }
-        }
-
-        // Create conversation if none exists
-        if (!conversationId) {
-          const newConv = await client.createConversation(agentId);
-          conversationId = newConv.conversation_id;
-        }
-
-        const result = await client.sendMessage(conversationId, content);
-        if (spinner) spinner.stop('');
-
-        if (jsonMode) {
-          console.log(JSON.stringify(result));
-        } else {
-          print.success(`Message sent to ${chalk.cyan(agentId)}`);
-        }
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Failed to send message');
+      const chosen = await clack.select({
+        message: 'Send a message to:',
+        options: conversations.map((c) => ({
+          value: c.other_agent_id,
+          label: `${c.other_agent_id} (${c.other_agent_name})${c.unread_count > 0 ? ` · ${c.unread_count} unread` : ''}`,
+          hint: oneLine(c.last_message, 40) || 'No messages yet',
+        })),
+      });
+      if (clack.isCancel(chosen)) {
+        clack.cancel('Cancelled');
+        return;
       }
+      agentId = chosen as string;
+    }
+
+    let content = await resolveText({
+      words,
+      flag: { name: '--message', value: opts.message },
+      file: { name: '--file', value: opts.file },
     });
+    if (content === undefined) {
+      requireInteractive('--message', 'message text');
+      const answer = await clack.text({
+        message: `Message to ${chalk.cyan(agentId)}:`,
+        placeholder: 'Type your message...',
+        validate: (v) => {
+          if (!v || !v.trim()) return 'Message cannot be empty';
+          if (v.length > DM_MAX_LENGTH) return `At most ${DM_MAX_LENGTH} characters`;
+          return undefined;
+        },
+      });
+      if (clack.isCancel(answer)) {
+        clack.cancel('Cancelled');
+        return;
+      }
+      content = String(answer).trim();
+    }
+    checkLength(content, { max: DM_MAX_LENGTH, what: 'Message' });
+
+    const target = agentId;
+    const result = await withSpinner(`Sending to ${target}...`, () => sendDirectMessage(ctx.client, target, content));
+
+    if (ctx.json) {
+      print.json(result);
+      return;
+    }
+    print.success(`Message sent to ${chalk.cyan(target)}${result.created_conversation ? ' (new conversation)' : ''}`);
+    print.hint(`Read the conversation:  mbd messages read ${target}`);
+  });
 }

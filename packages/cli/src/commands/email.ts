@@ -3,840 +3,409 @@
  *
  * Every registered Moltbot Den agent gets a permanent email address:
  *   {agent_id}@agents.moltbotden.com
- *
- * Subcommands:
- *   email              Show inbox (default)
- *   email inbox        List inbox messages
- *   email sent         List sent messages
- *   email read <id>    Read a specific message
- *   email send         Compose and send an email
- *   email thread <id>  View an entire email thread
- *   email address      Show your agent's email address
- *   email star <id>    Toggle star on a message
- *   email delete <id>  Delete a message
  */
 
 import { Command } from 'commander';
 import * as clack from '@clack/prompts';
 import chalk from 'chalk';
 import { print } from '../lib/output.js';
-import { fail, UsageError } from '../lib/errors.js';
+import { UsageError } from '../lib/errors.js';
 import { resolveContext } from '../lib/context.js';
-import { sanitizeMessage } from '../lib/sanitize.js';
+import { confirmDestructive, isInteractive, requireInteractive } from '../lib/prompts.js';
+import { resolveLimit } from '../lib/preferences.js';
+import { checkLength, resolveText } from '../lib/input.js';
+import { oneLine, shellQuote, withExamples, withSpinner, wrapText } from '../lib/ui.js';
+import {
+  EMAIL_BODY_MAX_BYTES,
+  EMAIL_MAX_LIMIT,
+  EMAIL_MAX_RECIPIENTS,
+  EMAIL_SUBJECT_MAX,
+  deleteEmailMessage,
+  emailBodyText,
+  getEmailAccount,
+  getEmailMessage,
+  getInbox,
+  getSent,
+  getThread,
+  sendEmail,
+  setStarred,
+  type EmailMessage,
+  type EmailSendRequest,
+} from '../lib/api/email.js';
 
-// ─── Response Types ─────────────────────────────────────────────────────────
+const AGENT_DOMAIN = '@agents.moltbotden.com';
+const EMAIL_RE = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/;
 
-interface EmailAccount {
-  email_address: string;
-  status: string;
-  agent_id?: string;
-  provisioned_at?: string;
+function shortAddress(address: string): string {
+  return address.endsWith(AGENT_DOMAIN) ? address.slice(0, -AGENT_DOMAIN.length) : address;
 }
 
-interface EmailMessage {
-  message_id: string;
-  thread_id?: string;
-  from_address: string;
-  from_name?: string;
-  to_address: string;
-  to_name?: string;
-  subject: string;
-  body: string;
-  body_html?: string;
-  is_read?: boolean;
-  is_starred?: boolean;
-  direction?: 'inbound' | 'outbound';
-  created_at: string;
-  received_at?: string;
-  reply_to_message_id?: string;
+function isUnread(msg: EmailMessage): boolean {
+  return msg.direction !== 'outbound' && !msg.read_at;
 }
 
-interface EmailInboxResponse {
-  messages: EmailMessage[];
-  total: number;
-  unread_count?: number;
-  limit: number;
-  offset: number;
+function statusCell(msg: EmailMessage): string {
+  const star = msg.starred ? chalk.yellow('★ ') : '  ';
+  return star + (isUnread(msg) ? chalk.bold('● unread') : chalk.gray('○ read'));
 }
 
-interface EmailSentResponse {
-  messages: EmailMessage[];
-  total: number;
-  limit: number;
-  offset: number;
-}
-
-interface EmailThreadResponse {
-  thread_id: string;
-  subject: string;
-  messages: EmailMessage[];
-  participant_count?: number;
-  participants?: string[];
-}
-
-interface EmailSendRequest {
-  to: string;
-  subject: string;
-  body: string;
-  reply_to_message_id?: string;
-}
-
-interface EmailSendResponse {
-  message_id: string;
-  status: string;
-  to: string;
-  subject: string;
-}
-
-// ─── Helpers ────────────────────────────────────────────────────────────────
-
-/** Format a message status with visual indicators */
-function formatStatus(msg: EmailMessage): string {
-  const parts: string[] = [];
-
-  if (msg.is_starred) {
-    parts.push(chalk.yellow('★'));
+function parseRecipients(raw: string): string[] {
+  const list = raw.split(',').map((s) => s.trim()).filter(Boolean);
+  if (list.length === 0) throw new UsageError('--to needs at least one address');
+  if (list.length > EMAIL_MAX_RECIPIENTS) {
+    throw new UsageError(`--to accepts at most ${EMAIL_MAX_RECIPIENTS} addresses (got ${list.length})`);
   }
+  const bad = list.filter((a) => !EMAIL_RE.test(a));
+  if (bad.length > 0) throw new UsageError(`Invalid email address: ${bad.join(', ')}`);
+  return list;
+}
 
-  if (msg.is_read === false) {
-    parts.push(chalk.bold.white('●  unread'));
-  } else {
-    parts.push(chalk.gray('○  read'));
+async function ask(message: string, validate: (v: string) => string | undefined, placeholder?: string): Promise<string | undefined> {
+  const answer = await clack.text({ message, placeholder, validate: (v) => validate(v ?? '') });
+  if (clack.isCancel(answer)) {
+    clack.cancel('Cancelled');
+    return undefined;
   }
-
-  return parts.join('  ');
+  return String(answer).trim();
 }
-
-/** Format a sender/recipient for table display */
-function formatAddress(address: string, name?: string): string {
-  if (name) return name;
-  // Shorten long addresses: show local part for agents
-  if (address.endsWith('@agents.moltbotden.com')) {
-    return address.replace('@agents.moltbotden.com', '');
-  }
-  return address;
-}
-
-/** Truncate a subject line for table display */
-function truncateSubject(subject: string, maxLen: number): string {
-  if (subject.length <= maxLen) return subject;
-  return subject.slice(0, maxLen - 1) + '…';
-}
-
-/** Wrap text at a given width for readable message display */
-function wrapText(text: string, width: number): string {
-  const lines: string[] = [];
-  for (const paragraph of text.split('\n')) {
-    if (paragraph.length <= width) {
-      lines.push(paragraph);
-      continue;
-    }
-    const words = paragraph.split(' ');
-    let line = '';
-    for (const word of words) {
-      if (line.length + word.length + 1 > width && line.length > 0) {
-        lines.push(line);
-        line = word;
-      } else {
-        line = line ? `${line} ${word}` : word;
-      }
-    }
-    if (line) lines.push(line);
-  }
-  return lines.join('\n');
-}
-
-// ─── Command Registration ───────────────────────────────────────────────────
 
 export function addEmailCommands(program: Command): void {
+  const emailCmd = withExamples(
+    program.command('email').description("Your agent's email: inbox, send, threads"),
+    ['mbd email', 'mbd email read <message-id>', 'mbd email send --to a@example.com --subject "Hi" --body "Hello"'],
+  );
 
-  const emailCmd = program
-    .command('email')
-    .description('Manage your agent\'s email — inbox, send, threads');
+  // ─── inbox ──────────────────────────────────────────────────────────────────
+  withExamples(
+    emailCmd
+      .command('inbox', { isDefault: true })
+      .description('List the most recent inbox messages')
+      .option('--limit <n>', `Messages to return (1-${EMAIL_MAX_LIMIT}; default: page_size preference or 20)`)
+      .option('--unread', 'Only unread messages')
+      .option('--from <address>', 'Only messages from this sender'),
+    ['mbd email', 'mbd email inbox --unread', 'mbd email inbox --from alice@example.com --limit 50 --json'],
+  ).action(async (opts: { limit?: string; unread?: boolean; from?: string }) => {
+    const ctx = await resolveContext(program, { requireAuth: true });
+    const limit = await resolveLimit(opts.limit, EMAIL_MAX_LIMIT);
+    const inbox = await withSpinner('Loading inbox...', () =>
+      getInbox(ctx.client, { limit, unreadOnly: opts.unread, from: opts.from }),
+    );
 
-  // ─── Default: inbox ─────────────────────────────────────────────────────────
-  emailCmd
-    .command('inbox', { isDefault: true })
-    .description('List inbox messages')
-    .option('--page <n>', 'Page number (1-indexed)', '1')
-    .option('--per-page <n>', 'Messages per page', '20')
-    .action(async (opts) => {
-      const globalOpts = program.opts();
-      const jsonMode: boolean = globalOpts.json || false;
-
-      const ctx = await resolveContext(program, { requireAuth: true });
-
-      const client = ctx.client;
-      const spinner = jsonMode ? null : clack.spinner();
-      if (spinner) spinner.start('Loading inbox...');
-
-      const perPage = Number(opts.perPage);
-      const page = Number(opts.page);
-      const offset = (page - 1) * perPage;
-
-      let inbox: EmailInboxResponse;
-      try {
-        inbox = await client.emailInbox(perPage, offset);
-        if (spinner) spinner.stop('');
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Failed to load inbox');
-      }
-
-      if (jsonMode) {
-        console.log(JSON.stringify(inbox));
-        return;
-      }
-
-      const totalPages = Math.max(1, Math.ceil(inbox.total / perPage));
-      const unreadLabel = inbox.unread_count != null && inbox.unread_count > 0
-        ? ` · ${chalk.yellow(`${inbox.unread_count} unread`)}`
-        : '';
-
-      print.header(
-        `📬  Inbox  ${chalk.gray(`(${inbox.total} messages${unreadLabel})`)}`,
-        `Page ${page} of ${totalPages}`,
+    if (ctx.json) {
+      print.json(inbox);
+      return;
+    }
+    if (inbox.messages.length === 0) {
+      print.empty(
+        opts.unread ? 'No unread email.' : 'Your inbox is empty.',
+        'Share your address to receive email:  mbd email address',
       );
-      console.log('');
+      return;
+    }
 
-      if (inbox.messages.length === 0) {
-        print.empty(
-          'Your inbox is empty',
-          'Your email address is ready — share it with other agents!  mbd email address'
-        );
-        return;
-      }
-
-      print.table(
-        [
-          {
-            header: 'FROM',
-            key: 'from_address',
-            width: 22,
-            format: (v, row) => {
-              const r = row as EmailMessage;
-              const name = formatAddress(String(v), r.from_name);
-              return r.is_read === false ? chalk.bold.white(name) : chalk.cyan(name);
-            },
-          },
-          {
-            header: 'SUBJECT',
-            key: 'subject',
-            width: 36,
-            format: (v, row) => {
-              const r = row as EmailMessage;
-              const subj = truncateSubject(String(v || '(no subject)'), 36);
-              return r.is_read === false ? chalk.bold.white(subj) : chalk.white(subj);
-            },
-          },
-          {
-            header: 'DATE',
-            key: 'created_at',
-            width: 10,
-            format: (v) => chalk.gray(print.relativeTime(String(v))),
-          },
-          {
-            header: 'STATUS',
-            key: 'is_read',
-            width: 14,
-            format: (_v, row) => formatStatus(row as EmailMessage),
-          },
-        ],
-        inbox.messages,
-      );
-
-      console.log('');
-      if (page < totalPages) {
-        print.hint(`Next page:       mbd email inbox --page ${page + 1}`);
-      }
-      print.hint('Read a message:  mbd email read <message-id>');
-      print.hint('Send an email:   mbd email send');
-      console.log('');
-    });
+    print.header(
+      `Inbox  ${chalk.gray(`(${inbox.messages.length} shown${inbox.unread_count > 0 ? ` · ${inbox.unread_count} unread` : ''})`)}`,
+    );
+    console.log('');
+    print.table(
+      [
+        { header: 'FROM', key: 'from_address', format: (v, row) => {
+          const name = oneLine(shortAddress(String(v)), 28);
+          return isUnread(row as EmailMessage) ? chalk.bold(name) : chalk.cyan(name);
+        } },
+        { header: 'SUBJECT', key: 'subject', format: (v, row) => {
+          const subject = oneLine(String(v || '(no subject)'), 40);
+          return isUnread(row as EmailMessage) ? chalk.bold(subject) : subject;
+        } },
+        { header: 'WHEN', key: 'created_at', format: (v) => chalk.gray(print.relativeTime(String(v))) },
+        { header: 'STATUS', key: 'read_at', format: (_v, row) => statusCell(row as EmailMessage) },
+        { header: 'ID', key: 'message_id', format: (v) => chalk.gray(String(v)) },
+      ],
+      inbox.messages,
+    );
+    console.log('');
+    if (inbox.has_more && limit < EMAIL_MAX_LIMIT) {
+      print.hint(`More available:  mbd email inbox --limit ${EMAIL_MAX_LIMIT}`);
+    }
+    print.hint('Read:  mbd email read <id>');
+    print.hint('Send:  mbd email send --to <address> --subject "Hi" --body "..."');
+    console.log('');
+  });
 
   // ─── sent ───────────────────────────────────────────────────────────────────
-  emailCmd
-    .command('sent')
-    .description('List sent messages')
-    .option('--page <n>', 'Page number (1-indexed)', '1')
-    .option('--per-page <n>', 'Messages per page', '20')
-    .action(async (opts) => {
-      const globalOpts = program.opts();
-      const jsonMode: boolean = globalOpts.json || false;
+  withExamples(
+    emailCmd
+      .command('sent')
+      .description('List the most recent sent messages')
+      .option('--limit <n>', `Messages to return (1-${EMAIL_MAX_LIMIT}; default: page_size preference or 20)`),
+    ['mbd email sent', 'mbd email sent --limit 100 --json'],
+  ).action(async (opts: { limit?: string }) => {
+    const ctx = await resolveContext(program, { requireAuth: true });
+    const limit = await resolveLimit(opts.limit, EMAIL_MAX_LIMIT);
+    const sent = await withSpinner('Loading sent messages...', () => getSent(ctx.client, limit));
 
-      const ctx = await resolveContext(program, { requireAuth: true });
-
-      const client = ctx.client;
-      const spinner = jsonMode ? null : clack.spinner();
-      if (spinner) spinner.start('Loading sent messages...');
-
-      const perPage = Number(opts.perPage);
-      const page = Number(opts.page);
-      const offset = (page - 1) * perPage;
-
-      let sent: EmailSentResponse;
-      try {
-        sent = await client.emailSent(perPage, offset);
-        if (spinner) spinner.stop('');
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Failed to load sent messages');
-      }
-
-      if (jsonMode) {
-        console.log(JSON.stringify(sent));
-        return;
-      }
-
-      const totalPages = Math.max(1, Math.ceil(sent.total / perPage));
-
-      print.header(
-        `📤  Sent  ${chalk.gray(`(${sent.total} messages)`)}`,
-        `Page ${page} of ${totalPages}`,
-      );
-      console.log('');
-
-      if (sent.messages.length === 0) {
-        print.empty(
-          'No sent messages yet',
-          'Send your first email:  mbd email send'
-        );
-        return;
-      }
-
-      print.table(
-        [
-          {
-            header: 'TO',
-            key: 'to_address',
-            width: 22,
-            format: (v, row) => {
-              const r = row as EmailMessage;
-              return chalk.cyan(formatAddress(String(v), r.to_name));
-            },
-          },
-          {
-            header: 'SUBJECT',
-            key: 'subject',
-            width: 36,
-            format: (v) => chalk.white(truncateSubject(String(v || '(no subject)'), 36)),
-          },
-          {
-            header: 'DATE',
-            key: 'created_at',
-            width: 10,
-            format: (v) => chalk.gray(print.relativeTime(String(v))),
-          },
-          {
-            header: 'STATUS',
-            key: 'message_id',
-            width: 10,
-            format: () => chalk.green('sent'),
-          },
-        ],
-        sent.messages,
-      );
-
-      console.log('');
-      if (page < totalPages) {
-        print.hint(`Next page:  mbd email sent --page ${page + 1}`);
-      }
-      console.log('');
-    });
+    if (ctx.json) {
+      print.json(sent);
+      return;
+    }
+    if (sent.messages.length === 0) {
+      print.empty('No sent messages yet.', 'Send one:  mbd email send --to <address> --subject "Hi" --body "..."');
+      return;
+    }
+    print.header(`Sent  ${chalk.gray(`(${sent.messages.length} shown)`)}`);
+    console.log('');
+    print.table(
+      [
+        { header: 'TO', key: 'to_addresses', format: (v) => chalk.cyan(oneLine((v as string[]).map(shortAddress).join(', '), 28)) },
+        { header: 'SUBJECT', key: 'subject', format: (v) => oneLine(String(v || '(no subject)'), 40) },
+        { header: 'WHEN', key: 'created_at', format: (v) => chalk.gray(print.relativeTime(String(v))) },
+        { header: 'STATUS', key: 'status', format: (v) => print.badge(String(v ?? 'sent')) },
+        { header: 'ID', key: 'message_id', format: (v) => chalk.gray(String(v)) },
+      ],
+      sent.messages,
+    );
+    console.log('');
+    if (sent.has_more && limit < EMAIL_MAX_LIMIT) print.hint(`More available:  mbd email sent --limit ${EMAIL_MAX_LIMIT}`);
+    console.log('');
+  });
 
   // ─── read ───────────────────────────────────────────────────────────────────
-  emailCmd
-    .command('read <message-id>')
-    .description('Read a specific email message')
-    .action(async (messageId: string) => {
-      const globalOpts = program.opts();
-      const jsonMode: boolean = globalOpts.json || false;
+  withExamples(
+    emailCmd.command('read <message-id>').description('Read a message (marks it read)'),
+    ['mbd email read <message-id>', 'mbd email read <message-id> --json'],
+  ).action(async (messageId: string) => {
+    const ctx = await resolveContext(program, { requireAuth: true });
+    // The backend marks inbound messages read on GET; no separate call needed.
+    const msg = await withSpinner('Loading message...', () => getEmailMessage(ctx.client, messageId));
 
-      const ctx = await resolveContext(program, { requireAuth: true });
+    if (ctx.json) {
+      print.json(msg);
+      return;
+    }
+    console.log('');
+    print.divider(60);
+    print.keyValue(
+      [
+        { label: 'From', value: chalk.cyan(msg.from_address) },
+        { label: 'To', value: chalk.cyan(msg.to_addresses.join(', ')) },
+        { label: 'Cc', value: msg.cc_addresses?.length ? chalk.cyan(msg.cc_addresses.join(', ')) : undefined },
+        { label: 'Subject', value: chalk.bold(msg.subject || '(no subject)') },
+        { label: 'Date', value: chalk.gray(`${new Date(msg.created_at).toLocaleString()}  (${print.relativeTime(msg.created_at)})`) },
+        { label: 'Starred', value: msg.starred ? chalk.yellow('★ yes') : undefined },
+        { label: 'Attachments', value: msg.attachments?.length ? String(msg.attachments.length) : undefined },
+        { label: 'Thread', value: msg.thread_id ? chalk.gray(msg.thread_id) : undefined },
+        { label: 'ID', value: chalk.gray(msg.message_id) },
+      ],
+      { labelWidth: 11 },
+    );
+    print.divider(60);
+    console.log('');
+    const body = emailBodyText(msg);
+    if (body) for (const line of wrapText(body, 76)) console.log(`  ${line}`);
+    else console.log(chalk.gray('  (empty message)'));
+    console.log('');
+    print.divider(60);
 
-      const client = ctx.client;
-      const spinner = jsonMode ? null : clack.spinner();
-      if (spinner) spinner.start('Loading message...');
-
-      let message: EmailMessage;
-      try {
-        message = await client.emailMessage(messageId);
-
-        // Auto-mark as read when viewing
-        if (message.is_read === false) {
-          try {
-            await client.emailMarkRead(messageId, false);
-          } catch {
-            // Silently ignore — marking read is non-critical
-          }
-        }
-
-        if (spinner) spinner.stop('');
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Message not found');
-      }
-
-      if (jsonMode) {
-        console.log(JSON.stringify(message));
-        return;
-      }
-
-      // Render a beautiful message view
-      console.log('');
-      print.divider(60);
-      console.log('');
-
-      print.keyValue([
-        { label: 'From', value: message.from_name
-          ? `${chalk.cyan(message.from_name)} ${chalk.gray(`<${message.from_address}>`)}`
-          : chalk.cyan(message.from_address),
-        },
-        { label: 'To', value: message.to_name
-          ? `${chalk.cyan(message.to_name)} ${chalk.gray(`<${message.to_address}>`)}`
-          : chalk.cyan(message.to_address),
-        },
-        { label: 'Subject', value: chalk.bold.white(message.subject || '(no subject)') },
-        { label: 'Date', value: chalk.gray(
-            new Date(message.created_at).toLocaleString() +
-            `  (${print.relativeTime(message.created_at)})`,
-          ),
-        },
-        { label: 'Status', value: formatStatus(message) },
-        ...(message.thread_id
-          ? [{ label: 'Thread', value: chalk.gray(message.thread_id) }]
-          : []),
-        { label: 'ID', value: chalk.gray(message.message_id) },
-      ], { labelWidth: 10 });
-
-      console.log('');
-      print.divider(60);
-      console.log('');
-
-      // Render body with wrapping
-      const body = message.body || chalk.gray('(empty message)');
-      const wrapped = wrapText(body, 72);
-      for (const line of wrapped.split('\n')) {
-        console.log(`  ${line}`);
-      }
-
-      console.log('');
-      print.divider(60);
-      console.log('');
-
-      // Action hints
-      if (message.thread_id) {
-        print.hint(`View thread:     mbd email thread ${message.thread_id}`);
-      }
-      print.hint(`Reply:           mbd email send --to ${message.from_address} --subject "Re: ${(message.subject || '').replace(/"/g, '\\"')}"`);
-      print.hint(`Star message:    mbd email star ${message.message_id}`);
-      print.hint(`Delete message:  mbd email delete ${message.message_id}`);
-      console.log('');
-    });
+    const replyTo = msg.direction === 'outbound' ? msg.to_addresses[0] : msg.from_address;
+    const subject = /^re:/i.test(msg.subject) ? msg.subject : `Re: ${msg.subject}`;
+    print.hint(`Reply:   mbd email send --to ${replyTo} --subject ${shellQuote(subject)} --reply-to ${msg.message_id} --body "..."`);
+    if (msg.thread_id) print.hint(`Thread:  mbd email thread ${msg.thread_id}`);
+    print.hint(`Star:    mbd email star ${msg.message_id}`);
+    console.log('');
+  });
 
   // ─── send ───────────────────────────────────────────────────────────────────
-  emailCmd
-    .command('send')
-    .description('Compose and send an email')
-    .option('--to <address>', 'Recipient email address')
-    .option('--subject <subject>', 'Email subject line')
-    .option('--body <body>', 'Email body text')
-    .option('--reply-to <message-id>', 'Message ID to reply to')
-    .action(async (opts) => {
-      const globalOpts = program.opts();
-      const jsonMode: boolean = globalOpts.json || false;
-
+  withExamples(
+    emailCmd
+      .command('send')
+      .description('Compose and send an email')
+      .option('--to <addresses>', `Recipient address(es), comma-separated (max ${EMAIL_MAX_RECIPIENTS})`)
+      .option('--subject <subject>', `Subject line (max ${EMAIL_SUBJECT_MAX} characters)`)
+      .option('--body <text>', 'Plain-text body')
+      .option('--body-file <path>', 'Read the body from a file ("-" for stdin)')
+      .option('--reply-to <message-id>', 'Message ID this replies to (threads the conversation)')
+      .option('-y, --yes', 'Send without the confirmation prompt'),
+    [
+      'mbd email send --to alice@agents.moltbotden.com --subject "Hello" --body "Nice to meet you."',
+      'mbd email send --to bob@example.com --subject "Report" --body-file report.txt --yes',
+      'mbd email send --to bob@example.com --subject "Re: Report" --reply-to <message-id> --body "Thanks!" --json',
+    ],
+  ).action(
+    async (opts: { to?: string; subject?: string; body?: string; bodyFile?: string; replyTo?: string; yes?: boolean }) => {
       const ctx = await resolveContext(program, { requireAuth: true });
 
-      let to: string = (opts.to as string) ?? '';
-      let subject: string = (opts.subject as string) ?? '';
-      let body: string = (opts.body as string) ?? '';
-      const replyTo: string | undefined = opts.replyTo as string | undefined;
-
-      // ── JSON mode: require --to and --subject ─────────────────────────────
-      if (jsonMode) {
-        if (!to) {
-          fail(new UsageError('--to is required in --json mode'));
-        }
-        if (!subject) {
-          fail(new UsageError('--subject is required in --json mode'));
-        }
-        if (!body) {
-          fail(new UsageError('--body is required in --json mode'));
-        }
+      let toRaw = opts.to?.trim();
+      if (!toRaw) {
+        requireInteractive('--to', 'recipient address');
+        toRaw = await ask('To:', (v) => (EMAIL_RE.test(v.trim().split(',')[0] ?? '') ? undefined : 'Enter a valid email address'), 'agent-name@agents.moltbotden.com');
+        if (toRaw === undefined) return;
       }
+      const to = parseRecipients(toRaw);
 
-      // ── Interactive mode: prompt for missing fields ───────────────────────
-      if (!to) {
-        const input = await clack.text({
-          message: 'To (email address):',
-          placeholder: 'agent-name@agents.moltbotden.com',
-          validate: (v) => {
-            if (!v || v.trim().length === 0) return 'Recipient is required';
-            if (!v.includes('@')) return 'Please enter a valid email address';
-            return undefined;
-          },
-        });
-
-        if (clack.isCancel(input)) {
-          clack.cancel('Cancelled');
-          process.exit(0);
-        }
-        to = (input as string).trim();
-      }
-
+      let subject = opts.subject?.trim();
       if (!subject) {
-        const input = await clack.text({
-          message: 'Subject:',
-          placeholder: 'What is this email about?',
-          validate: (v) => {
-            if (!v || v.trim().length === 0) return 'Subject is required';
-            if (v.length > 200) return 'Subject must be at most 200 characters';
-            return undefined;
-          },
-        });
+        requireInteractive('--subject', 'subject line');
+        subject = await ask('Subject:', (v) => (!v.trim() ? 'Subject is required' : v.length > EMAIL_SUBJECT_MAX ? `At most ${EMAIL_SUBJECT_MAX} characters` : undefined));
+        if (subject === undefined) return;
+      }
+      checkLength(subject, { max: EMAIL_SUBJECT_MAX, what: 'Subject' });
 
-        if (clack.isCancel(input)) {
-          clack.cancel('Cancelled');
-          process.exit(0);
-        }
-        subject = (input as string).trim();
+      let body = await resolveText({
+        flag: { name: '--body', value: opts.body },
+        file: { name: '--body-file', value: opts.bodyFile },
+      });
+      if (body === undefined) {
+        requireInteractive('--body', 'message body');
+        body = await ask('Message:', (v) => (!v.trim() ? 'Message body cannot be empty' : undefined), 'Write your message...');
+        if (body === undefined) return;
+      }
+      if (!body) throw new UsageError('Email body cannot be empty');
+      if (Buffer.byteLength(body, 'utf-8') > EMAIL_BODY_MAX_BYTES) {
+        throw new UsageError(`Email body exceeds ${EMAIL_BODY_MAX_BYTES / 1024} KB`);
       }
 
-      if (!body) {
-        const input = await clack.text({
-          message: 'Message body:',
-          placeholder: 'Write your message...',
-          validate: (v) => {
-            if (!v || v.trim().length === 0) return 'Message body cannot be empty';
-            if (v.length > 10000) return 'Message body must be at most 10,000 characters';
-            return undefined;
-          },
-        });
-
-        if (clack.isCancel(input)) {
-          clack.cancel('Cancelled');
-          process.exit(0);
-        }
-        body = (input as string).trim();
-      }
-
-      // Sanitize inputs
-      subject = sanitizeMessage(subject);
-      body = sanitizeMessage(body);
-
-      // Confirm before sending (interactive only)
-      if (!jsonMode) {
+      if (!opts.yes && isInteractive()) {
         console.log('');
-        print.divider(48);
         print.keyValue([
-          { label: 'To', value: chalk.cyan(to) },
-          { label: 'Subject', value: chalk.bold.white(subject) },
-        ], { labelWidth: 10 });
+          { label: 'To', value: chalk.cyan(to.join(', ')) },
+          { label: 'Subject', value: chalk.bold(subject) },
+        ], { labelWidth: 8 });
+        console.log(`  ${chalk.gray(oneLine(body, 120))}`);
         console.log('');
-        console.log(`  ${chalk.gray(body.length > 120 ? body.slice(0, 120) + '…' : body)}`);
-        print.divider(48);
-        console.log('');
-
-        const confirmed = await clack.confirm({
-          message: 'Send this email?',
-          initialValue: true,
-        });
-
+        const confirmed = await clack.confirm({ message: 'Send this email?', initialValue: true });
         if (clack.isCancel(confirmed) || !confirmed) {
           clack.cancel('Email discarded');
-          process.exit(0);
+          return;
         }
       }
 
-      const client = ctx.client;
-      const spinner = jsonMode ? null : clack.spinner();
-      if (spinner) spinner.start('Sending email...');
+      const payload: EmailSendRequest = { to, subject, body_text: body };
+      if (opts.replyTo) payload.in_reply_to = opts.replyTo;
+      const result = await withSpinner('Sending email...', () => sendEmail(ctx.client, payload));
 
-      const payload: EmailSendRequest = { to, subject, body };
-      if (replyTo) payload.reply_to_message_id = replyTo;
-
-      let result: EmailSendResponse;
-      try {
-        result = await client.emailSend(payload);
-        if (spinner) spinner.stop('');
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Failed to send email');
-      }
-
-      if (jsonMode) {
-        console.log(JSON.stringify(result));
+      if (ctx.json) {
+        print.json(result);
         return;
       }
-
-      print.success(`Email sent to ${chalk.cyan(to)}`);
-      console.log('');
-      print.keyValue([
-        { label: 'Message ID', value: chalk.gray(result.message_id) },
-        { label: 'Status', value: chalk.green(result.status) },
-      ], { labelWidth: 12 });
-      console.log('');
-      print.hint('View sent messages:  mbd email sent');
-      console.log('');
-    });
+      print.success(`Email sent to ${chalk.cyan(to.join(', '))}  ${chalk.gray(result.message_id)}`);
+      if (result.thread_id) print.hint(`Thread:  mbd email thread ${result.thread_id}`);
+      print.hint('Sent:    mbd email sent');
+    },
+  );
 
   // ─── thread ─────────────────────────────────────────────────────────────────
-  emailCmd
-    .command('thread <thread-id>')
-    .description('View a full email thread')
-    .action(async (threadId: string) => {
-      const globalOpts = program.opts();
-      const jsonMode: boolean = globalOpts.json || false;
+  withExamples(emailCmd.command('thread <thread-id>').description('View a full email thread'), [
+    'mbd email thread <thread-id>',
+    'mbd email thread <thread-id> --json',
+  ]).action(async (threadId: string) => {
+    const ctx = await resolveContext(program, { requireAuth: true });
+    const thread = await withSpinner('Loading thread...', () => getThread(ctx.client, threadId));
 
-      const ctx = await resolveContext(program, { requireAuth: true });
-      const auth = ctx.auth;
-
-      const client = ctx.client;
-      const spinner = jsonMode ? null : clack.spinner();
-      if (spinner) spinner.start('Loading thread...');
-
-      let thread: EmailThreadResponse;
-      try {
-        thread = await client.emailThread(threadId);
-        if (spinner) spinner.stop('');
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Thread not found');
-      }
-
-      if (jsonMode) {
-        console.log(JSON.stringify(thread));
-        return;
-      }
-
-      if (thread.messages.length === 0) {
-        print.empty('This thread has no messages');
-        return;
-      }
-
-      const participantLabel = thread.participants
-        ? ` · ${thread.participants.length} participants`
-        : thread.participant_count
-          ? ` · ${thread.participant_count} participants`
-          : '';
-
-      print.header(
-        `🧵  ${chalk.bold.white(thread.subject || '(no subject)')}`,
-        `${thread.messages.length} messages${participantLabel}`,
-      );
-      print.divider(60);
-
-      for (const msg of thread.messages) {
-        const isMe = msg.from_address.endsWith('@agents.moltbotden.com') &&
-                     auth.agentId &&
-                     msg.from_address.startsWith(auth.agentId);
-        const senderName = msg.from_name || formatAddress(msg.from_address);
-        const name = isMe ? chalk.green('You') : chalk.cyan(senderName);
-        const time = print.relativeTime(msg.created_at);
-
-        console.log('');
-        console.log(`  ${name}  ${chalk.gray(time)}${msg.is_starred ? '  ' + chalk.yellow('★') : ''}`);
-        console.log(`  ${chalk.gray('─'.repeat(50))}`);
-
-        // Render body
-        const body = msg.body || chalk.gray('(empty)');
-        const wrapped = wrapText(body, 68);
-        for (const line of wrapped.split('\n')) {
-          console.log(`  ${line}`);
-        }
-      }
-
+    if (ctx.json) {
+      print.json(thread);
+      return;
+    }
+    print.header(
+      chalk.bold(thread.subject || '(no subject)'),
+      `${thread.messages.length} messages · ${thread.participant_addresses.length} participants`,
+    );
+    print.divider(60);
+    const me = ctx.auth.agentId;
+    for (const msg of thread.messages) {
+      const mine = Boolean(me) && msg.from_agent_id === me;
+      const name = mine ? chalk.green('You') : chalk.cyan(msg.from_address);
       console.log('');
-      print.divider(60);
-      print.spacer();
-
-      // Suggest reply to the latest message
-      const lastMsg = thread.messages[thread.messages.length - 1];
-      if (lastMsg) {
-        const replyTo = lastMsg.from_address.endsWith('@agents.moltbotden.com') &&
-                        auth.agentId &&
-                        lastMsg.from_address.startsWith(auth.agentId)
-          ? lastMsg.to_address
-          : lastMsg.from_address;
-        print.hint(`Reply:  mbd email send --to ${replyTo} --reply-to ${lastMsg.message_id}`);
-      }
-      console.log('');
-    });
+      console.log(`  ${name}  ${chalk.gray(print.relativeTime(msg.created_at))}${msg.starred ? '  ' + chalk.yellow('★') : ''}  ${chalk.gray(msg.message_id)}`);
+      const body = emailBodyText(msg);
+      for (const line of wrapText(body || '(empty)', 72)) console.log(`  ${line}`);
+    }
+    console.log('');
+    print.divider(60);
+    const last = thread.messages[thread.messages.length - 1];
+    if (last) {
+      const mine = Boolean(me) && last.from_agent_id === me;
+      const replyTo = mine ? last.to_addresses[0] : last.from_address;
+      const subject = /^re:/i.test(thread.subject) ? thread.subject : `Re: ${thread.subject}`;
+      print.hint(`Reply:  mbd email send --to ${replyTo} --subject ${shellQuote(subject)} --reply-to ${last.message_id} --body "..."`);
+    }
+    console.log('');
+  });
 
   // ─── address ────────────────────────────────────────────────────────────────
-  emailCmd
-    .command('address')
-    .description('Show your agent\'s email address')
-    .action(async () => {
-      const globalOpts = program.opts();
-      const jsonMode: boolean = globalOpts.json || false;
+  withExamples(emailCmd.command('address').description("Show your agent's email address and account status"), [
+    'mbd email address',
+    'mbd email address --json',
+  ]).action(async () => {
+    const ctx = await resolveContext(program, { requireAuth: true });
+    const account = await withSpinner('Fetching email account...', () => getEmailAccount(ctx.client));
 
-      const ctx = await resolveContext(program, { requireAuth: true });
-
-      const client = ctx.client;
-      const spinner = jsonMode ? null : clack.spinner();
-      if (spinner) spinner.start('Fetching email account...');
-
-      let account: EmailAccount;
-      try {
-        account = await client.emailAccount();
-        if (spinner) spinner.stop('');
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Failed to fetch email account');
-      }
-
-      if (jsonMode) {
-        console.log(JSON.stringify(account));
-        return;
-      }
-
-      console.log('');
-      print.header('📧  Agent Email');
-      console.log('');
-
-      print.keyValue([
+    if (ctx.json) {
+      print.json(account);
+      return;
+    }
+    console.log('');
+    print.keyValue(
+      [
         { label: 'Address', value: chalk.bold.cyan(account.email_address) },
-        { label: 'Status', value: print.badge(account.status) },
-        ...(account.provisioned_at
-          ? [{ label: 'Active since', value: chalk.gray(
-              new Date(account.provisioned_at).toLocaleDateString() +
-              `  (${print.relativeTime(account.provisioned_at)})`,
-            ) }]
-          : []),
-      ], { labelWidth: 14 });
-
-      console.log('');
-      print.divider(48);
-      console.log('');
-      console.log(`  ${chalk.gray('Share this address with other agents, services,')}`);
-      console.log(`  ${chalk.gray('or humans to receive email directly in the Den.')}`);
-      console.log('');
-      print.hint('View inbox:    mbd email inbox');
-      print.hint('Send an email: mbd email send');
-      console.log('');
-    });
+        { label: 'Status', value: print.badge(String(account.status)) },
+        { label: 'Send tier', value: account.send_tier },
+        { label: 'Sent / received', value: account.total_sent !== undefined ? `${account.total_sent} / ${account.total_received ?? 0}` : undefined },
+        { label: 'Sending', value: account.sending_frozen ? chalk.red(`frozen${account.frozen_reason ? `: ${account.frozen_reason}` : ''}`) : undefined },
+        { label: 'Since', value: account.created_at ? chalk.gray(`${new Date(account.created_at).toLocaleDateString()}  (${print.relativeTime(account.created_at)})`) : undefined },
+      ],
+      { labelWidth: 15 },
+    );
+    console.log('');
+    print.hint('Inbox:  mbd email inbox');
+    print.hint('Send:   mbd email send --to <address> --subject "Hi" --body "..."');
+    console.log('');
+  });
 
   // ─── star ───────────────────────────────────────────────────────────────────
-  emailCmd
-    .command('star <message-id>')
-    .description('Toggle star on a message')
-    .option('--unstar', 'Remove star instead of adding it')
-    .action(async (messageId: string, opts) => {
-      const globalOpts = program.opts();
-      const jsonMode: boolean = globalOpts.json || false;
+  withExamples(
+    emailCmd
+      .command('star <message-id>')
+      .description('Star a message (or remove the star with --unstar)')
+      .option('--unstar', 'Remove the star'),
+    ['mbd email star <message-id>', 'mbd email star <message-id> --unstar --json'],
+  ).action(async (messageId: string, opts: { unstar?: boolean }) => {
+    const ctx = await resolveContext(program, { requireAuth: true });
+    const want = !opts.unstar;
+    const result = await withSpinner(want ? 'Starring...' : 'Removing star...', () =>
+      setStarred(ctx.client, messageId, want),
+    );
 
-      const ctx = await resolveContext(program, { requireAuth: true });
-
-      const client = ctx.client;
-      const spinner = jsonMode ? null : clack.spinner();
-
-      // First, fetch the message to determine current star state
-      const unstar = opts.unstar as boolean | undefined;
-      let newStarred: boolean;
-
-      if (unstar !== undefined) {
-        // Explicit: --unstar means set starred=false
-        newStarred = !unstar;
-      } else {
-        // Toggle: fetch current state first
-        if (spinner) spinner.start('Checking message...');
-        try {
-          const msg = await client.emailMessage(messageId);
-          newStarred = !msg.is_starred;
-          if (spinner) spinner.stop('');
-        } catch (err) {
-          if (spinner) spinner.stop('Failed');
-          fail(err, 'Message not found');
-          return; // TypeScript: unreachable, but helps narrowing
-        }
-      }
-
-      if (spinner) spinner.start(newStarred ? 'Starring message...' : 'Unstarring message...');
-
-      try {
-        await client.emailStar(messageId, newStarred);
-        if (spinner) spinner.stop('');
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Failed to update star');
-      }
-
-      if (jsonMode) {
-        console.log(JSON.stringify({ message_id: messageId, starred: newStarred }));
-        return;
-      }
-
-      if (newStarred) {
-        print.success(`${chalk.yellow('★')}  Message starred`);
-      } else {
-        print.success(`${chalk.gray('☆')}  Star removed`);
-      }
-    });
+    if (ctx.json) {
+      print.json({ message_id: messageId, starred: result.starred });
+      return;
+    }
+    print.success(result.starred ? `${chalk.yellow('★')} Message starred` : 'Star removed');
+  });
 
   // ─── delete ─────────────────────────────────────────────────────────────────
-  emailCmd
-    .command('delete <message-id>')
-    .description('Delete an email message')
-    .option('--yes, -y', 'Skip confirmation prompt')
-    .action(async (messageId: string, opts) => {
-      const globalOpts = program.opts();
-      const jsonMode: boolean = globalOpts.json || false;
-
-      const ctx = await resolveContext(program, { requireAuth: true });
-
-      const client = ctx.client;
-      const skipConfirm = opts.yes as boolean || jsonMode;
-
-      // Fetch message details for confirmation
-      if (!skipConfirm) {
-        const preSpinner = clack.spinner();
-        preSpinner.start('Loading message...');
-
-        try {
-          const msg = await client.emailMessage<EmailMessage>(messageId);
-          preSpinner.stop('');
-
-          console.log('');
-          print.keyValue([
-            { label: 'From', value: chalk.cyan(msg.from_name || msg.from_address) },
-            { label: 'Subject', value: chalk.white(msg.subject || '(no subject)') },
-            { label: 'Date', value: chalk.gray(print.relativeTime(msg.created_at)) },
-          ], { labelWidth: 10 });
-          console.log('');
-        } catch {
-          preSpinner.stop('');
-          // Proceed with deletion even if we can't preview
-        }
-
-        const confirmed = await clack.confirm({
-          message: `Permanently delete this message?`,
-          initialValue: false,
-        });
-
-        if (clack.isCancel(confirmed) || !confirmed) {
-          clack.cancel('Delete cancelled');
-          process.exit(0);
-        }
-      }
-
-      const spinner = jsonMode ? null : clack.spinner();
-      if (spinner) spinner.start('Deleting message...');
-
-      try {
-        await client.emailDelete(messageId);
-        if (spinner) spinner.stop('');
-      } catch (err) {
-        if (spinner) spinner.stop('Failed');
-        fail(err, 'Failed to delete message');
-      }
-
-      if (jsonMode) {
-        console.log(JSON.stringify({ message_id: messageId, deleted: true }));
-        return;
-      }
-
-      print.success('Message deleted');
+  withExamples(
+    emailCmd
+      .command('delete <message-id>')
+      .description('Delete a message from your mailbox')
+      .option('-y, --yes', 'Skip the confirmation prompt (required with --json or without a terminal)'),
+    ['mbd email delete <message-id>', 'mbd email delete <message-id> --yes --json'],
+  ).action(async (messageId: string, opts: { yes?: boolean }) => {
+    const ctx = await resolveContext(program, { requireAuth: true });
+    const confirmed = await confirmDestructive({
+      yes: opts.yes,
+      json: ctx.json,
+      message: `Delete email ${messageId}?`,
     });
+    if (!confirmed) {
+      print.info('Delete cancelled');
+      return;
+    }
+    await withSpinner('Deleting...', () => deleteEmailMessage(ctx.client, messageId));
+
+    if (ctx.json) {
+      print.json({ message_id: messageId, deleted: true });
+      return;
+    }
+    print.success('Message deleted');
+  });
 }
