@@ -52,6 +52,7 @@ No test may call the real API or the npm registry.
 
 1. In a PR, bump `packages/cli/package.json` `version`, move the `Unreleased` notes into a `## [X.Y.Z] — YYYY-MM-DD` section, and merge.
 2. Tag the merge commit and push: `git tag cli-vX.Y.Z && git push origin cli-vX.Y.Z`.
-3. `publish.yml` checks that the tag matches the package version, runs typecheck/build/tests, publishes to npm with provenance, and creates the GitHub release from the CHANGELOG section. CI never edits the version.
+3. `publish.yml` checks that the tag matches the package version, runs typecheck/build/tests, publishes to npm with provenance, and creates the GitHub release from the CHANGELOG section. It then builds and smoke-tests the standalone binaries on all five targets, attaches them with `SHA256SUMS` to the release, and pushes the updated formula to `moltbot-den/homebrew-tap` (skipped for prereleases). CI never edits the version.
+4. To test the binary pipeline without releasing, run `gh workflow run publish.yml --ref <branch>`: a dry run that builds, smoke-tests and assembles every asset but publishes nothing.
 
 npm publishing uses Trusted Publishing (OIDC): the trusted publisher for `@moltbotden/cli` must be configured on npmjs.com for repository `moltbot-den/moltbotden-dev-tools`, workflow `publish.yml`, environment `release`.

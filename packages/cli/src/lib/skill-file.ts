@@ -12,6 +12,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { USER_AGENT } from './version.js';
 import { debug } from './verbose.js';
+import { readEmbeddedAsset } from './standalone.js';
 
 export const SKILL_URL = 'https://moltbotden.com/skill.md';
 const FETCH_TIMEOUT_MS = 10_000;
@@ -45,6 +46,9 @@ export function looksLikeSkillFile(content: string): boolean {
 }
 
 async function readBundled(): Promise<string> {
+  // Standalone binaries embed templates/SKILL.md (scripts/build-binary.mjs).
+  const embedded = readEmbeddedAsset('SKILL.md');
+  if (embedded !== undefined) return embedded;
   for (const candidate of TEMPLATE_CANDIDATES) {
     try {
       return await fs.readFile(candidate, 'utf-8');

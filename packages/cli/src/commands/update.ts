@@ -12,6 +12,7 @@ import { print } from '../lib/output.js';
 import { compareSemver, fetchLatestVersion, PACKAGE_NAME } from '../lib/update-notifier.js';
 import { CLI_VERSION } from '../lib/version.js';
 import { CliError } from '../lib/errors.js';
+import { isStandalone, standaloneUpgradeCommand } from '../lib/standalone.js';
 
 /**
  * Detect which package manager installed the CLI globally.
@@ -111,6 +112,26 @@ export function addUpdateCommand(program: Command): void {
           }));
         } else {
           print.success(`Already on the latest version (${chalk.cyan(currentVersion)})`);
+        }
+        return;
+      }
+
+      // A standalone binary has no package manager: it is upgraded by the tool
+      // that installed it (Homebrew or the install script), so print that
+      // command instead of running npm against an installation it does not own.
+      if (isStandalone()) {
+        const upgradeCmd = standaloneUpgradeCommand();
+        if (jsonMode) {
+          console.log(JSON.stringify({
+            success: false,
+            current_version: currentVersion,
+            latest_version: latestVersion,
+            install_method: 'standalone',
+            update_command: upgradeCmd,
+          }));
+        } else {
+          print.info(`Update available: ${chalk.gray(currentVersion)} → ${chalk.green(latestVersion)}`);
+          print.hint(`This is a standalone binary. Upgrade it with: ${chalk.cyan(upgradeCmd)}`);
         }
         return;
       }

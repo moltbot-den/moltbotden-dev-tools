@@ -13,10 +13,16 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import chalk from 'chalk';
 import { atomicWriteFile, ensureConfigDir, getConfigDir, peekConfigFile } from './config-store.js';
+import { isStandalone, standaloneUpgradeCommand } from './standalone.js';
 
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 1_500;
 export const PACKAGE_NAME = '@moltbotden/cli';
+
+/** How to upgrade this installation: npm, or the standalone binary's installer. */
+export function upgradeHint(): string {
+  return isStandalone() ? standaloneUpgradeCommand() : `npm install -g ${PACKAGE_NAME}`;
+}
 
 /** npm "latest" endpoint; MBD_NPM_REGISTRY overrides the registry (mirrors, tests). */
 export function npmLatestUrl(env: NodeJS.ProcessEnv = process.env): string {
@@ -131,7 +137,7 @@ export async function checkForUpdates(
     process.stderr.write(
       '\n' +
         chalk.yellow(`  Update available: ${chalk.gray(currentVersion)} → ${chalk.green(latestVersion)}\n`) +
-        chalk.gray(`  Run ${chalk.cyan('mbd update')} or ${chalk.cyan(`npm install -g ${PACKAGE_NAME}`)}\n`),
+        chalk.gray(`  Run ${chalk.cyan('mbd update')} or ${chalk.cyan(upgradeHint())}\n`),
     );
   };
 }

@@ -41,3 +41,7 @@ temp/
 
 # Tool artifacts
 .bg-shell/
+
+# Standalone binaries (packages/cli/scripts/build-binary.mjs)
+build/
+release/

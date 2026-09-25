@@ -11,11 +11,21 @@ name: Publish CLI
 #   environment: release
 # Until that is configured, the NPM_TOKEN repository secret (if present) is
 # used as a fallback via NODE_AUTH_TOKEN.
+#
+# After npm, the standalone binaries are built and smoke-tested on every
+# target (binaries.yml), attached to the GitHub release with SHA256SUMS
+# (scripts/install.sh and install.ps1 download them), and the Homebrew
+# formula in moltbot-den/homebrew-tap is updated (deploy key secret
+# HOMEBREW_TAP_DEPLOY_KEY). Prereleases do not touch the tap.
+#
+# workflow_dispatch is a dry run: it builds and smoke-tests every binary and
+# assembles the release assets and formula, but publishes nothing.
 
 on:
   push:
     tags:
       - 'cli-v*.*.*'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -26,8 +36,11 @@ concurrency:
 
 jobs:
   publish:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     environment: release
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     permissions:
       contents: write # gh release create
       id-token: write # npm provenance + trusted publishing
@@ -98,8 +111,99 @@ jobs:
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
+          # A semver prerelease (3.1.0-beta.1) must not become "latest": the
+          # install scripts download from releases/latest.
+          PRERELEASE=()
+          case "$VERSION" in *-*) PRERELEASE=(--prerelease) ;; esac
           gh release create "$GITHUB_REF_NAME" \
-            --title "@moltbotden/cli ${{ steps.version.outputs.version }}" \
+            --title "@moltbotden/cli $VERSION" \
             --notes-file release-notes.md \
-            --verify-tag
+            --verify-tag "${PRERELEASE[@]}"
+
+  binaries:
+    # Runs after a successful npm publish, or alone for a dry run.
+    needs: publish
+    if: ${{ !cancelled() && (needs.publish.result == 'success' || (github.event_name == 'workflow_dispatch' && needs.publish.result == 'skipped')) }}
+    uses: ./.github/workflows/binaries.yml
+
+  release-assets:
+    needs: [publish, binaries]
+    if: ${{ !cancelled() && needs.binaries.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # gh release upload
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: mbd-*
+          path: dist-bin
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist-bin
+        run: |
+          sha256sum mbd-* > SHA256SUMS
+          cat SHA256SUMS
+          test "$(wc -l < SHA256SUMS)" -eq 5
+
+      - name: Render Homebrew formula
+        env:
+          VERSION: ${{ needs.publish.outputs.version || '0.0.0-dryrun' }}
+        run: |
+          node scripts/render-formula.mjs "$VERSION" dist-bin/SHA256SUMS > mbd.rb
+          ruby -c mbd.rb
+          cat mbd.rb
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-assets
+          path: |
+            dist-bin/*
+            mbd.rb
+          retention-days: 7
+
+      - name: Attach to the GitHub release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" dist-bin/* --clobber
+
+  homebrew:
+    needs: [publish, release-assets]
+    if: ${{ github.event_name == 'push' && !contains(needs.publish.outputs.version, '-') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-assets
+          path: assets
+
+      - uses: actions/checkout@v7
+        with:
+          repository: moltbot-den/homebrew-tap
+          ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          path: tap
+
+      - name: Commit the formula
+        working-directory: tap
+        env:
+          VERSION: ${{ needs.publish.outputs.version }}
+        run: |
+          mkdir -p Formula
+          cp ../assets/mbd.rb Formula/mbd.rb
+          git add Formula/mbd.rb
+          if git diff --cached --quiet; then
+            echo "Formula already at $VERSION"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "mbd $VERSION"
+          git push

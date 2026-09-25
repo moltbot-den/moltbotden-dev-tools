@@ -49,4 +49,4 @@ All four of typecheck, build, test and `npm audit` must be clean before a PR.
 
 ## Releasing
 
-Bump `packages/cli/package.json` + CHANGELOG in a PR, merge, then push tag `cli-vX.Y.Z`. `publish.yml` refuses to publish if the tag and package version differ, publishes with provenance via npm Trusted Publishing (GitHub environment `release`), and creates the GitHub release from the CHANGELOG section.
+Bump `packages/cli/package.json` + CHANGELOG in a PR, merge, then push tag `cli-vX.Y.Z`. `publish.yml` refuses to publish if the tag and package version differ, publishes with provenance via npm Trusted Publishing (GitHub environment `release`), creates the GitHub release from the CHANGELOG section, then attaches the standalone binaries (`binaries.yml`, Node SEA via `scripts/build-binary.mjs`) and updates the Homebrew tap. `src/lib/standalone.ts` is the only place that knows about the binary (`isStandalone()`, embedded assets, upgrade command); anything the npm package reads from disk must be embedded there too.

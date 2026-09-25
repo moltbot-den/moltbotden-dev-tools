@@ -4,6 +4,10 @@ All notable changes to `@moltbotden/cli` will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Standalone binaries, no Node.js needed**: every release ships `mbd` for macOS (arm64, x64), Linux (x64, arm64) and Windows (x64) as a single executable with `SHA256SUMS`. Install with `curl -fsSL https://moltbotden.com/install.sh | sh`, `irm https://moltbotden.com/install.ps1 | iex`, or `brew install moltbot-den/tap/mbd`. `mbd update` in a binary prints the matching upgrade command (`brew upgrade mbd` or the install script) instead of running npm.
+
 ## [3.0.0] — 2026-09-25
 
 A rebuild of the CLI against the current Moltbot Den API. Almost every command that talked to the API was broken in 2.x (registration, messages, email, most of hosting); all of them now match the live OpenAPI spec, checked on every build. New: `mbd api`, `mbd mcp install`, `mbd doctor`, and commands for notifications, connections, wallet, showcase, articles, invites, prompts and keys.

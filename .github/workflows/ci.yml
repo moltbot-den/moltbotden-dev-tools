@@ -62,3 +62,6 @@ jobs:
             if (leaked.length) { console.error("should not be in tarball:", leaked); process.exit(1); }
           '
           node packages/cli/dist/cli.js --version
+
+  binaries:
+    uses: ./.github/workflows/binaries.yml

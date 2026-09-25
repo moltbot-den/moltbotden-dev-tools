@@ -1,0 +1,98 @@
+name: Standalone binaries
+
+# Builds the standalone `mbd` executables (Node.js single executable
+# applications, see packages/cli/scripts/build-binary.mjs) natively on each
+# target runner, smoke-tests each one on that runner, and uploads the archive
+# as an artifact named mbd-<os>-<arch>. Called from ci.yml (every PR) and
+# publish.yml (releases and workflow_dispatch dry runs).
+#
+# The blob must be injected into the same Node build that generated it, so
+# there is no cross-compilation: every target builds on its own OS and arch.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: binary (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: darwin-arm64, runner: macos-14, archive: tar.gz }
+          # macos-13 (the last x64 image under that name) was retired in
+          # December 2025; macos-15-intel is GitHub's x64 macOS runner.
+          - { target: darwin-x64, runner: macos-15-intel, archive: tar.gz }
+          - { target: linux-x64, runner: ubuntu-latest, archive: tar.gz }
+          - { target: linux-arm64, runner: ubuntu-24.04-arm, archive: tar.gz }
+          - { target: windows-x64, runner: windows-latest, archive: zip }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      # The embedded runtime. Node 24 is the active LTS line; bump deliberately.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build binary
+        run: npm run build:binary -w packages/cli
+
+      - name: Verify target
+        run: |
+          test -f "packages/cli/release/mbd-${{ matrix.target }}/mbd${{ runner.os == 'Windows' && '.exe' || '' }}"
+
+      - name: Smoke test
+        working-directory: packages/cli
+        run: node scripts/smoke-binary.mjs "release/mbd-${{ matrix.target }}/mbd${{ runner.os == 'Windows' && '.exe' || '' }}"
+
+      - name: Archive (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          mkdir -p dist-bin
+          tar -czf "dist-bin/mbd-${{ matrix.target }}.tar.gz" -C "packages/cli/release/mbd-${{ matrix.target }}" mbd LICENSE
+
+      - name: Archive (zip)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist-bin | Out-Null
+          Compress-Archive -Path "packages/cli/release/mbd-${{ matrix.target }}/*" -DestinationPath "dist-bin/mbd-${{ matrix.target }}.zip"
+
+      # Run the real install script against this archive, served locally with
+      # its checksum, exactly as users run it (install.ps1 through `iex`,
+      # under both PowerShell 7 and Windows PowerShell 5.1).
+      - name: Install script
+        run: |
+          (cd dist-bin && node -e 'const c=require("crypto"),f=require("fs");for(const n of f.readdirSync(".")){if(n.startsWith("mbd-"))process.stdout.write(c.createHash("sha256").update(f.readFileSync(n)).digest("hex")+"  "+n+"\n")}' > SHA256SUMS && cat SHA256SUMS)
+          node -e 'const f=require("fs"),p=require("path");require("http").createServer((q,r)=>f.readFile(p.join("dist-bin",p.basename(q.url)),(e,d)=>{r.statusCode=e?404:200;r.end(d)})).listen(18666)' &
+          sleep 2
+          export MBD_DOWNLOAD_URL=http://127.0.0.1:18666
+          if [ "$RUNNER_OS" = Windows ]; then
+            for shell in pwsh powershell; do
+              dir="$RUNNER_TEMP/mbd-$shell"
+              MBD_INSTALL_DIR="$dir" "$shell" -NoProfile -Command 'Get-Content scripts/install.ps1 -Raw | Invoke-Expression'
+              "$dir/mbd.exe" --version
+            done
+          else
+            MBD_INSTALL_DIR="$RUNNER_TEMP/mbd-sh" sh scripts/install.sh
+            "$RUNNER_TEMP/mbd-sh/mbd" --version
+          fi
+          rm dist-bin/SHA256SUMS
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mbd-${{ matrix.target }}
+          path: dist-bin/mbd-${{ matrix.target }}.${{ matrix.archive }}
+          if-no-files-found: error
+          retention-days: 7
