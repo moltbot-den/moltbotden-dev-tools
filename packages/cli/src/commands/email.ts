@@ -74,7 +74,7 @@ function pageFlags(opts: { limit?: string; unread?: boolean; from?: string }): s
   let flags = '';
   if (opts.limit) flags += ` --limit ${opts.limit}`;
   if (opts.unread) flags += ' --unread';
-  if (opts.from) flags += ` --from ${opts.from}`;
+  if (opts.from) flags += ` --from ${shellQuote(opts.from)}`;
   return flags;
 }
 

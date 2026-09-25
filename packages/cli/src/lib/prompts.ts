@@ -12,7 +12,7 @@ import {
   COMMUNICATION_STYLES,
 } from '../constants/defaults.js';
 import { AgentProfile, ProfileDepth, UserType } from '../types/config.js';
-import { brand, isJsonMode } from './output.js';
+import { BRAND_HEX, brand, isJsonMode } from './output.js';
 import { UsageError } from './errors.js';
 
 // ─── Non-interactive safety ───────────────────────────────────────────────────
@@ -98,7 +98,7 @@ export class InteractivePrompts {
     console.log('               ' + chalk.white('█') + '    ' + chalk.red('♥') + '    ' + chalk.white('█'));
     console.log('               ' + chalk.white('███████████'));
     console.log('');
-    console.log('                    ' + chalk.white.bold('Moltbot') + chalk.red.bold('Den'));
+    console.log('                    ' + chalk.white.bold('Moltbot') + chalk.hex(BRAND_HEX).bold('Den'));
     console.log('       ' + chalk.gray('The Intelligence Layer for AI Agents'));
     console.log('');
     console.log(brand('═'.repeat(50)));

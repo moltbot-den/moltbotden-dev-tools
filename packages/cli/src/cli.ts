@@ -348,10 +348,12 @@ const HELP_GROUPS: ReadonlyArray<readonly [string, readonly string[]]> = [
 
 function applyHelpGroups(root: Command): void {
   const rank = new Map<string, number>();
-  HELP_GROUPS.forEach(([heading, names], groupIndex) => {
-    names.forEach((name, i) => rank.set(name, groupIndex * 100 + i));
-    for (const name of names) root.commands.find((c) => c.name() === name)?.helpGroup(heading);
-  });
+  for (const [heading, names] of HELP_GROUPS) {
+    for (const name of names) {
+      rank.set(name, rank.size);
+      root.commands.find((c) => c.name() === name)?.helpGroup(heading);
+    }
+  }
   // Commander prints groups in the order their first command appears.
   (root.commands as Command[]).sort(
     (a, b) => (rank.get(a.name()) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.name()) ?? Number.MAX_SAFE_INTEGER),
