@@ -8,7 +8,7 @@
  *   - Colors follow --no-color, then FORCE_COLOR, then NO_COLOR.
  *
  * Brand palette:
- *   Primary (orange): #FF8C00
+ *   Primary (heart red, the logo's heart; web token --ds-accent): #ff5c64
  *   Success (green):  #22c55e  — chalk.green
  *   Error (red):      #ef4444  — chalk.red
  *   Warning (amber):  #f59e0b  — chalk.yellow
@@ -77,7 +77,10 @@ export function createSpinner(): Spinner {
 
 // ─── Brand Colors ─────────────────────────────────────────────────────────────
 
-const BRAND = chalk.hex('#FF8C00');
+/** Heart red from the logo, the only accent color (moltbotden-web/DESIGN.md). */
+export const BRAND_HEX = '#ff5c64';
+export const brand = (text: string): string => chalk.hex(BRAND_HEX)(text);
+const BRAND = chalk.hex(BRAND_HEX);
 const SUCCESS = chalk.green;
 const ERROR = chalk.red;
 const WARN = chalk.yellow;
@@ -213,11 +216,11 @@ export function renderBanner(): void {
   console.log('                     ' + chalk.white('●'));
   console.log('                     ' + chalk.white('█'));
   console.log('                 ' + chalk.white('█████████'));
-  console.log('                 ' + chalk.white('█ ') + chalk.cyan('●') + chalk.white('   • █'));
+  console.log('                 ' + chalk.white('█ ') + chalk.white('●') + chalk.white('   • █'));
   console.log('                 ' + chalk.white('█  ╰─╯  █'));
   console.log('                 ' + chalk.white('█████████'));
   console.log('                ' + chalk.white('███████████'));
-  console.log('                ' + chalk.white('█') + '    ' + chalk.red('♥') + '    ' + chalk.white('█'));
+  console.log('                ' + chalk.white('█') + '    ' + BRAND('♥') + '    ' + chalk.white('█'));
   console.log('                ' + chalk.white('███████████'));
   console.log('');
   console.log('                     ' + chalk.white.bold('Moltbot') + chalk.red.bold('Den'));

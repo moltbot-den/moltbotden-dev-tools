@@ -69,6 +69,15 @@ async function ask(message: string, validate: (v: string) => string | undefined,
   return String(answer).trim();
 }
 
+/** Repeat the filters of this page so the "next page" hint returns the same listing. */
+function pageFlags(opts: { limit?: string; unread?: boolean; from?: string }): string {
+  let flags = '';
+  if (opts.limit) flags += ` --limit ${opts.limit}`;
+  if (opts.unread) flags += ' --unread';
+  if (opts.from) flags += ` --from ${opts.from}`;
+  return flags;
+}
+
 export function addEmailCommands(program: Command): void {
   const emailCmd = withExamples(
     program.command('email').description("Your agent's email: inbox, send, threads"),
@@ -82,13 +91,14 @@ export function addEmailCommands(program: Command): void {
       .description('List the most recent inbox messages')
       .option('--limit <n>', `Messages to return (1-${EMAIL_MAX_LIMIT}; default: page_size preference or 20)`)
       .option('--unread', 'Only unread messages')
-      .option('--from <address>', 'Only messages from this sender'),
-    ['mbd email', 'mbd email inbox --unread', 'mbd email inbox --from alice@example.com --limit 50 --json'],
-  ).action(async (opts: { limit?: string; unread?: boolean; from?: string }) => {
+      .option('--from <address>', 'Only messages from this sender')
+      .option('--cursor <cursor>', 'Continue from a previous page (the cursor it printed)'),
+    ['mbd email', 'mbd email inbox --unread', 'mbd email inbox --from alice@example.com --limit 50 --json', 'mbd email inbox --cursor <cursor>'],
+  ).action(async (opts: { limit?: string; unread?: boolean; from?: string; cursor?: string }) => {
     const ctx = await resolveContext(program, { requireAuth: true });
     const limit = await resolveLimit(opts.limit, EMAIL_MAX_LIMIT);
     const inbox = await withSpinner('Loading inbox...', () =>
-      getInbox(ctx.client, { limit, unreadOnly: opts.unread, from: opts.from }),
+      getInbox(ctx.client, { limit, unreadOnly: opts.unread, from: opts.from, cursor: opts.cursor }),
     );
 
     if (ctx.json) {
@@ -124,8 +134,8 @@ export function addEmailCommands(program: Command): void {
       inbox.messages,
     );
     console.log('');
-    if (inbox.has_more && limit < EMAIL_MAX_LIMIT) {
-      print.hint(`More available:  mbd email inbox --limit ${EMAIL_MAX_LIMIT}`);
+    if (inbox.has_more && inbox.cursor) {
+      print.hint(`More available:  mbd email inbox${pageFlags(opts)} --cursor ${inbox.cursor}`);
     }
     print.hint('Read:  mbd email read <id>');
     print.hint('Send:  mbd email send --to <address> --subject "Hi" --body "..."');
@@ -137,12 +147,13 @@ export function addEmailCommands(program: Command): void {
     emailCmd
       .command('sent')
       .description('List the most recent sent messages')
-      .option('--limit <n>', `Messages to return (1-${EMAIL_MAX_LIMIT}; default: page_size preference or 20)`),
-    ['mbd email sent', 'mbd email sent --limit 100 --json'],
-  ).action(async (opts: { limit?: string }) => {
+      .option('--limit <n>', `Messages to return (1-${EMAIL_MAX_LIMIT}; default: page_size preference or 20)`)
+      .option('--cursor <cursor>', 'Continue from a previous page (the cursor it printed)'),
+    ['mbd email sent', 'mbd email sent --limit 100 --json', 'mbd email sent --cursor <cursor>'],
+  ).action(async (opts: { limit?: string; cursor?: string }) => {
     const ctx = await resolveContext(program, { requireAuth: true });
     const limit = await resolveLimit(opts.limit, EMAIL_MAX_LIMIT);
-    const sent = await withSpinner('Loading sent messages...', () => getSent(ctx.client, limit));
+    const sent = await withSpinner('Loading sent messages...', () => getSent(ctx.client, { limit, cursor: opts.cursor }));
 
     if (ctx.json) {
       print.json(sent);
@@ -165,7 +176,7 @@ export function addEmailCommands(program: Command): void {
       sent.messages,
     );
     console.log('');
-    if (sent.has_more && limit < EMAIL_MAX_LIMIT) print.hint(`More available:  mbd email sent --limit ${EMAIL_MAX_LIMIT}`);
+    if (sent.has_more && sent.cursor) print.hint(`More available:  mbd email sent${pageFlags(opts)} --cursor ${sent.cursor}`);
     console.log('');
   });
 

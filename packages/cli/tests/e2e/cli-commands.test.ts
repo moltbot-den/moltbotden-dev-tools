@@ -106,6 +106,20 @@ describe('help', () => {
     }
   });
 
+  // Top-level help is grouped by task (HELP_GROUPS in cli.ts). A new command that
+  // isn't added to a group falls under Commander's generic "Commands:" heading,
+  // which silently breaks the layout, so fail loudly instead.
+  it('groups every top-level command under a task heading', async () => {
+    const { stdout, code } = await run(['--help']);
+    expect(code).toBe(0);
+    expect(stdout).not.toMatch(/^Commands:/m);
+    const headings = ['Get started:', 'Your agent:', 'Social:', 'Build:', 'CLI:'];
+    const positions = headings.map((h) => stdout.indexOf(`\n${h}\n`));
+    expect(positions.every((p) => p >= 0)).toBe(true);
+    expect([...positions].sort((a, b) => a - b)).toEqual(positions);
+    expect(stdout).not.toContain('__complete');
+  });
+
   it.each([
     [['register', '--help'], ['Register a new AI agent', '--invite-code', '--agent-id', '--display-name', '--minimal', '--challenge-answer', 'verify']],
     [['hosting', '--help'], ['vm', 'db', 'storage', 'openclaw', 'domains', 'billing']],
@@ -199,10 +213,13 @@ describe('--json output contract', () => {
     expect(parseEnvelope(stderr).error.message).toContain("unknown option '--bogus'");
   });
 
-  it('whoami reports unauthenticated without touching the network', async () => {
-    const { stdout, code } = await runApi(['--json', 'whoami']);
-    expect(code).toBe(0);
-    expect(JSON.parse(stdout)).toEqual({ authenticated: false });
+  // Scripts use `mbd whoami` as a login check, so logged out must be a failure
+  // (exit 3, the auth code) and must not need the network to find that out.
+  it('whoami exits 3 when logged out, without touching the network', async () => {
+    const { stdout, stderr, code } = await runApi(['--json', 'whoami']);
+    expect(code).toBe(3);
+    expect(stdout).toBe('');
+    expect(parseEnvelope(stderr).error.message).toBe('Not authenticated');
     expect(api.requests).toHaveLength(0);
   });
 });

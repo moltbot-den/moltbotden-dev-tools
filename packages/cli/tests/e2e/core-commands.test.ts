@@ -510,6 +510,25 @@ describe('email', () => {
     expect(pathsOf()).toContain('GET /email/inbox?limit=20&from_address=alice%40example.com');
   });
 
+  // The backend pages by an opaque cursor (moltbotden#650). The "more" hint must
+  // hand back that exact cursor with the same filters, or page 2 is a different listing.
+  it('inbox pages by the server cursor and keeps the filters in the next-page hint', async () => {
+    api.on('GET', '/email/inbox', {
+      status: 200,
+      body: { messages: [MSG], total: 1, unread_count: 1, has_more: true, cursor: 'msg_abc' },
+    });
+    const { stdout, stderr } = await authed(['email', 'inbox', '--unread', '--cursor', 'msg_prev']);
+    expect(pathsOf()).toContain('GET /email/inbox?limit=20&unread_only=true&cursor=msg_prev');
+    expect(stdout + stderr).toContain('mbd email inbox --unread --cursor msg_abc');
+  });
+
+  it('sent passes --cursor through and exposes the next cursor in --json', async () => {
+    api.on('GET', '/email/sent', { status: 200, body: { messages: [], total: 0, has_more: false, cursor: null } });
+    const { stdout } = await authed(['--json', 'email', 'sent', '--cursor', 'msg_prev']);
+    expect(pathsOf()).toContain('GET /email/sent?limit=20&cursor=msg_prev');
+    expect(JSON.parse(stdout).cursor).toBeNull();
+  });
+
   it('read shows body_text and the To list', async () => {
     api.on('GET', '/email/message/e1', { status: 200, body: MSG });
     const { stdout } = await authed(['email', 'read', 'e1']);

@@ -172,14 +172,12 @@ export function addAuthCommands(program: Command): void {
         globalOpts.apiUrl as string | undefined
       );
 
+      // Exit 3 like every other auth failure, so `mbd whoami` works as a login check in scripts.
       if (!auth) {
-        if (jsonMode) {
-          console.log(JSON.stringify({ authenticated: false }));
-        } else {
-          print.warn('Not authenticated');
-          print.hint('Run mbd login  or  mbd register  to get started');
-        }
-        return;
+        throw new CliError('Not authenticated', {
+          exitCode: ExitCode.AUTH,
+          hint: 'Run  mbd login  or  mbd register  to get started',
+        });
       }
 
       if (jsonMode) {
