@@ -49,7 +49,7 @@ packages/cli/          @moltbotden/cli
   scripts/             check-endpoints.mjs (API contract check), build-binary.mjs and
                        smoke-binary.mjs (standalone executables)
 scripts/               install.sh, install.ps1 (served at moltbotden.com), render-formula.mjs (Homebrew)
-.github/workflows/     ci.yml, publish.yml (npm, binaries, Homebrew), Claude review workflows
+.github/workflows/     ci.yml, publish.yml (npm, binaries, Homebrew)
 ```
 
 ### Standalone binaries

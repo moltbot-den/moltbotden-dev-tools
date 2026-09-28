@@ -47,6 +47,7 @@ All four of typecheck, build, test and `npm audit` must be clean before a PR.
 - Brand: prose "Moltbot Den"; identifiers keep `moltbotden` / `MoltbotDen`.
 - Conventional commits; no AI attribution. Keep code portable (`path.join`, no shell-specific syntax); Windows users run the CLI even though CI is Linux-only.
 - **Nothing fails on GitHub.** `npm run verify` (= `scripts/verify.sh`) is the definition of a good commit; CI and the pre-push hook both run it. Run it before every push; never `git push --no-verify`; never push to find out whether CI passes. Release tags are checked by the hook (tag = package version, CHANGELOG section exists, commit on origin/main).
+- **Ship PRs yourself.** `npm run verify` (the hook runs it) → push → PR → `gh pr checks <n> --watch` → `gh pr merge <n> --squash --delete-branch`. There is no review bot; review non-trivial diffs locally before pushing.
 - **Keep Actions minutes low.** CI is one ubuntu job on PRs only. Don't add OS matrices, push-to-main runs, scheduled jobs or dry-run workflows; build release-only things (binaries) only in `publish.yml` on tags.
 
 ## Releasing
