@@ -14,6 +14,7 @@ import {
 import { newContent, tail } from '../../src/commands/hosting/vm.js';
 import { parseUsd, signedAmount } from '../../src/commands/hosting/billing.js';
 import { defaultDomainType } from '../../src/commands/hosting/domains.js';
+import { checkModel, parseAllowFrom, withoutSecrets } from '../../src/commands/hosting/openclaw.js';
 import { makeTempDir } from '../helpers/temp-dir.js';
 
 const KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl me@host';
@@ -166,5 +167,32 @@ describe('formatters', () => {
   it('defaults platform hostnames to subdomain and everything else to custom', () => {
     expect(defaultDomainType('bot.moltbotden.com')).toBe('subdomain');
     expect(defaultDomainType('bot.example.com')).toBe('custom');
+  });
+});
+
+describe('OpenClaw input checks (they run before the live credential check and the charge)', () => {
+  it('parseAllowFrom dedupes ids and rejects ids of the wrong platform, naming them', () => {
+    // An allowlist of the wrong kind of id locks the owner out of their own agent.
+    expect(parseAllowFrom('telegram', '123456789, 123456789,42424242')).toEqual(['123456789', '42424242']);
+    expect(() => parseAllowFrom('slack', 'U0123ABCD,@will')).toThrow(/--slack-allow: Not Slack member ids.*@will/);
+    expect(() => parseAllowFrom('discord', '')).toThrow(UsageError);
+    expect(() => parseAllowFrom('telegram', Array.from({ length: 21 }, (_, i) => String(1000 + i)).join(','))).toThrow(/At most 20/);
+  });
+
+  it('checkModel requires provider/model with the instance provider as prefix', () => {
+    expect(checkModel('anthropic/claude-x-1', 'anthropic')).toBe('anthropic/claude-x-1');
+    expect(() => checkModel('openai/gpt-x', 'anthropic')).toThrow(/start with "anthropic\/"/);
+    expect(() => checkModel('claude-x-1', 'anthropic')).toThrow(/provider\/model/);
+  });
+
+  it('withoutSecrets strips credentials that a validation error echoes back', async () => {
+    // FastAPI 422 bodies include the submitted input; --json would print it in the error envelope.
+    const key = 'sk-ant-secret-value-1234567890';
+    const echo = new ApiError(422, `Validation failed: ${key}`, { detail: [{ loc: ['body', 'llm_api_key'], msg: 'bad', input: key }] });
+    const err = await withoutSecrets([key], () => Promise.reject(echo)).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(JSON.stringify((err as ApiError).details)).not.toContain(key);
+    expect((err as ApiError).message).not.toContain(key);
+    expect((err as ApiError).status).toBe(422);
   });
 });

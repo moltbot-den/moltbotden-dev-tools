@@ -4,6 +4,9 @@ import {
   DB_PLAN_SPECS,
   STORAGE_PLAN_SPECS,
   OPENCLAW_PLAN_SPECS,
+  OPENCLAW_CHANNELS,
+  OPENCLAW_LLM_PROVIDERS,
+  OPENCLAW_TOKEN_RE,
   type VMTier,
   type DatabasePlan,
   type StoragePlan,
@@ -104,17 +107,25 @@ describe('OpenClaw Plan Specs', () => {
     }
   });
 
-  it('shared should not be dedicated', () => {
-    expect(OPENCLAW_PLAN_SPECS.shared.dedicated).toBe(false);
+  it('every plan is its own VM, and dedicated is the bigger machine with the higher uptime target', () => {
+    // The old catalog advertised a shared multi-tenant plan; the backend now gives every instance a VM.
+    for (const plan of plans) expect(OPENCLAW_PLAN_SPECS[plan].machine_type).toMatch(/^e2-/);
+    expect(OPENCLAW_PLAN_SPECS.dedicated.ram_gb).toBeGreaterThan(OPENCLAW_PLAN_SPECS.shared.ram_gb);
+    expect(OPENCLAW_PLAN_SPECS.dedicated.sla_uptime).toBeGreaterThan(OPENCLAW_PLAN_SPECS.shared.sla_uptime);
   });
 
-  it('dedicated should be dedicated', () => {
-    expect(OPENCLAW_PLAN_SPECS.dedicated.dedicated).toBe(true);
+  it('offers only the channels and providers the pinned OpenClaw image can run on a Linux VM', () => {
+    // WhatsApp, iMessage, Teams and the dropped LLM providers are rejected by the API after the questionnaire.
+    expect([...OPENCLAW_CHANNELS]).toEqual(['telegram', 'discord', 'slack']);
+    expect([...OPENCLAW_LLM_PROVIDERS]).toEqual(['anthropic', 'openai', 'google']);
+    for (const plan of plans) expect(OPENCLAW_PLAN_SPECS[plan].max_channels).toBeLessThanOrEqual(OPENCLAW_CHANNELS.length);
   });
 
-  it('dedicated should have higher SLA', () => {
-    expect(OPENCLAW_PLAN_SPECS.dedicated.sla_uptime).toBeGreaterThan(
-      OPENCLAW_PLAN_SPECS.shared.sla_uptime
-    );
+  it('token shapes match what each platform issues, so a token pasted into the wrong flag fails locally', () => {
+    expect(OPENCLAW_TOKEN_RE.telegram_bot.test(`123456789:${'A'.repeat(35)}`)).toBe(true);
+    expect(OPENCLAW_TOKEN_RE.slack_bot.test(`xoxb-${'1'.repeat(24)}`)).toBe(true);
+    expect(OPENCLAW_TOKEN_RE.slack_app.test(`xoxb-${'1'.repeat(24)}`)).toBe(false);
+    expect(OPENCLAW_TOKEN_RE.slack_bot.test(`xapp-${'1'.repeat(24)}`)).toBe(false);
+    expect(OPENCLAW_TOKEN_RE.telegram_bot.test(`xoxb-${'1'.repeat(24)}`)).toBe(false);
   });
 });

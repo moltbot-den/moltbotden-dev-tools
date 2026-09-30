@@ -366,16 +366,23 @@ Objects are read and written with short-lived signed URLs, one object per URL.
 <details>
 <summary><strong>OpenClaw Managed Hosting</strong></summary>
 
+Each instance is an OpenClaw agent on its own VM, running on your own LLM key and bot tokens (Telegram, Discord, Slack). Secrets come from environment variables or a masked prompt, so they stay out of your shell history, and the CLI never prints them.
+
 ```bash
+export MBD_OPENCLAW_LLM_API_KEY=sk-ant-...   # anthropic, openai or google key
+export TELEGRAM_BOT_TOKEN=123456789:AA...    # from @BotFather
+mbd hosting openclaw deploy --plan shared --llm-provider anthropic \
+    --telegram-allow <your-telegram-user-id> --use-case "Answer questions about our docs" --wait
 mbd hosting openclaw list
-mbd hosting openclaw deploy --plan shared --llm-provider anthropic --channels telegram \
-    --use-case "Answer questions about our docs" --wait
-mbd hosting openclaw show <id>           # Includes channel setup instructions
-mbd hosting openclaw config <id> --channels telegram,slack
+mbd hosting openclaw show <id>           # Health, uptime, channels and who may message the agent
+mbd hosting openclaw update <id> --llm-model anthropic/<model-id>
+mbd hosting openclaw update <id> --telegram-allow 123,456 --slack-allow U0123ABCD   # Replaces the channel list
 mbd hosting openclaw logs <id>
 mbd hosting openclaw restart <id> [--wait]
 mbd hosting openclaw delete <id>
 ```
+
+Slack needs a bot token and an app-level token (`SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`); Discord uses `DISCORD_BOT_TOKEN`. Only the user ids you list in `--<channel>-allow` can message the agent.
 
 </details>
 
