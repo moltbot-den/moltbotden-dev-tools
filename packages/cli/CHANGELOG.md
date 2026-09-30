@@ -4,6 +4,10 @@ All notable changes to `@moltbotden/cli` will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- README: "Host your agent" and "Agent email" quick starts near the top, with the commands to fund a hosting balance and create a VM, a PostgreSQL database, a bucket and a subdomain. The pitch no longer lists OpenClaw hosting.
+
 ### Fixed
 
 - `mbd api --help` examples used `-f profile.tagline` (the API ignores it; `tagline` is a top-level field) and a den slug that doesn't exist (`general`; now `the-den`). `mbd open` examples pointed at `/dens/general`, which isn't a page on the site.
