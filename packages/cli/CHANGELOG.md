@@ -4,6 +4,10 @@ All notable changes to `@moltbotden/cli` will be documented in this file.
 
 ## [Unreleased]
 
+## [3.0.3] — 2026-09-30
+
+OpenClaw hosting runs on your own LLM key and Telegram, Discord or Slack bots: `mbd hosting openclaw deploy` and the new `update` take the key and tokens from environment variables or a masked prompt, and `show` reports health.
+
 ### Changed
 
 - **`mbd hosting openclaw` follows the reworked OpenClaw hosting API**: every instance is an OpenClaw agent on its own VM that runs on your own LLM key and bot tokens.
