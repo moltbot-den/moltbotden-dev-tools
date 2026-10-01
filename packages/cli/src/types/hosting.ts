@@ -87,25 +87,47 @@ export const STORAGE_PLAN_SPECS: Record<StoragePlan, StoragePlanSpec> = {
 
 export type OpenClawPlan = 'shared' | 'dedicated';
 
+/** Every OpenClaw instance runs on its own VM; the plan picks the machine size. */
 export interface OpenClawPlanSpec {
   name: string;
+  machine_type: string;
+  ram_gb: number;
+  disk_gb: number;
+  egress_gb_month: number;
   max_channels: number;
-  max_skills: number;
   sla_uptime: number;
-  dedicated: boolean;
 }
 
 export const OPENCLAW_PLAN_SPECS: Record<OpenClawPlan, OpenClawPlanSpec> = {
-  shared:    { name: 'Shared',    max_channels: 3, max_skills: 5,  sla_uptime: 99.0, dedicated: false },
-  dedicated: { name: 'Dedicated', max_channels: 6, max_skills: 20, sla_uptime: 99.9, dedicated: true },
+  shared:    { name: 'Starter',   machine_type: 'e2-small',  ram_gb: 2, disk_gb: 10, egress_gb_month: 5,  max_channels: 3, sla_uptime: 99.0 },
+  dedicated: { name: 'Dedicated', machine_type: 'e2-medium', ram_gb: 4, disk_gb: 20, egress_gb_month: 20, max_channels: 3, sla_uptime: 99.5 },
 };
 
-/** models/hosting/openclaw.py VALID_CHANNELS / VALID_LLM_PROVIDERS and field patterns. */
-export const OPENCLAW_CHANNELS = ['telegram', 'discord', 'slack', 'whatsapp', 'imessage', 'teams'] as const;
-export const OPENCLAW_LLM_PROVIDERS = ['anthropic', 'openai', 'google', 'deepseek', 'together', 'mistral'] as const;
-export const OPENCLAW_PROACTIVITY = ['reactive', 'scheduled', 'autonomous'] as const;
-export const OPENCLAW_MEMORY = ['standard', 'cloud_backup'] as const;
+/**
+ * models/hosting/openclaw.py VALID_CHANNELS / VALID_LLM_PROVIDERS and the
+ * credential shapes it checks. Mirrored so a mistyped token or id fails here,
+ * before the live credential check and the charge.
+ */
+export const OPENCLAW_CHANNELS = ['telegram', 'discord', 'slack'] as const;
+export type OpenClawChannel = (typeof OPENCLAW_CHANNELS)[number];
+export const OPENCLAW_LLM_PROVIDERS = ['anthropic', 'openai', 'google'] as const;
+export type OpenClawLlmProvider = (typeof OPENCLAW_LLM_PROVIDERS)[number];
 export const OPENCLAW_USE_CASE_LENGTH = { min: 10, max: 1000 } as const;
+export const OPENCLAW_LLM_API_KEY_LENGTH = { min: 20, max: 400 } as const;
+export const OPENCLAW_ALLOW_FROM_MAX = 20;
+export const OPENCLAW_MODEL_RE = /^[a-z0-9-]+\/[A-Za-z0-9._:/-]{1,120}$/;
+/** User ids allowed to message the agent: Telegram numeric id, Discord snowflake, Slack member id. */
+export const OPENCLAW_USER_ID_RE: Record<OpenClawChannel, RegExp> = {
+  telegram: /^\d{3,20}$/,
+  discord: /^\d{15,25}$/,
+  slack: /^[UW][A-Z0-9]{6,20}$/,
+};
+export const OPENCLAW_TOKEN_RE = {
+  telegram_bot: /^\d{5,15}:[A-Za-z0-9_-]{30,64}$/,
+  discord_bot: /^[A-Za-z0-9_.-]{50,100}$/,
+  slack_bot: /^xoxb-[A-Za-z0-9-]{20,200}$/,
+  slack_app: /^xapp-[A-Za-z0-9-]{20,200}$/,
+} as const;
 
 /** models/hosting/domain.py DNSRecordCreate. */
 export const DNS_RECORD_TYPES = ['A', 'AAAA', 'CNAME', 'TXT', 'MX', 'NS'] as const;
@@ -309,60 +331,82 @@ export interface BucketUsage {
 
 // ─── OpenClaw ────────────────────────────────────────────────────────────────
 
-/** models/hosting/openclaw.py OpenClawStatus, plus `restarting`/`deleting` written by the router. */
+/** models/hosting/openclaw.py OpenClawStatus. `failed` is terminal: the deploy never became healthy and was refunded. */
 export type OpenClawStatus =
-  | 'pending_setup' | 'provisioning' | 'running' | 'restarting' | 'stopped' | 'error' | 'deleting' | 'deleted';
+  | 'pending_setup' | 'provisioning' | 'running' | 'restarting' | 'suspended' | 'error' | 'failed' | 'deleting' | 'deleted';
 
+/** Health from the VM's probes (public_view in models/hosting/openclaw.py). */
+export interface OpenClawHealth {
+  healthy: boolean | null;
+  last_check_at: string | null;
+  checks_total: number;
+  checks_ok: number;
+  uptime_percent: number | null;
+}
+
+/** What the API returns for an instance. Credentials are write-only and never included. */
 export interface OpenClawInstance {
   id: string;
   plan: OpenClawPlan;
   status: OpenClawStatus;
-  vm_id: string | null;
   agent_name: string | null;
   llm_provider: string;
   llm_model: string | null;
   channels: string[];
-  skills: string[];
+  channel_allow_from: Record<string, string[]>;
   use_case: string;
-  proactivity_level: string;
-  agent_personality?: string | null;
-  special_instructions?: string | null;
-  connection_instructions: string | null;
-  uptime_percentage?: number;
+  agent_personality: string | null;
+  special_instructions: string | null;
+  vm_id: string | null;
   created_at: string;
   setup_completed_at: string | null;
   last_active_at: string | null;
   error_message: string | null;
+  monthly_price_cents: number | null;
+  next_billing_at: string | null;
+  billing_status: string | null;
+  openclaw_version: string | null;
+  health: OpenClawHealth;
+}
+
+/** One messaging channel. Tokens are write-only; on update an existing channel may omit them to keep the stored ones. */
+export interface OpenClawChannelSetup {
+  type: OpenClawChannel;
+  allow_from: string[];
+  bot_token?: string;
+  /** Slack only: the xapp- app-level token (Socket Mode). */
+  app_token?: string;
 }
 
 export interface OpenClawCreateRequest {
   plan: OpenClawPlan;
-  llm_provider: string;
-  channels: string[];
-  use_case: string;
-  skills?: string[];
-  proactivity_level?: string;
   agent_name?: string;
+  llm_provider: OpenClawLlmProvider;
+  llm_api_key: string;
+  llm_model?: string;
+  channels: OpenClawChannelSetup[];
+  use_case: string;
   agent_personality?: string;
   special_instructions?: string;
-  memory_preference?: string;
-}
-
-export interface OpenClawCreateResponse {
-  id: string;
-  plan: OpenClawPlan;
-  status: string;
-  channels: string[];
 }
 
 export interface OpenClawUpdateRequest {
-  channels?: string[];
-  skills?: string[];
-  proactivity_level?: string;
   agent_name?: string;
+  /** Needs `llm_api_key` for that provider. */
+  llm_provider?: OpenClawLlmProvider;
+  llm_api_key?: string;
+  llm_model?: string;
+  /** Replaces the whole channel list. */
+  channels?: OpenClawChannelSetup[];
+  use_case?: string;
   agent_personality?: string;
   special_instructions?: string;
-  llm_model?: string;
+}
+
+export interface OpenClawUpdateResponse {
+  status: string;
+  /** True when the agent restarts to apply the change. */
+  restarting: boolean;
 }
 
 export interface OpenClawLogs {

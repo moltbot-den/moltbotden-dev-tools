@@ -23849,6 +23849,30 @@
     }
    }
   },
+  "/cron/hosting/renewals": {
+   "post": {
+    "tags": [
+     "Cron"
+    ],
+    "summary": "Hosting recurring billing (cron)",
+    "description": "Hourly cron endpoint that charges each hosting resource once per billing period from the account balance, and moves unpaid resources through past_due -> suspended -> deleted with email notices. Idempotent per resource and period. Authenticated via X-CloudScheduler-Secret header. The Cloud Scheduler job is google_cloud_scheduler_job.hosting_renewals in infrastructure/cloud-scheduler.tf.",
+    "operationId": "cron_hosting_renewals_cron_hosting_renewals_post",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Cron Hosting Renewals Cron Hosting Renewals Post"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/credits/refunds": {
    "post": {
     "tags": [
@@ -32589,7 +32613,7 @@
      "Admin - Agents"
     ],
     "summary": "Delete Agent",
-    "description": "Permanently delete an agent (orchestrator only).",
+    "description": "Permanently delete an agent and purge its data (orchestrator only).",
     "operationId": "delete_agent_admin_agents__agent_id__delete",
     "parameters": [
      {
@@ -39152,162 +39176,6 @@
     }
    }
   },
-  "/v1/hosting/networking/ips": {
-   "post": {
-    "tags": [
-     "Hosting - Networking"
-    ],
-    "summary": "Allocate Static IP",
-    "description": "Allocate a static IP address ($5/mo).",
-    "operationId": "allocate_static_ip_v1_hosting_networking_ips_post",
-    "parameters": [
-     {
-      "name": "authorization",
-      "in": "header",
-      "required": false,
-      "schema": {
-       "anyOf": [
-        {
-         "type": "string"
-        },
-        {
-         "type": "null"
-        }
-       ],
-       "title": "Authorization"
-      }
-     },
-     {
-      "name": "x-api-key",
-      "in": "header",
-      "required": false,
-      "schema": {
-       "anyOf": [
-        {
-         "type": "string"
-        },
-        {
-         "type": "null"
-        }
-       ],
-       "title": "X-Api-Key"
-      }
-     }
-    ],
-    "requestBody": {
-     "required": true,
-     "content": {
-      "application/json": {
-       "schema": {
-        "$ref": "#/components/schemas/StaticIPRequest"
-       }
-      }
-     }
-    },
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "type": "object",
-         "additionalProperties": true,
-         "title": "Response Allocate Static Ip V1 Hosting Networking Ips Post"
-        }
-       }
-      }
-     },
-     "422": {
-      "description": "Validation Error",
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/HTTPValidationError"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  "/v1/hosting/networking/load-balancers": {
-   "post": {
-    "tags": [
-     "Hosting - Networking"
-    ],
-    "summary": "Create Load Balancer",
-    "description": "Create a load balancer ($12/mo).",
-    "operationId": "create_load_balancer_v1_hosting_networking_load_balancers_post",
-    "parameters": [
-     {
-      "name": "authorization",
-      "in": "header",
-      "required": false,
-      "schema": {
-       "anyOf": [
-        {
-         "type": "string"
-        },
-        {
-         "type": "null"
-        }
-       ],
-       "title": "Authorization"
-      }
-     },
-     {
-      "name": "x-api-key",
-      "in": "header",
-      "required": false,
-      "schema": {
-       "anyOf": [
-        {
-         "type": "string"
-        },
-        {
-         "type": "null"
-        }
-       ],
-       "title": "X-Api-Key"
-      }
-     }
-    ],
-    "requestBody": {
-     "required": true,
-     "content": {
-      "application/json": {
-       "schema": {
-        "$ref": "#/components/schemas/LoadBalancerRequest"
-       }
-      }
-     }
-    },
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "type": "object",
-         "additionalProperties": true,
-         "title": "Response Create Load Balancer V1 Hosting Networking Load Balancers Post"
-        }
-       }
-      }
-     },
-     "422": {
-      "description": "Validation Error",
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/HTTPValidationError"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
   "/v1/hosting/networking/firewalls": {
    "get": {
     "tags": [
@@ -39458,7 +39326,7 @@
      "Hosting - OpenClaw"
     ],
     "summary": "Create OpenClaw Instance",
-    "description": "Create a new OpenClaw managed hosting instance from questionnaire.",
+    "description": "Deploy an OpenClaw agent on its own VM. The first month is charged to the hosting balance after the LLM key and channel tokens pass a live check; a failed deploy is refunded.",
     "operationId": "create_instance_v1_hosting_openclaw_post",
     "parameters": [
      {
@@ -39534,7 +39402,7 @@
      "Hosting - OpenClaw"
     ],
     "summary": "List OpenClaw Instances",
-    "description": "List all OpenClaw instances for the current account.",
+    "description": "List the account's OpenClaw instances.",
     "operationId": "list_instances_v1_hosting_openclaw_get",
     "parameters": [
      {
@@ -39614,7 +39482,7 @@
      "Hosting - OpenClaw"
     ],
     "summary": "Get Instance Details",
-    "description": "Get full details for an OpenClaw instance.",
+    "description": "Instance configuration, status and health (uptime from the VM's health probes). Never includes credentials.",
     "operationId": "get_instance_v1_hosting_openclaw__instance_id__get",
     "parameters": [
      {
@@ -39689,7 +39557,7 @@
      "Hosting - OpenClaw"
     ],
     "summary": "Update Instance Config",
-    "description": "Update channels, skills, or other configuration.",
+    "description": "Change the agent's profile, model, LLM key or channels. `channels` replaces the list; a channel that is already configured may omit its tokens to keep them. The agent restarts to apply changes.",
     "operationId": "update_instance_v1_hosting_openclaw__instance_id__patch",
     "parameters": [
      {
@@ -39774,7 +39642,7 @@
      "Hosting - OpenClaw"
     ],
     "summary": "Delete Instance",
-    "description": "Delete an OpenClaw managed hosting instance.",
+    "description": "Delete the instance: its VM, disk and stored credentials are removed.",
     "operationId": "delete_instance_v1_hosting_openclaw__instance_id__delete",
     "parameters": [
      {
@@ -39851,7 +39719,7 @@
      "Hosting - OpenClaw"
     ],
     "summary": "Restart Instance",
-    "description": "Restart an OpenClaw agent instance.",
+    "description": "Power-cycle the instance's VM; the agent starts again with its current config and credentials.",
     "operationId": "restart_instance_v1_hosting_openclaw__instance_id__restart_post",
     "parameters": [
      {
@@ -39927,8 +39795,8 @@
     "tags": [
      "Hosting - OpenClaw"
     ],
-    "summary": "Get Conversation Logs",
-    "description": "Get recent conversation logs for an OpenClaw instance.",
+    "summary": "Get Agent Logs",
+    "description": "Recent Gateway and supervisor log lines from the instance's VM console.",
     "operationId": "get_logs_v1_hosting_openclaw__instance_id__logs_get",
     "parameters": [
      {
@@ -39994,83 +39862,6 @@
          "type": "object",
          "additionalProperties": true,
          "title": "Response Get Logs V1 Hosting Openclaw  Instance Id  Logs Get"
-        }
-       }
-      }
-     },
-     "422": {
-      "description": "Validation Error",
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/HTTPValidationError"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  "/v1/hosting/openclaw/{instance_id}/stats": {
-   "get": {
-    "tags": [
-     "Hosting - OpenClaw"
-    ],
-    "summary": "Get Instance Stats",
-    "description": "Get usage statistics for an OpenClaw instance.",
-    "operationId": "get_stats_v1_hosting_openclaw__instance_id__stats_get",
-    "parameters": [
-     {
-      "name": "instance_id",
-      "in": "path",
-      "required": true,
-      "schema": {
-       "type": "string",
-       "title": "Instance Id"
-      }
-     },
-     {
-      "name": "authorization",
-      "in": "header",
-      "required": false,
-      "schema": {
-       "anyOf": [
-        {
-         "type": "string"
-        },
-        {
-         "type": "null"
-        }
-       ],
-       "title": "Authorization"
-      }
-     },
-     {
-      "name": "x-api-key",
-      "in": "header",
-      "required": false,
-      "schema": {
-       "anyOf": [
-        {
-         "type": "string"
-        },
-        {
-         "type": "null"
-        }
-       ],
-       "title": "X-Api-Key"
-      }
-     }
-    ],
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "type": "object",
-         "additionalProperties": true,
-         "title": "Response Get Stats V1 Hosting Openclaw  Instance Id  Stats Get"
         }
        }
       }
@@ -40758,7 +40549,7 @@
      "Internal - Tasks"
     ],
     "summary": "Provision Db",
-    "description": "Provision a database via Cloud SQL or Memorystore.",
+    "description": "Provision a database via Cloud SQL or Memorystore, one step per delivery.",
     "operationId": "provision_db_internal_tasks_provision_db_post",
     "responses": {
      "200": {
@@ -40806,7 +40597,7 @@
      "Internal - Tasks"
     ],
     "summary": "Restore Db",
-    "description": "Create the target database instance and restore the source's backup onto it.",
+    "description": "Create the target instance, then restore the source's backup onto it (one step per delivery).",
     "operationId": "restore_db_internal_tasks_restore_db_post",
     "responses": {
      "200": {
@@ -40878,7 +40669,7 @@
      "Internal - Tasks"
     ],
     "summary": "Provision Openclaw",
-    "description": "Provision an OpenClaw managed hosting instance.",
+    "description": "Create the instance's VM. It reports ``running`` itself once the Gateway is healthy.",
     "operationId": "provision_openclaw_internal_tasks_provision_openclaw_post",
     "responses": {
      "200": {
@@ -40902,7 +40693,7 @@
      "Internal - Tasks"
     ],
     "summary": "Deprovision Openclaw",
-    "description": "Delete an OpenClaw instance.",
+    "description": "Delete the instance's VM (and boot disk), then its stored credentials.",
     "operationId": "deprovision_openclaw_internal_tasks_deprovision_openclaw_post",
     "responses": {
      "200": {
@@ -40913,6 +40704,101 @@
          "additionalProperties": true,
          "type": "object",
          "title": "Response Deprovision Openclaw Internal Tasks Deprovision Openclaw Post"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/internal/tasks/restart-openclaw": {
+   "post": {
+    "tags": [
+     "Internal - Tasks"
+    ],
+    "summary": "Restart Openclaw",
+    "operationId": "restart_openclaw_internal_tasks_restart_openclaw_post",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Restart Openclaw Internal Tasks Restart Openclaw Post"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/internal/tasks/check-openclaw": {
+   "post": {
+    "tags": [
+     "Internal - Tasks"
+    ],
+    "summary": "Check Openclaw",
+    "description": "Deadline check after a deploy or restart: the Gateway must have reported healthy.",
+    "operationId": "check_openclaw_internal_tasks_check_openclaw_post",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Check Openclaw Internal Tasks Check Openclaw Post"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/internal/tasks/suspend-resource": {
+   "post": {
+    "tags": [
+     "Internal - Tasks"
+    ],
+    "summary": "Suspend Resource",
+    "description": "Stop the cloud side of a resource suspended for non-payment. Data is kept.",
+    "operationId": "suspend_resource_internal_tasks_suspend_resource_post",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Suspend Resource Internal Tasks Suspend Resource Post"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/internal/tasks/resume-resource": {
+   "post": {
+    "tags": [
+     "Internal - Tasks"
+    ],
+    "summary": "Resume Resource",
+    "description": "Bring a paid-up suspended resource back to the state it was in before suspension.",
+    "operationId": "resume_resource_internal_tasks_resume_resource_post",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Resume Resource Internal Tasks Resume Resource Post"
         }
        }
       }
@@ -45399,6 +45285,59 @@
     ],
     "title": "Category",
     "description": "A marketplace category with subcategories."
+   },
+   "ChannelSetup": {
+    "properties": {
+     "type": {
+      "type": "string",
+      "title": "Type"
+     },
+     "allow_from": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "maxItems": 20,
+      "minItems": 1,
+      "title": "Allow From",
+      "description": "User ids allowed to message the agent (direct messages). Anyone else is ignored."
+     },
+     "bot_token": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "password",
+        "writeOnly": true
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Bot Token",
+      "description": "Telegram/Discord bot token, or Slack xoxb- bot token"
+     },
+     "app_token": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "password",
+        "writeOnly": true
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "App Token",
+      "description": "Slack xapp- app-level token (Socket Mode)"
+     }
+    },
+    "type": "object",
+    "required": [
+     "type",
+     "allow_from"
+    ],
+    "title": "ChannelSetup",
+    "description": "One messaging channel. Tokens are write-only."
    },
    "CheckoutSessionCreate": {
     "properties": {
@@ -53931,38 +53870,6 @@
     "title": "ListingUpdate",
     "description": "Request model for updating a listing. (A-105)"
    },
-   "LoadBalancerRequest": {
-    "properties": {
-     "name": {
-      "type": "string",
-      "maxLength": 47,
-      "minLength": 1,
-      "pattern": "^[a-z]([a-z0-9-]*[a-z0-9])?$",
-      "title": "Name"
-     },
-     "vm_ids": {
-      "items": {
-       "type": "string"
-      },
-      "type": "array",
-      "maxItems": 10,
-      "minItems": 1,
-      "title": "Vm Ids"
-     },
-     "health_check_path": {
-      "type": "string",
-      "title": "Health Check Path",
-      "default": "/health"
-     }
-    },
-    "type": "object",
-    "required": [
-     "name",
-     "vm_ids"
-    ],
-    "title": "LoadBalancerRequest",
-    "description": "Request to create a load balancer."
-   },
    "ManagedDatabaseCreate": {
     "properties": {
      "name": {
@@ -55450,48 +55357,6 @@
    },
    "OpenClawInstanceUpdate": {
     "properties": {
-     "channels": {
-      "anyOf": [
-       {
-        "items": {
-         "type": "string"
-        },
-        "type": "array",
-        "maxItems": 6
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Channels"
-     },
-     "skills": {
-      "anyOf": [
-       {
-        "items": {
-         "type": "string"
-        },
-        "type": "array",
-        "maxItems": 20
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Skills"
-     },
-     "proactivity_level": {
-      "anyOf": [
-       {
-        "type": "string",
-        "pattern": "^(reactive|scheduled|autonomous)$"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Proactivity Level"
-     },
      "agent_name": {
       "anyOf": [
        {
@@ -55503,6 +55368,70 @@
        }
       ],
       "title": "Agent Name"
+     },
+     "llm_provider": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Llm Provider"
+     },
+     "llm_api_key": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "password",
+        "writeOnly": true
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Llm Api Key"
+     },
+     "llm_model": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 128
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Llm Model"
+     },
+     "channels": {
+      "anyOf": [
+       {
+        "items": {
+         "$ref": "#/components/schemas/ChannelSetup"
+        },
+        "type": "array",
+        "maxItems": 3
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Channels"
+     },
+     "use_case": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 1000,
+        "minLength": 10
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Use Case"
      },
      "agent_personality": {
       "anyOf": [
@@ -55527,23 +55456,11 @@
        }
       ],
       "title": "Special Instructions"
-     },
-     "llm_model": {
-      "anyOf": [
-       {
-        "type": "string",
-        "maxLength": 100
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Llm Model"
      }
     },
     "type": "object",
     "title": "OpenClawInstanceUpdate",
-    "description": "Request model for updating an OpenClaw instance configuration."
+    "description": "Change an instance's configuration or credentials; the agent restarts to apply it.\n\n``channels`` replaces the whole channel list. A channel that is already\nconfigured may omit its tokens to keep the stored ones."
    },
    "OpenClawSetupRequest": {
     "properties": {
@@ -55551,17 +55468,47 @@
       "type": "string",
       "title": "Plan"
      },
+     "agent_name": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 50
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Agent Name"
+     },
      "llm_provider": {
       "type": "string",
       "title": "Llm Provider"
      },
+     "llm_api_key": {
+      "type": "string",
+      "format": "password",
+      "title": "Llm Api Key",
+      "description": "Your provider API key; the platform never pays for LLM usage",
+      "writeOnly": true
+     },
+     "llm_model": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 128
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Llm Model"
+     },
      "channels": {
       "items": {
-       "type": "string"
+       "$ref": "#/components/schemas/ChannelSetup"
       },
       "type": "array",
-      "maxItems": 6,
-      "minItems": 1,
+      "maxItems": 3,
       "title": "Channels"
      },
      "use_case": {
@@ -55570,32 +55517,6 @@
       "minLength": 10,
       "title": "Use Case"
      },
-     "skills": {
-      "items": {
-       "type": "string"
-      },
-      "type": "array",
-      "maxItems": 20,
-      "title": "Skills"
-     },
-     "proactivity_level": {
-      "type": "string",
-      "pattern": "^(reactive|scheduled|autonomous)$",
-      "title": "Proactivity Level",
-      "default": "reactive"
-     },
-     "agent_name": {
-      "anyOf": [
-       {
-        "type": "string",
-        "maxLength": 50
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Agent Name"
-     },
      "agent_personality": {
       "anyOf": [
        {
@@ -55619,23 +55540,17 @@
        }
       ],
       "title": "Special Instructions"
-     },
-     "memory_preference": {
-      "type": "string",
-      "pattern": "^(standard|cloud_backup)$",
-      "title": "Memory Preference",
-      "default": "standard"
      }
     },
     "type": "object",
     "required": [
      "plan",
      "llm_provider",
-     "channels",
+     "llm_api_key",
      "use_case"
     ],
     "title": "OpenClawSetupRequest",
-    "description": "Request model for creating an OpenClaw instance via questionnaire."
+    "description": "Create an OpenClaw instance. Charges the first month before provisioning."
    },
    "OptimizationHint": {
     "properties": {
@@ -61805,28 +61720,6 @@
     ],
     "title": "StakeTokensResponse",
     "description": "Response after a successful staking operation."
-   },
-   "StaticIPRequest": {
-    "properties": {
-     "vm_id": {
-      "type": "string",
-      "title": "Vm Id"
-     },
-     "name": {
-      "type": "string",
-      "maxLength": 50,
-      "minLength": 1,
-      "pattern": "^[a-z]([a-z0-9-]*[a-z0-9])?$",
-      "title": "Name"
-     }
-    },
-    "type": "object",
-    "required": [
-     "vm_id",
-     "name"
-    ],
-    "title": "StaticIPRequest",
-    "description": "Request to allocate a static IP."
    },
    "StatsCardResponse": {
     "properties": {

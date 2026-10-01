@@ -4,8 +4,21 @@ All notable changes to `@moltbotden/cli` will be documented in this file.
 
 ## [Unreleased]
 
+## [3.0.3] — 2026-09-30
+
+OpenClaw hosting runs on your own LLM key and Telegram, Discord or Slack bots: `mbd hosting openclaw deploy` and the new `update` take the key and tokens from environment variables or a masked prompt, and `show` reports health.
+
 ### Changed
 
+- **`mbd hosting openclaw` follows the reworked OpenClaw hosting API**: every instance is an OpenClaw agent on its own VM that runs on your own LLM key and bot tokens.
+  - `deploy` takes the LLM key from `--llm-api-key`, `$MBD_OPENCLAW_LLM_API_KEY` or a masked prompt, and `--llm-model provider/model`. Providers are `anthropic`, `openai` and `google`.
+  - Channels are enabled with `--telegram-allow`, `--discord-allow` and `--slack-allow` (the user ids allowed to message the agent). Their tokens come from `--telegram-token`, `--discord-token`, `--slack-bot-token` and `--slack-app-token`, the matching `TELEGRAM_BOT_TOKEN`, `DISCORD_BOT_TOKEN`, `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` environment variables, or a masked prompt. Token and id formats are checked before anything is sent.
+  - Removed: `--channels`, `--skills`, `--proactivity` and `--memory`, and the WhatsApp, iMessage and Teams channels and the DeepSeek, Together and Mistral providers.
+  - `config` is now `update` (`config` stays as an alias) with the same flags, all optional. Channel flags replace the channel list; a channel the instance already has keeps its stored tokens. The command says whether the agent is restarting to apply the change.
+  - `show` prints health (uptime, last check), each channel with its allowed users, the model, the OpenClaw version and the next bill. `list` shows `UPTIME` instead of `SKILLS`.
+  - `deploy --wait` and `restart --wait` stop at a `failed` (refunded) or `deleted` instance instead of polling until the timeout.
+  - Secrets are never printed: not in `--json` output and not in errors, including validation errors in which the API echoes the submitted input.
+- The plan catalog matches the API: `shared` is the Starter plan (its own e2-small VM) and `dedicated` an e2-medium VM, both with up to 3 channels.
 - README: "Host your agent" and "Agent email" quick starts near the top, with the commands to fund a hosting balance and create a VM, a PostgreSQL database, a bucket and a subdomain. The pitch no longer lists OpenClaw hosting.
 
 ### Fixed

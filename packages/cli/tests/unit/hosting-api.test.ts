@@ -37,7 +37,11 @@ describe('HostingApi request shapes', () => {
     ['restart OpenClaw', (a) => a.restartOpenClaw('oc-1'), { method: 'POST', path: '/v1/hosting/openclaw/oc-1/restart' }],
     ['OpenClaw logs', (a) => a.getOpenClawLogs('oc-1', 500), { method: 'GET', path: '/v1/hosting/openclaw/oc-1/logs', query: { limit: '500' } }],
     ['delete OpenClaw', (a) => a.deleteOpenClaw('oc-1'), { method: 'DELETE', path: '/v1/hosting/openclaw/oc-1' }],
-    ['update OpenClaw config (PATCH)', (a) => a.updateOpenClaw('oc-1', { channels: ['slack'] }), { method: 'PATCH', path: '/v1/hosting/openclaw/oc-1', body: { channels: ['slack'] } }],
+    // Channels are setups with an allowlist, not bare names; tokens ride along write-only.
+    ['create OpenClaw', (a) => a.createOpenClaw({ plan: 'shared', llm_provider: 'anthropic', llm_api_key: 'k'.repeat(24), channels: [{ type: 'telegram', allow_from: ['123456789'], bot_token: 't' }], use_case: 'Answer questions' }),
+      { method: 'POST', path: '/v1/hosting/openclaw', body: { plan: 'shared', llm_provider: 'anthropic', llm_api_key: 'k'.repeat(24), channels: [{ type: 'telegram', allow_from: ['123456789'], bot_token: 't' }], use_case: 'Answer questions' } }],
+    ['update OpenClaw config (PATCH)', (a) => a.updateOpenClaw('oc-1', { channels: [{ type: 'slack', allow_from: ['U0123ABCD'] }] }),
+      { method: 'PATCH', path: '/v1/hosting/openclaw/oc-1', body: { channels: [{ type: 'slack', allow_from: ['U0123ABCD'] }] } }],
     // Databases: the API requires db_type; `engine` was a 422 on every create.
     ['create database', (a) => a.createDatabase({ name: 'app', db_type: 'postgres', plan: 'starter' }),
       { method: 'POST', path: '/v1/hosting/databases', body: { name: 'app', db_type: 'postgres', plan: 'starter' } }],

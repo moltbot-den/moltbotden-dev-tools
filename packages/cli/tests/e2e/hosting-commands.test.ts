@@ -20,16 +20,18 @@ const CLI_PATH = path.resolve(__dirname, '../../dist/cli.js');
 let api: MockApi;
 let sandbox: string;
 
-function run(args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
+const TOKEN_ENV = ['TELEGRAM_BOT_TOKEN', 'DISCORD_BOT_TOKEN', 'SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN'];
+
+function run(args: string[], extraEnv: Record<string, string> = {}): Promise<{ stdout: string; stderr: string; code: number }> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
-    if (v === undefined || k.startsWith('MOLTBOTDEN_') || k.startsWith('MBD_')) continue;
+    if (v === undefined || k.startsWith('MOLTBOTDEN_') || k.startsWith('MBD_') || TOKEN_ENV.includes(k)) continue;
     env[k] = v;
   }
   Object.assign(env, {
     HOME: sandbox, USERPROFILE: sandbox, MOLTBOTDEN_CONFIG_DIR: path.join(sandbox, 'config'),
     MBD_NPM_REGISTRY: api.url, MBD_NO_UPDATE_CHECK: '1', NO_COLOR: '1', CI: '1',
-  });
+  }, extraEnv);
   return new Promise((resolve) => {
     execFile(process.execPath, [CLI_PATH, '--api-url', api.url, ...args], { cwd: sandbox, env, timeout: 15_000, encoding: 'utf-8' },
       (error, stdout, stderr) => resolve({ stdout: stdout.trim(), stderr: stderr.trim(), code: error ? (typeof error.code === 'number' ? error.code : 1) : 0 }));
@@ -38,6 +40,8 @@ function run(args: string[]): Promise<{ stdout: string; stderr: string; code: nu
 
 /** Authenticated run. */
 const mbd = (...args: string[]) => run([...args, '--api-key', 'moltbotden_sk_test']);
+/** Authenticated run with extra environment variables. */
+const mbdEnv = (env: Record<string, string>, ...args: string[]) => run([...args, '--api-key', 'moltbotden_sk_test'], env);
 const bodyOf = (method: string, p: string) => {
   const req = api.requests.find((r) => r.method === method && r.path.split('?')[0] === p);
   return req ? (JSON.parse(req.body || 'null') as unknown) : undefined;
@@ -53,6 +57,22 @@ beforeEach(() => {
   api.reset();
   sandbox = makeTempDir('hosting-e2e');
 });
+
+// Credential shapes the API accepts (models/hosting/openclaw.py). None of them may ever appear in output.
+const LLM_KEY = `sk-ant-api03-${'k'.repeat(40)}`;
+const TG_TOKEN = `123456789:${'T'.repeat(35)}`;
+const SLACK_BOT = `xoxb-${'1'.repeat(30)}`;
+const SLACK_APP = `xapp-${'2'.repeat(30)}`;
+const OC = {
+  id: 'oc-123456789', plan: 'shared', status: 'running', agent_name: 'docs-bot', llm_provider: 'anthropic', llm_model: null,
+  channels: ['telegram'], channel_allow_from: { telegram: ['123456789'] }, use_case: 'Answer questions about our docs',
+  agent_personality: null, special_instructions: null, vm_id: 'vm-9', created_at: '2026-09-01T00:00:00Z', setup_completed_at: null,
+  last_active_at: null, error_message: null, monthly_price_cents: 2400, next_billing_at: '2026-10-01T00:00:00Z', billing_status: 'active',
+  openclaw_version: '2026.9.1', health: { healthy: true, last_check_at: '2026-09-30T00:00:00Z', checks_total: 200, checks_ok: 199, uptime_percent: 99.5 },
+};
+const noSecrets = (text: string) => {
+  for (const secret of [LLM_KEY, TG_TOKEN, SLACK_BOT, SLACK_APP]) expect(text).not.toContain(secret);
+};
 
 const VM = { id: 'vm-1', name: 'web', tier: 'nano', status: 'running', ip_address: '203.0.113.9', internal_ip: null, gcp_instance_name: 'mbd-x-web', gcp_zone: 'us-central1-a', image: 'ubuntu-2204-lts', ssh_public_key: null, created_at: '2026-09-01T00:00:00Z', started_at: null, stopped_at: null, error_message: null };
 
@@ -102,22 +122,71 @@ describe('create commands send what the API accepts', () => {
     expect(api.requests).toHaveLength(0);
   });
 
-  it('openclaw deploy sends the questionnaire the API requires', async () => {
-    api.on('POST', '/v1/hosting/openclaw', { status: 200, body: { id: 'oc-1', plan: 'shared', status: 'pending_setup', channels: ['telegram'] } });
-    const { code } = await mbd('--json', 'hosting', 'openclaw', 'deploy', '--plan', 'shared', '--llm-provider', 'anthropic',
-      '--channels', 'telegram,discord', '--use-case', 'Answer questions about our docs', '--name', 'docs-bot', '--skills', 'search');
+  it('openclaw deploy sends the LLM key from the env var and channel setups, and never prints a secret', async () => {
+    api.on('POST', '/v1/hosting/openclaw', { status: 200, body: { ...OC, status: 'pending_setup' } });
+    const { code, stdout, stderr } = await mbdEnv({ MBD_OPENCLAW_LLM_API_KEY: LLM_KEY, SLACK_APP_TOKEN: SLACK_APP },
+      '--json', 'hosting', 'openclaw', 'deploy', '--plan', 'shared', '--llm-provider', 'anthropic', '--llm-model', 'anthropic/claude-x-1',
+      '--telegram-allow', '123456789,123456789', '--telegram-token', TG_TOKEN, '--slack-allow', 'U0123ABCD', '--slack-bot-token', SLACK_BOT,
+      '--use-case', 'Answer questions about our docs', '--name', 'docs-bot', '--yes');
     expect(code).toBe(0);
     expect(bodyOf('POST', '/v1/hosting/openclaw')).toEqual({
-      plan: 'shared', llm_provider: 'anthropic', channels: ['telegram', 'discord'],
-      use_case: 'Answer questions about our docs', skills: ['search'], agent_name: 'docs-bot',
+      plan: 'shared', agent_name: 'docs-bot', llm_provider: 'anthropic', llm_api_key: LLM_KEY, llm_model: 'anthropic/claude-x-1',
+      channels: [
+        { type: 'telegram', allow_from: ['123456789'], bot_token: TG_TOKEN },
+        { type: 'slack', allow_from: ['U0123ABCD'], bot_token: SLACK_BOT, app_token: SLACK_APP },
+      ],
+      use_case: 'Answer questions about our docs',
     });
+    noSecrets(stdout + stderr);
   });
 
-  it('openclaw deploy enforces the plan channel limit the API does not check', async () => {
+  it('openclaw deploy without an LLM key and no terminal names the flag and env var and sends nothing', async () => {
     const { code, stderr } = await mbd('--json', 'hosting', 'openclaw', 'deploy', '--plan', 'shared', '--llm-provider', 'openai',
-      '--channels', 'telegram,discord,slack,teams', '--use-case', 'Answer questions about our docs');
+      '--use-case', 'Answer questions about our docs');
     expect(code).toBe(2);
-    expect(envelope(stderr).message).toContain('at most 3 channels');
+    expect(envelope(stderr).message).toContain('--llm-api-key');
+    expect(envelope(stderr).message).toContain('MBD_OPENCLAW_LLM_API_KEY');
+    expect(api.requests).toHaveLength(0);
+  });
+
+  it.each([
+    [['--telegram-allow', '123456789', '--telegram-token', SLACK_BOT], 'Telegram bot token'],
+    [['--slack-allow', 'U0123ABCD', '--slack-bot-token', SLACK_APP, '--slack-app-token', SLACK_APP], 'Slack bot token'],
+    [['--discord-allow', '@someone', '--discord-token', 'x'.repeat(60)], '--discord-allow'],
+    [['--telegram-token', TG_TOKEN], 'needs --telegram-allow'],
+    [['--llm-model', 'openai/gpt-x'], 'must start with "anthropic/"'],
+  ])('openclaw deploy %j fails locally before any request or charge', async (flags, message) => {
+    const { code, stdout, stderr } = await mbdEnv({ MBD_OPENCLAW_LLM_API_KEY: LLM_KEY },
+      '--json', 'hosting', 'openclaw', 'deploy', '--plan', 'shared', '--llm-provider', 'anthropic', '--use-case', 'Answer questions about our docs', ...flags);
+    expect(code).toBe(2);
+    expect(envelope(stderr).message).toContain(message);
+    noSecrets(stdout + stderr);
+    expect(api.requests).toHaveLength(0);
+  });
+
+  it('openclaw deploy no longer accepts the removed --channels/--skills questionnaire flags', async () => {
+    const { code } = await mbdEnv({ MBD_OPENCLAW_LLM_API_KEY: LLM_KEY }, '--json', 'hosting', 'openclaw', 'deploy', '--plan', 'shared',
+      '--llm-provider', 'anthropic', '--channels', 'telegram', '--use-case', 'Answer questions about our docs');
+    expect(code).toBe(2);
+    expect(api.requests).toHaveLength(0);
+  });
+
+  it('openclaw deploy redacts credentials a validation error echoes back', async () => {
+    api.on('POST', '/v1/hosting/openclaw', { status: 422, body: { detail: [{ loc: ['body', 'llm_api_key'], msg: 'llm_api_key does not look like an API key', input: LLM_KEY }] } });
+    const { code, stdout, stderr } = await mbdEnv({ MBD_OPENCLAW_LLM_API_KEY: LLM_KEY },
+      '--json', 'hosting', 'openclaw', 'deploy', '--plan', 'shared', '--llm-provider', 'anthropic', '--use-case', 'Answer questions about our docs', '--yes');
+    expect(code).toBe(1);
+    expect(envelope(stderr).message).toContain('llm_api_key');
+    noSecrets(stdout + stderr);
+  });
+
+  it('openclaw deploy --wait stops at a failed (refunded) deploy instead of polling until the timeout', async () => {
+    api.on('POST', '/v1/hosting/openclaw', { status: 200, body: { ...OC, status: 'pending_setup' } });
+    api.on('GET', `/v1/hosting/openclaw/${OC.id}`, { status: 200, body: { ...OC, status: 'failed', error_message: 'Gateway never became healthy' } });
+    const { code, stderr } = await mbdEnv({ MBD_OPENCLAW_LLM_API_KEY: LLM_KEY },
+      '--json', 'hosting', 'openclaw', 'deploy', '--plan', 'shared', '--llm-provider', 'anthropic', '--use-case', 'Answer questions about our docs', '--yes', '--wait', '--timeout', '60');
+    expect(code).toBe(1);
+    expect(envelope(stderr).message).toContain('"failed"');
   });
 
   it('domains add sends hostname + domain_type and dns add posts to /records', async () => {
@@ -201,11 +270,23 @@ describe('server-side errors are explained', () => {
 });
 
 describe('read commands use the real paths and fields', () => {
-  it('openclaw list calls /v1/hosting/openclaw and shows agent_name', async () => {
-    api.on('GET', '/v1/hosting/openclaw', { status: 200, body: { instances: [{ id: 'oc-123456789', plan: 'shared', status: 'running', agent_name: 'docs-bot', llm_provider: 'anthropic', channels: ['telegram'], skills: ['a'], last_active_at: null, created_at: '2026-09-01T00:00:00Z' }], count: 1 } });
+  it('openclaw list calls /v1/hosting/openclaw and shows agent_name and uptime', async () => {
+    api.on('GET', '/v1/hosting/openclaw', { status: 200, body: { instances: [OC], count: 1 } });
     const { code, stdout } = await mbd('hosting', 'openclaw', 'list');
     expect(code).toBe(0);
     expect(stdout).toContain('docs-bot');
+    expect(stdout).toContain('UPTIME');
+    expect(stdout).toContain('99.5%');
+    expect(stdout).not.toContain('undefined');
+  });
+
+  it('openclaw show renders health, allowlists and version from the real document shape', async () => {
+    api.on('GET', `/v1/hosting/openclaw/${OC.id}`, { status: 200, body: OC });
+    const { code, stdout } = await mbd('hosting', 'openclaw', 'show', OC.id);
+    expect(code).toBe(0);
+    expect(stdout).toContain('allows 123456789');
+    expect(stdout).toContain('99.5% uptime (199/200 checks)');
+    expect(stdout).toContain('2026.9.1');
     expect(stdout).not.toContain('undefined');
   });
 
@@ -340,11 +421,47 @@ describe('credentials, signed URLs and wallet linking', () => {
     expect(envelope(stderr).message).toContain('Timed out');
   });
 
-  it('openclaw config enforces the instance\'s own plan limit before sending', async () => {
-    api.on('GET', '/v1/hosting/openclaw/oc-1', { status: 200, body: { id: 'oc-1', plan: 'shared', status: 'running', channels: [], skills: [] } });
-    const { code, stderr } = await mbd('--json', 'hosting', 'openclaw', 'config', 'oc-1', '--channels', 'telegram,discord,slack,teams');
+  it('openclaw update keeps stored tokens for an existing channel and asks for a new channel\'s tokens', async () => {
+    api.on('GET', `/v1/hosting/openclaw/${OC.id}`, { status: 200, body: OC });
+    api.on('PATCH', `/v1/hosting/openclaw/${OC.id}`, { status: 200, body: { status: 'updated', restarting: true } });
+    const { code, stdout, stderr } = await mbdEnv({ SLACK_BOT_TOKEN: SLACK_BOT, SLACK_APP_TOKEN: SLACK_APP, TELEGRAM_BOT_TOKEN: TG_TOKEN },
+      'hosting', 'openclaw', 'update', OC.id, '--telegram-allow', '123456789,555555', '--slack-allow', 'U0123ABCD');
+    expect(code).toBe(0);
+    // Telegram is already configured, so its token is not re-sent even though the env var is set.
+    expect(bodyOf('PATCH', `/v1/hosting/openclaw/${OC.id}`)).toEqual({ channels: [
+      { type: 'telegram', allow_from: ['123456789', '555555'] },
+      { type: 'slack', allow_from: ['U0123ABCD'], bot_token: SLACK_BOT, app_token: SLACK_APP },
+    ] });
+    expect(stdout).toContain('restarting');
+    noSecrets(stdout + stderr);
+  });
+
+  it('openclaw config (alias) with --llm-api-key rotates the key from the env var only when asked', async () => {
+    api.on('GET', `/v1/hosting/openclaw/${OC.id}`, { status: 200, body: OC });
+    api.on('PATCH', `/v1/hosting/openclaw/${OC.id}`, { status: 200, body: { status: 'updated', restarting: false } });
+    const named = await mbdEnv({ MBD_OPENCLAW_LLM_API_KEY: LLM_KEY }, '--json', 'hosting', 'openclaw', 'config', OC.id, '--name', 'helper');
+    expect(named.code).toBe(0);
+    expect(bodyOf('PATCH', `/v1/hosting/openclaw/${OC.id}`)).toEqual({ agent_name: 'helper' });
+    api.requests.length = 0;
+    const rotated = await mbdEnv({ MBD_OPENCLAW_LLM_API_KEY: LLM_KEY }, '--json', 'hosting', 'openclaw', 'config', OC.id, '--llm-api-key');
+    expect(rotated.code).toBe(0);
+    expect(bodyOf('PATCH', `/v1/hosting/openclaw/${OC.id}`)).toEqual({ llm_api_key: LLM_KEY });
+    expect(JSON.parse(rotated.stdout)).toEqual({ status: 'updated', restarting: false });
+  });
+
+  it('openclaw update checks --llm-model against the instance\'s provider before sending', async () => {
+    api.on('GET', `/v1/hosting/openclaw/${OC.id}`, { status: 200, body: OC });
+    const { code, stderr } = await mbd('--json', 'hosting', 'openclaw', 'update', OC.id, '--llm-model', 'openai/gpt-x');
     expect(code).toBe(2);
-    expect(envelope(stderr).message).toContain('shared plan allows at most 3 channels');
+    expect(envelope(stderr).message).toContain('must start with "anthropic/"');
+    expect(api.requests.some((r) => r.method === 'PATCH')).toBe(false);
+  });
+
+  it('openclaw update needs a token for a channel the instance does not have yet', async () => {
+    api.on('GET', `/v1/hosting/openclaw/${OC.id}`, { status: 200, body: OC });
+    const { code, stderr } = await mbd('--json', 'hosting', 'openclaw', 'update', OC.id, '--discord-allow', '123456789012345678');
+    expect(code).toBe(2);
+    expect(envelope(stderr).message).toContain('DISCORD_BOT_TOKEN');
     expect(api.requests.some((r) => r.method === 'PATCH')).toBe(false);
   });
 });

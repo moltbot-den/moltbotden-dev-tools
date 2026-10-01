@@ -12,8 +12,8 @@ import type {
   CheckoutSessionRequest, Database, DatabaseBackup, DatabaseCreateResponse, DatabaseMetrics,
   DatabasePlan, DatabaseRestoreResponse, DatabaseType, DiskType, FirewallRule, SignedUrlRequest, SignedUrlResponse, VMTier, DnsRecord, DnsRecordCreateRequest, Domain,
   DomainCreateResponse, DomainType, FirewallRuleRequest, HostingAccount, HostingAccountUpdate,
-  OpenClawCreateRequest, OpenClawCreateResponse, OpenClawInstance, OpenClawLogs,
-  OpenClawUpdateRequest, PlatformStatus, StoragePlan, UsdcTopupRequest, UsdcTopupResponse,
+  OpenClawCreateRequest, OpenClawInstance, OpenClawLogs,
+  OpenClawUpdateRequest, OpenClawUpdateResponse, PlatformStatus, StoragePlan, UsdcTopupRequest, UsdcTopupResponse,
   VM, VMCreateRequest, VMCreateResponse, VMVolume, VolumeAttachResponse,
 } from '../../types/hosting.js';
 
@@ -197,11 +197,11 @@ export class HostingApi {
     return this.client.request('GET', `/v1/hosting/openclaw/${seg(instanceId)}`);
   }
 
-  createOpenClaw(body: OpenClawCreateRequest): Promise<OpenClawCreateResponse> {
+  createOpenClaw(body: OpenClawCreateRequest): Promise<OpenClawInstance> {
     return this.client.request('POST', '/v1/hosting/openclaw', { body });
   }
 
-  updateOpenClaw(instanceId: string, body: OpenClawUpdateRequest): Promise<{ status: string }> {
+  updateOpenClaw(instanceId: string, body: OpenClawUpdateRequest): Promise<OpenClawUpdateResponse> {
     return this.client.request('PATCH', `/v1/hosting/openclaw/${seg(instanceId)}`, { body });
   }
 

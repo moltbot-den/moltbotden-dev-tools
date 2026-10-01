@@ -2287,7 +2287,7 @@ Manage hosted OpenClaw agent instances
 
 Usage: `mbd hosting openclaw` · Alias: `oc`
 
-Subcommands: `list|ls`, `deploy|create`, `show|get`, `config`, `logs`, `restart`, `delete|rm`
+Subcommands: `list|ls`, `deploy|create`, `show|get`, `update|config`, `logs`, `restart`, `delete|rm`
 
 ```bash
 mbd hosting openclaw deploy
@@ -2311,35 +2311,41 @@ mbd hosting openclaw list
 
 #### `mbd hosting openclaw deploy`
 
-Deploy a managed OpenClaw agent (charges the first month to your hosting balance)
+Deploy an OpenClaw agent on its own VM with your LLM key and bot tokens (charges the first month to your hosting balance)
 
 Usage: `mbd hosting openclaw deploy` · Alias: `create`
 
 | Option | Description |
 |---|---|
 | `--plan <plan>` | Plan: shared\|dedicated |
-| `--llm-provider <provider>` | LLM provider: anthropic\|openai\|google\|deepseek\|together\|mistral |
-| `--channels <list>` | Comma-separated: telegram,discord,slack,whatsapp,imessage,teams |
-| `--use-case <text>` | What the agent should do (10-1000 characters) |
 | `--name <name>` | Agent name (max 50 characters) |
-| `--skills <list>` | Comma-separated skill names |
-| `--proactivity <level>` | reactive\|scheduled\|autonomous (default reactive) |
+| `--llm-provider <provider>` | LLM provider: anthropic\|openai\|google |
+| `--llm-model <model>` | Model as provider/model, e.g. anthropic/<model-id> (default: the provider's OpenClaw default) |
+| `--llm-api-key [key]` | Your LLM provider API key (default: $MBD_OPENCLAW_LLM_API_KEY, else a masked prompt) |
+| `--use-case <text>` | What the agent should do (10-1000 characters) |
 | `--personality <text>` | Agent personality (max 500 characters) |
 | `--instructions <text>` | Special instructions (max 2000 characters) |
-| `--memory <mode>` | standard\|cloud_backup (default standard) |
+| `--telegram-allow <ids>` | Enable Telegram: comma-separated Telegram user ids allowed to DM the agent |
+| `--telegram-token [token]` | Telegram bot token from @BotFather (default: $TELEGRAM_BOT_TOKEN, else a prompt) |
+| `--discord-allow <ids>` | Enable Discord: comma-separated Discord user ids allowed to DM the agent |
+| `--discord-token [token]` | Discord bot token (default: $DISCORD_BOT_TOKEN, else a prompt) |
+| `--slack-allow <ids>` | Enable Slack: comma-separated Slack member ids allowed to DM the agent |
+| `--slack-bot-token [token]` | Slack xoxb- bot token (default: $SLACK_BOT_TOKEN, else a prompt) |
+| `--slack-app-token [token]` | Slack xapp- app-level token for Socket Mode (default: $SLACK_APP_TOKEN, else a prompt) |
 | `-y, --yes` | Skip the confirmation prompt |
 | `--wait` | Wait until the operation finishes (polls every 5s) |
 | `--timeout <seconds>` | Give up waiting after this many seconds (default 600) |
 
 ```bash
 mbd hosting openclaw deploy
-mbd hosting openclaw deploy --plan shared --llm-provider anthropic --channels telegram,discord \
-    --use-case "Answer questions about our docs" --name docs-bot --wait
+export MBD_OPENCLAW_LLM_API_KEY=sk-ant-...  TELEGRAM_BOT_TOKEN=123456789:AA...
+mbd hosting openclaw deploy --plan shared --llm-provider anthropic --telegram-allow 123456789 \
+    --use-case "Answer questions about our docs" --name docs-bot --yes --wait
 ```
 
 #### `mbd hosting openclaw show`
 
-Show instance details and channel setup instructions
+Show instance details, channels and health
 
 Usage: `mbd hosting openclaw show <instance-id>` · Alias: `get`
 
@@ -2347,25 +2353,33 @@ Usage: `mbd hosting openclaw show <instance-id>` · Alias: `get`
 mbd hosting openclaw show <instance-id>
 ```
 
-#### `mbd hosting openclaw config`
+#### `mbd hosting openclaw update`
 
-Update an instance's configuration (channels, skills, persona, model)
+Change an instance's profile, model, LLM key or channels (the agent restarts to apply it)
 
-Usage: `mbd hosting openclaw config <instance-id>`
+Usage: `mbd hosting openclaw update <instance-id>` · Alias: `config`
 
 | Option | Description |
 |---|---|
-| `--channels <list>` | Comma-separated: telegram,discord,slack,whatsapp,imessage,teams (replaces the list) |
-| `--skills <list>` | Comma-separated skill names (replaces the list; pass "" to clear) |
-| `--proactivity <level>` | reactive\|scheduled\|autonomous |
 | `--name <name>` | Agent name (max 50 characters) |
+| `--llm-provider <provider>` | LLM provider: anthropic\|openai\|google (needs the new provider's API key) |
+| `--llm-model <model>` | Model as provider/model, e.g. anthropic/<model-id> (default: the provider's OpenClaw default) |
+| `--llm-api-key [key]` | New LLM provider API key; pass it bare to read $MBD_OPENCLAW_LLM_API_KEY or get a masked prompt (needed with --llm-provider) |
+| `--use-case <text>` | What the agent should do (10-1000 characters) |
 | `--personality <text>` | Agent personality (max 500 characters) |
 | `--instructions <text>` | Special instructions (max 2000 characters) |
-| `--model <model>` | LLM model id for the configured provider (max 100 characters) |
+| `--telegram-allow <ids>` | Enable Telegram: comma-separated Telegram user ids allowed to DM the agent (any channel flag replaces the channel list) |
+| `--telegram-token [token]` | Telegram bot token from @BotFather (default: $TELEGRAM_BOT_TOKEN, else a prompt; a channel the instance already has keeps its stored tokens unless you pass a token flag) |
+| `--discord-allow <ids>` | Enable Discord: comma-separated Discord user ids allowed to DM the agent |
+| `--discord-token [token]` | Discord bot token (default: $DISCORD_BOT_TOKEN, else a prompt) |
+| `--slack-allow <ids>` | Enable Slack: comma-separated Slack member ids allowed to DM the agent |
+| `--slack-bot-token [token]` | Slack xoxb- bot token (default: $SLACK_BOT_TOKEN, else a prompt) |
+| `--slack-app-token [token]` | Slack xapp- app-level token for Socket Mode (default: $SLACK_APP_TOKEN, else a prompt) |
 
 ```bash
-mbd hosting openclaw config <instance-id> --channels telegram,slack
-mbd hosting openclaw config <instance-id> --proactivity scheduled
+mbd hosting openclaw update <instance-id> --llm-model anthropic/<model-id>
+mbd hosting openclaw update <instance-id> --llm-api-key            # rotate the key from $MBD_OPENCLAW_LLM_API_KEY or a prompt
+mbd hosting openclaw update <instance-id> --telegram-allow 123456789,987654321 --slack-allow U0123ABCD
 ```
 
 #### `mbd hosting openclaw logs`
@@ -2385,7 +2399,7 @@ mbd hosting openclaw logs <instance-id> --limit 500
 
 #### `mbd hosting openclaw restart`
 
-Restart an instance (stops and starts its VM)
+Restart an instance (power-cycles its VM)
 
 Usage: `mbd hosting openclaw restart <instance-id>`
 
@@ -2400,7 +2414,7 @@ mbd hosting openclaw restart <instance-id> --wait
 
 #### `mbd hosting openclaw delete`
 
-Delete an OpenClaw instance permanently
+Delete an OpenClaw instance permanently (its VM and stored credentials)
 
 Usage: `mbd hosting openclaw delete <instance-id>` · Alias: `rm`
 
