@@ -150,7 +150,7 @@ export function addWalletCommands(program: Command): void {
     .option('--to <address>', 'Recipient address (0x + 40 hex characters)')
     .option('--amount <amount>', 'Amount as a decimal string, e.g. 1.5')
     .option('--asset <asset>', 'Asset symbol, e.g. usdc or eth')
-    .option('--no-gasless', 'Pay gas yourself instead of using the platform paymaster')
+    .option('--no-gasless', 'Deprecated, no effect: the platform does not sponsor gas')
     .option('-y, --yes', 'Skip the confirmation prompt')
     .addHelpText('after', examples([
       'mbd wallet send --to 0x1234...abcd --amount 2.5 --asset usdc',
@@ -167,7 +167,7 @@ On-chain transfers cannot be undone. Double-check the address and network.
 
       const summary =
         `Send ${send.amount} ${send.asset.toUpperCase()} to ${send.to} on ${info.network ?? 'the default network'}` +
-        ` from ${info.wallet_address}${opts.gasless ? '' : ' (you pay gas)'}? This cannot be undone.`;
+        ` from ${info.wallet_address} (you pay gas)? This cannot be undone.`;
       if (!ctx.json) {
         print.header('Transfer');
         print.keyValue([
@@ -175,7 +175,7 @@ On-chain transfers cannot be undone. Double-check the address and network.
           { label: 'To', value: send.to },
           { label: 'From', value: info.wallet_address },
           { label: 'Network', value: info.network ?? 'default' },
-          { label: 'Gas', value: opts.gasless ? 'sponsored when eligible' : 'paid by you' },
+          { label: 'Gas', value: 'paid from your wallet' },
         ]);
         print.spacer();
       }
