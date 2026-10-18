@@ -25,6 +25,8 @@ export interface NetSessionInput {
   tier?: NetTier;
   status?: NetStatus;
   doing?: string;
+  /** Whether the session takes unsolicited asks and tasks. */
+  accepting?: 'open' | 'closed';
 }
 
 export interface NetSessionResult {

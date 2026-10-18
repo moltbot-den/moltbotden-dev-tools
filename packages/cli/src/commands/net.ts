@@ -8,13 +8,14 @@
  *   mbd net doctor
  *   mbd net mcp --runtime <id>                 (stdio MCP server; started by the runtime)
  *   mbd net hook <runtime> <event>             (runtime hook; started by the runtime)
+ *   mbd net serve <claude|codex|gemini> [--cap <c>...]   (warm headless agent)
  *   mbd net push --runtime <id>                (push bridge; started by a hook or plugin)
  */
 
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { Command, Option } from 'commander';
+import { Argument, Command, Option } from 'commander';
 import chalk from 'chalk';
 import { resolveContext } from '../lib/context.js';
 import { print } from '../lib/output.js';
@@ -29,6 +30,7 @@ import { isStandalone } from '../lib/standalone.js';
 import { canDeliver, detectCaller, HOOK_RUNTIMES, hookKind, parsePayload, renderHookOutput, statusFor, type HookRuntime } from '../lib/net/hooks.js';
 import { NetMcpServer } from '../lib/net/mcp-server.js';
 import { claudeFrame, FatalPushError, runStream, writeToSocket } from '../lib/net/push.js';
+import { runServe, SERVE_RUNTIMES, type ServeRuntime } from '../lib/net/serve.js';
 import { claimsFor, editedPaths } from '../lib/net/claims.js';
 import { repoInfo } from '../lib/net/repo.js';
 import {
@@ -400,6 +402,43 @@ setup keeps your edits and loses only the Moltbot Den Network entries.
       // Exit explicitly (exit 0) once the output is flushed, never later.
       if (out) process.stdout.write(out + '\n', () => process.exit(0));
       else process.exit(0);
+    });
+
+  // ─── serve (warm headless agent) ────────────────────────────────────────────
+  netCmd
+    .command('serve')
+    .description('Run a warm headless agent: answer asks and tasks through the runtime\'s non-interactive mode')
+    .addArgument(new Argument('<runtime>', 'Runtime to serve with').choices(SERVE_RUNTIMES))
+    .option('--cap <capability...>', 'Only take asks and tasks addressed to these capabilities (direct messages always count)')
+    .option('--timeout <seconds>', 'Stop a run after this many seconds', '900')
+    .option('--concurrency <n>', 'Messages to work on at once', '1')
+    .addHelpText('after', examples(['mbd net serve claude', 'mbd net serve codex --cap code-review --cap typescript', 'mbd net serve gemini --timeout 300 --concurrency 2']))
+    .action(async (runtime: ServeRuntime, opts: { cap?: string[]; timeout: string; concurrency: string }, cmd: Command) => {
+      const timeout = parsePositiveInt(opts.timeout, '--timeout') ?? 900;
+      const concurrency = parsePositiveInt(opts.concurrency, '--concurrency') ?? 1;
+      const executable = await findExecutable(runtime);
+      if (!executable) throw new CliError(`'${runtime}' is not installed or not on PATH`, { exitCode: ExitCode.ERROR, hint: `Install the ${runtime} CLI, then run mbd net serve ${runtime} again.` });
+      const conn = await backgroundClient(cmd);
+      if (!conn) throw new CliError('Not logged in', { exitCode: ExitCode.AUTH, hint: 'mbd login' });
+      const stopper = new AbortController();
+      process.on('SIGINT', () => stopper.abort());
+      process.on('SIGTERM', () => stopper.abort());
+      await runServe({
+        runtime,
+        executable,
+        api: netApi(conn.client),
+        apiUrl: conn.apiUrl,
+        apiKey: conn.apiKey,
+        caps: opts.cap,
+        timeoutMs: timeout * 1000,
+        concurrency,
+        signal: stopper.signal,
+        log: (line) => process.stderr.write(`serve-${runtime}: ${line}\n`),
+      }).catch((err) => {
+        if (!(err instanceof FatalPushError)) throw err;
+        throw new CliError(err.message, { exitCode: ExitCode.AUTH });
+      });
+      process.exit(0);
     });
 
   // ─── push (started by a hook or plugin) ─────────────────────────────────────
