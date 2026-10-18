@@ -140,13 +140,108 @@ describe('what setup writes', () => {
 
   it('refuses to rewrite a config it cannot parse, rather than clobbering it', async () => {
     write('.cursor/mcp.json', '{ // comment\n}');
-    await expect(applySetup(['cursor'], env)).rejects.toThrow(/not plain JSON/);
+    const changes = await applySetup(['cursor'], env);
+    expect(changes[0]).toMatchObject({ action: 'failed', error: expect.stringMatching(/not plain JSON/) });
     expect(fs.readFileSync(path.join(home, '.cursor', 'mcp.json'), 'utf-8')).toBe('{ // comment\n}');
   });
 
   it('quotes an mbd path with spaces so shell hooks still run it', () => {
-    const edits = planRuntime('cursor', { ...env, mbd: ['/Applications/My Tools/mbd'] });
+    const edits = planRuntime('cursor', { ...env, platform: 'darwin', mbd: ["/Applications/My Tools/O'Brien/mbd"] });
     const hooks = JSON.parse(edits[1].apply(undefined));
-    expect(hooks.hooks.postToolUse[0].command).toBe(`"/Applications/My Tools/mbd" net hook cursor postToolUse ${MANAGED}`);
+    expect(hooks.hooks.postToolUse[0].command).toBe(`'/Applications/My Tools/O'\\''Brien/mbd' net hook cursor postToolUse ${MANAGED}`);
+  });
+
+  it('quotes for cmd on Windows and gives Copilot a PowerShell form too', () => {
+    const win = { ...env, platform: 'win32' as const, mbd: ['C:\\Program Files\\nodejs\\node.exe', 'C:\\mbd\\cli.js'] };
+    const cursor = JSON.parse(planRuntime('cursor', win)[1].apply(undefined));
+    expect(cursor.hooks.stop[0].command).toBe(`"C:\\Program Files\\nodejs\\node.exe" C:\\mbd\\cli.js net hook cursor stop ${MANAGED}`);
+    const copilot = JSON.parse(planRuntime('copilot-cli', win)[1].apply(undefined));
+    expect(copilot.hooks.agentStop[0].powershell).toBe(`& 'C:\\Program Files\\nodejs\\node.exe' 'C:\\mbd\\cli.js' 'net' 'hook' 'copilot-cli' 'agentStop' '${MANAGED}'`);
+  });
+});
+
+describe('review regressions', () => {
+  it('keeps edits the user made between two setup runs when removing', async () => {
+    seedExistingConfigs();
+    await applySetup(['claude-code'], env);
+    const settings = path.join(home, '.claude', 'settings.json');
+    const edited = JSON.parse(fs.readFileSync(settings, 'utf-8'));
+    edited.model = 'opus';
+    fs.writeFileSync(settings, JSON.stringify(edited));
+    await applySetup(['claude-code'], { ...env, shareRepo: true }); // run again over the edit
+    await removeSetup('all', env);
+    const after = JSON.parse(fs.readFileSync(settings, 'utf-8'));
+    expect(after.model).toBe('opus');
+    expect(JSON.stringify(after)).not.toContain(MANAGED);
+  });
+
+  it('edits a symlinked config at its target and leaves the link in place', async () => {
+    if (process.platform === 'win32') return;
+    const dotfiles = path.join(home, 'dotfiles');
+    fs.mkdirSync(dotfiles);
+    const target = path.join(dotfiles, 'mcp.json');
+    fs.writeFileSync(target, '{"mcpServers":{"mine":{}}}');
+    fs.mkdirSync(path.join(home, '.cursor'));
+    fs.symlinkSync(target, path.join(home, '.cursor', 'mcp.json'));
+
+    await applySetup(['cursor'], env);
+    expect(fs.lstatSync(path.join(home, '.cursor', 'mcp.json')).isSymbolicLink()).toBe(true);
+    expect(fs.readFileSync(target, 'utf-8')).toContain('moltbotden-net');
+    await removeSetup('all', env);
+    expect(fs.lstatSync(path.join(home, '.cursor', 'mcp.json')).isSymbolicLink()).toBe(true);
+    expect(fs.readFileSync(target, 'utf-8')).toBe('{"mcpServers":{"mine":{}}}');
+  });
+
+  it('can undo a setup that crashed after recording a file but before writing it', async () => {
+    seedExistingConfigs();
+    const before = snapshot();
+    await applySetup(['cursor'], env);
+    // Simulate the crash: the file went back to its original bytes, the record stayed.
+    fs.writeFileSync(path.join(home, '.cursor', 'mcp.json'), '{"mcpServers":{}}');
+    fs.rmSync(path.join(home, '.cursor', 'hooks.json'));
+    await removeSetup('all', env);
+    expect(snapshot()).toEqual(before);
+  });
+
+  it('refuses to run while another setup holds the lock', async () => {
+    const { getConfigDir } = await import('../../src/lib/config-store.js');
+    fs.mkdirSync(getConfigDir(), { recursive: true });
+    fs.writeFileSync(path.join(getConfigDir(), 'net-setup.lock'), String(process.pid));
+    await expect(applySetup(['cursor'], env)).rejects.toThrow(/Another mbd net setup/);
+    fs.rmSync(path.join(getConfigDir(), 'net-setup.lock'));
+  });
+
+  it('reports a runtime it cannot parse and still connects the others', async () => {
+    write('.cursor/mcp.json', '{ // comment\n}');
+    const changes = await applySetup(['cursor', 'codex'], env);
+    expect(changes.find((c) => c.runtime === 'cursor')?.action).toBe('failed');
+    expect(fs.readFileSync(path.join(home, '.codex', 'config.toml'), 'utf-8')).toContain('moltbotden-net');
+  });
+
+  it('reads a JSON config saved with a byte order mark', async () => {
+    write('.cursor/mcp.json', '\uFEFF{"mcpServers":{"mine":{}}}');
+    const changes = await applySetup(['cursor'], env);
+    expect(changes.every((c) => c.action !== 'failed')).toBe(true);
+    await removeSetup('all', env);
+    expect(fs.readFileSync(path.join(home, '.cursor', 'mcp.json'), 'utf-8')).toBe('\uFEFF{"mcpServers":{"mine":{}}}');
+  });
+});
+
+describe('Codex TOML', () => {
+  it('recognizes our table written with quotes, spaces or a comment and never duplicates it', () => {
+    const existing = 'model = "x"\r\n\r\n[ mcp_servers."moltbotden-net" ] # old\r\ncommand = "old"\r\n\r\n[mcp_servers.other]\r\ncommand = "o"\r\n';
+    const edit = planRuntime('codex', env)[0];
+    const next = edit.apply(existing);
+    expect(next.match(/moltbotden-net/g)?.length).toBe(1);
+    expect(next).toContain('[mcp_servers.other]\r\ncommand = "o"');
+    expect(next).not.toContain('command = "old"');
+    expect(next.includes('\r\n')).toBe(true);
+  });
+
+  it('does not end our table at a line starting with [ inside a multi-line string or array', () => {
+    const toml = '[mcp_servers.moltbotden-net]\nargs = [\n  "a",\n]\nnote = """\n[not a table]\n"""\n\n[mcp_servers.other]\nx = 1\n';
+    const out = planRuntime('codex', env)[0].remove(toml)!;
+    expect(out).not.toContain('not a table');
+    expect(out).toContain('[mcp_servers.other]\nx = 1');
   });
 });

@@ -21,7 +21,7 @@ let sb: Sandbox;
 const KEY = 'moltbotden_sk_testkey000000000000';
 const MAIL = '<den-message from="ana/web" type="ask" id="m1">Is main green?</den-message>';
 // The test runner may itself run inside Claude Code or Cursor; start from a clean slate.
-const NO_RUNTIME = { CLAUDECODE: '', CURSOR_VERSION: '', CLAUDE_CODE_SESSION_ID: '', CLAUDE_CODE_MESSAGING_SOCKET: '' };
+const NO_RUNTIME = { CLAUDECODE: '', CURSOR_VERSION: '', CLAUDE_CODE_SESSION_ID: '', CLAUDE_CODE_ENTRYPOINT: '', CLAUDE_CODE_MESSAGING_SOCKET: '' };
 
 const run = (args: string[], env: Record<string, string> = {}, input?: string) =>
   runCli(sb, ['--api-url', api.url, ...args], { MOLTBOTDEN_API_KEY: KEY, ...NO_RUNTIME, ...env }, { input });
@@ -111,6 +111,22 @@ describe('net hook', () => {
     expect(res).toMatchObject({ code: 0, stdout: '' });
     // 1.5 s budget plus Node start-up for the child process.
     expect(elapsed).toBeLessThan(1500 + 1500);
+  });
+
+  it('exits 0 within the budget even when the runtime keeps stdin open', async () => {
+    const { spawn } = await import('node:child_process');
+    const started = Date.now();
+    const code = await new Promise<number | null>((resolve) => {
+      const child = spawn(process.execPath, [CLI_PATH, '--api-url', api.url, 'net', 'hook', 'codex', 'PostToolUse'], {
+        env: { ...process.env, ...NO_RUNTIME, HOME: sb.home, MOLTBOTDEN_CONFIG_DIR: sb.configDir, MOLTBOTDEN_API_KEY: KEY, MBD_NO_UPDATE_CHECK: '1' },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      child.stdin.write('{"session_id":"x"}'); // never ended
+      child.on('exit', resolve);
+      setTimeout(() => child.kill('SIGKILL'), 8000);
+    });
+    expect(code).toBe(0);
+    expect(Date.now() - started).toBeLessThan(1500 + 1500);
   });
 
   it('exits 0 silently when not logged in', async () => {

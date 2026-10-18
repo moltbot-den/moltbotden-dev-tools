@@ -25,7 +25,8 @@ export async function* parseSse(body: AsyncIterable<Uint8Array>): AsyncGenerator
   const decoder = new TextDecoder();
   let buf = '';
   for await (const chunk of body) {
-    buf += decoder.decode(chunk, { stream: true }).replace(/\r\n/g, '\n');
+    // Normalize on the whole buffer: a \r\n can be split across two chunks.
+    buf = (buf + decoder.decode(chunk, { stream: true })).replace(/\r\n/g, '\n');
     let sep: number;
     while ((sep = buf.indexOf('\n\n')) >= 0) {
       const raw = buf.slice(0, sep);
@@ -119,6 +120,8 @@ export interface StreamOptions {
   fetchImpl?: typeof fetch;
   log?: (line: string) => void;
   idleMs?: number;
+  /** Aborting this ends runStream promptly (shutdown). */
+  signal?: AbortSignal;
 }
 
 /** Hold /net/stream until shouldStop(), reconnecting with backoff and Last-Event-ID. */
@@ -130,6 +133,8 @@ export async function runStream(opts: StreamOptions): Promise<void> {
     try {
       const url = `${opts.apiUrl.replace(/\/+$/, '')}/net/stream?session=${encodeURIComponent(opts.session)}`;
       const abort = new AbortController();
+      const onStop = () => abort.abort();
+      opts.signal?.addEventListener('abort', onStop, { once: true });
       const res = await doFetch(url, {
         signal: abort.signal,
         headers: {
@@ -141,23 +146,33 @@ export async function runStream(opts: StreamOptions): Promise<void> {
       });
       if (res.status === 401 || res.status === 403) throw new FatalPushError(`stream refused: HTTP ${res.status}`);
       if (!res.ok || !res.body) throw new Error(`stream HTTP ${res.status}`);
-      backoff = 1000;
       const body = withIdleTimeout(res.body as unknown as AsyncIterable<Uint8Array>, opts.idleMs ?? STREAM_IDLE_MS, () => {
         opts.log?.('stream: no data or ping for too long; reconnecting');
         abort.abort();
       });
       for await (const ev of parseSse(body)) {
         if (opts.shouldStop()) return;
+        // Reset the backoff only once the server really talks: a server that
+        // accepts and closes at once must not get a reconnect every second.
+        backoff = 1000;
         if (ev.event !== 'message' || !ev.data) continue;
-        const msg = JSON.parse(ev.data) as PushedMessage;
+        let msg: PushedMessage;
+        try {
+          msg = JSON.parse(ev.data) as PushedMessage;
+        } catch {
+          opts.log?.(`stream: skipping malformed event ${ev.id ?? ''}`);
+          if (ev.id) lastId = ev.id;
+          continue;
+        }
         await opts.onMessage(msg);
         if (ev.id) lastId = ev.id;
       }
+      opts.signal?.removeEventListener('abort', onStop);
     } catch (err) {
       if (err instanceof FatalPushError) throw err;
       opts.log?.(`stream: ${(err as Error).message}; reconnecting in ${backoff / 1000}s`);
     }
-    if (opts.shouldStop()) return;
+    if (opts.shouldStop() || opts.signal?.aborted) return;
     await new Promise((r) => setTimeout(r, backoff));
     backoff = Math.min(backoff * 2, 30_000);
   }

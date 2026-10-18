@@ -81,6 +81,29 @@ describe('net mcp server', () => {
     expect(res.result.content[0].text).toContain('loop');
   });
 
+  it('survives malformed input lines instead of crashing the client\'s server', async () => {
+    const lines: string[] = [];
+    const { Readable } = await import('node:stream');
+    const s = new NetMcpServer({
+      client: new MoltbotDenClient(api.url, 'k', { retry: { maxRetries: 0 } }),
+      runtime: 'codex',
+      env: {},
+      cwd: makeTempDir('net-mcp'),
+      write: (l) => lines.push(l),
+    });
+    await s.serve(Readable.from(['null\n', '1\n', 'not json\n', '{"jsonrpc":"2.0","id":7,"method":"ping"}\n']));
+    const replies = lines.map((l) => JSON.parse(l));
+    expect(replies.map((r) => r.error?.code ?? 'ok')).toEqual([-32600, -32600, -32700, 'ok']);
+    expect(replies[3]).toMatchObject({ id: 7, result: {} });
+  });
+
+  it('does not answer a tools/call sent as a notification', async () => {
+    api.on('POST', '/net/sessions', { status: 200, body: { session: 'x', address: 'a/x', tier: 'pull' } });
+    api.on('GET', '/net/who', { status: 200, body: { count: 0, agents: [] } });
+    const { s } = server('codex');
+    expect(await s.handle({ jsonrpc: '2.0', method: 'tools/call', params: { name: 'net_who', arguments: {} } })).toBeUndefined();
+  });
+
   it('answers initialize and tools/list, and ignores notifications', async () => {
     const { s } = server('codex');
     const init = (await s.handle({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25' } })) as { result: { protocolVersion: string } };
@@ -129,6 +152,16 @@ describe('push bridge', () => {
       shouldStop: () => connects >= 2,
     });
     expect(connects).toBe(2);
+  });
+
+  it('parses CRLF events whose line ending is split across chunks', async () => {
+    const chunks = ['id: 1\r\nevent: message\r\ndata: {}\r', '\n\r\nevent: ping\r\ndata: {}\r\n\r\n'];
+    async function* body() {
+      for (const c of chunks) yield new TextEncoder().encode(c);
+    }
+    const events = [];
+    for await (const ev of parseSse(body())) events.push(ev.event);
+    expect(events).toEqual(['message', 'ping']);
   });
 
   it('parses SSE events split across chunks', async () => {

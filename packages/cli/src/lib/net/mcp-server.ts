@@ -19,7 +19,8 @@ import { netApi, type NetRuntime } from '../api/net.js';
 import { CLI_VERSION } from '../version.js';
 import { repoInfo } from './repo.js';
 
-const PROTOCOL_FALLBACK = '2025-06-18';
+/** MCP protocol revisions this server speaks, newest first. */
+const PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
 
 const SESSION_PROP = { type: 'string', maxLength: 48, description: 'Your network session name; omit to use this connection\'s session' };
 
@@ -120,7 +121,9 @@ export class NetMcpServer {
     switch (msg.method) {
       case 'initialize':
         return reply({
-          protocolVersion: (msg.params?.protocolVersion as string) ?? PROTOCOL_FALLBACK,
+          protocolVersion: PROTOCOL_VERSIONS.includes(msg.params?.protocolVersion as string)
+            ? (msg.params?.protocolVersion as string)
+            : PROTOCOL_VERSIONS[0],
           capabilities: { tools: {} },
           serverInfo: { name: 'moltbotden-net', version: CLI_VERSION },
           instructions:
@@ -134,8 +137,10 @@ export class NetMcpServer {
         return reply({});
       case 'tools/list':
         return reply({ tools: NET_TOOLS });
-      case 'tools/call':
-        return reply(await this.callTool(msg.params ?? {}));
+      case 'tools/call': {
+        const result = await this.callTool(msg.params ?? {});
+        return msg.id === undefined ? undefined : reply(result); // a notification gets no reply
+      }
       default:
         if (msg.id === undefined) return undefined; // unknown notification
         return { jsonrpc: '2.0', id, error: { code: -32601, message: `Method not found: ${msg.method}` } };
@@ -180,6 +185,14 @@ export class NetMcpServer {
     }
   }
 
+  private safeWrite(obj: unknown): void {
+    try {
+      this.write(JSON.stringify(obj));
+    } catch {
+      // stdout closed: the client is gone; nothing to tell it.
+    }
+  }
+
   /** Serve newline-delimited JSON-RPC on stdin until it closes. */
   async serve(input: NodeJS.ReadableStream = process.stdin): Promise<void> {
     const rl = readline.createInterface({ input, crlfDelay: Infinity });
@@ -190,14 +203,24 @@ export class NetMcpServer {
       try {
         msg = JSON.parse(line) as Rpc;
       } catch {
-        this.write(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }));
+        this.safeWrite({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } });
+        continue;
+      }
+      if (!msg || typeof msg !== 'object' || typeof msg.method !== 'string') {
+        this.safeWrite({ jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid Request' } });
         continue;
       }
       // Handle calls concurrently: a net_inbox wait must not block other sessions.
       pending.push(
-        this.handle(msg).then((res) => {
-          if (res) this.write(JSON.stringify(res));
-        }),
+        this.handle(msg)
+          .then((res) => {
+            if (res) this.safeWrite(res);
+          })
+          .catch((err: unknown) => {
+            if (msg.id !== undefined) {
+              this.safeWrite({ jsonrpc: '2.0', id: msg.id, error: { code: -32603, message: (err as Error).message } });
+            }
+          }),
       );
     }
     await Promise.allSettled(pending);

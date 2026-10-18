@@ -479,6 +479,9 @@ process.on('SIGINT', () => {
 });
 
 process.on('SIGTERM', () => {
+  // net hook / net push handle SIGTERM themselves (exit 0, graceful stop).
+  const [group, sub] = process.argv.slice(2);
+  if (group === 'net' && (sub === 'hook' || sub === 'push')) return;
   process.exit(143);
 });
 

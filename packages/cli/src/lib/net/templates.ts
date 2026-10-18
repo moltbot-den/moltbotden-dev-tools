@@ -51,13 +51,19 @@ import { spawn } from "node:child_process";
 const MBD = ${spawnArgs(mbd)};
 
 export const MoltbotDenNetwork = async ({ client, directory }) => {
+  // sessionID -> { child, started, tries }. Entries stay after exit so a bridge
+  // that cannot start (not logged in) is retried at most every minute, 5 times.
   const bridges = new Map();
 
   function bridge(sessionID) {
-    if (!sessionID || bridges.has(sessionID)) return;
+    if (!sessionID) return;
+    const prev = bridges.get(sessionID);
+    if (prev && (prev.child || Date.now() - prev.started < 60_000 || prev.tries >= 5)) return;
+    // stdin is a pipe we never write: when opencode exits, the bridge sees EOF and exits too.
     const child = spawn(MBD[0], [...MBD.slice(1), "net", "push", "--runtime", "opencode", "--format", "jsonl",
-      "--session-key", "opencode:" + sessionID, "--cwd", directory, "--managed"], { stdio: ["ignore", "pipe", "ignore"] });
-    bridges.set(sessionID, child);
+      "--session-key", "opencode:" + sessionID, "--cwd", directory, "--managed"], { stdio: ["pipe", "pipe", "ignore"] });
+    const entry = { child, started: Date.now(), tries: (prev?.tries ?? 0) + 1 };
+    bridges.set(sessionID, entry);
     let buf = "";
     child.stdout.on("data", (chunk) => {
       buf += chunk;
@@ -71,15 +77,15 @@ export const MoltbotDenNetwork = async ({ client, directory }) => {
         client.session.prompt({ path: { id: sessionID }, body: { parts: [{ type: "text", text: msg.framed }] } }).catch(() => {});
       }
     });
-    child.on("exit", () => bridges.delete(sessionID));
+    child.on("exit", () => { entry.child = undefined; });
   }
 
   return {
     event: async ({ event }) => {
       const props = event?.properties ?? {};
       const id = props.sessionID ?? props.info?.id;
-      if (event.type === "session.created" || event.type === "session.idle" || event.type === "session.updated") bridge(id);
-      if (event.type === "session.deleted") bridges.get(id)?.kill();
+      if (event.type === "session.created" || event.type === "session.idle") bridge(id);
+      if (event.type === "session.deleted") { bridges.get(id)?.child?.kill(); bridges.delete(id); }
     },
   };
 };
@@ -99,8 +105,9 @@ export default function (pi: any) {
 
   pi.on("session_start", async () => {
     if (child) return;
+    // stdin is a pipe we never write: when pi exits, the bridge sees EOF and exits too.
     child = spawn(MBD[0], [...MBD.slice(1), "net", "push", "--runtime", "pi", "--format", "jsonl",
-      "--session-key", "pi:" + process.pid, "--cwd", process.cwd(), "--managed"], { stdio: ["ignore", "pipe", "ignore"] });
+      "--session-key", "pi:" + process.pid, "--cwd", process.cwd(), "--managed"], { stdio: ["pipe", "pipe", "ignore"] });
     let buf = "";
     child.stdout?.on("data", (chunk) => {
       buf += chunk;

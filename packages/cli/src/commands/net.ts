@@ -19,7 +19,7 @@ import chalk from 'chalk';
 import { resolveContext } from '../lib/context.js';
 import { print } from '../lib/output.js';
 import { debug } from '../lib/verbose.js';
-import { CliError, UsageError } from '../lib/errors.js';
+import { CliError, ExitCode, UsageError } from '../lib/errors.js';
 import { examples, parsePositiveInt, truncate } from '../lib/command-utils.js';
 import { AuthManager } from '../lib/auth-manager.js';
 import { MoltbotDenClient } from '../lib/api-client.js';
@@ -80,7 +80,12 @@ function readStdin(ms: number): Promise<string> {
   if (process.stdin.isTTY) return Promise.resolve('');
   return new Promise((resolve) => {
     let data = '';
-    const done = () => resolve(data);
+    const done = () => {
+      // Stop reading: a runtime that keeps the pipe open must not keep us alive.
+      process.stdin.pause();
+      process.stdin.removeAllListeners('data');
+      resolve(data);
+    };
     const timer = setTimeout(done, ms);
     process.stdin.setEncoding('utf-8');
     process.stdin.on('data', (c) => (data += c));
@@ -150,9 +155,14 @@ setup keeps your edits and loses only the Moltbot Den Network entries.
       if (opts.remove) {
         const env = defaultSetupEnv(await resolveMbd().catch(() => ['mbd']));
         const changes = await removeSetup(chosen ?? 'all', env);
-        if (ctx.json) return print.json({ removed: changes });
-        if (!changes.length) return print.empty('Nothing to remove: setup has not changed any files.');
-        for (const c of changes) print.success(`${c.runtime}: ${c.action} ${chalk.cyan(c.file)}`);
+        const failed = changes.filter((c) => c.action === 'failed');
+        if (ctx.json) print.json({ removed: changes });
+        else if (!changes.length) print.empty('Nothing to remove: setup has not changed any files.');
+        else for (const c of changes) {
+          if (c.action === 'failed') print.warn(`${c.runtime}: could not undo ${c.file}: ${c.error}`);
+          else print.success(`${c.runtime}: ${c.action} ${chalk.cyan(c.file)}`);
+        }
+        if (failed.length) throw new CliError(`${failed.length} file(s) could not be restored; rerun mbd net setup --remove`, { details: failed });
         return;
       }
 
@@ -172,15 +182,22 @@ setup keeps your edits and loses only the Moltbot Den Network entries.
         return;
       }
       const changes = await applySetup(runtimes, env);
+      const failed = changes.filter((c) => c.action === 'failed');
       const hints: string[] = [];
       if (runtimes.includes('codex')) hints.push('Codex: run /hooks once in Codex and trust the moltbotden-net hooks.');
       if (runtimes.includes('openclaw')) hints.push(`OpenClaw: register the MCP server with  ${openclawMcpCommand(env)}`);
       if (runtimes.includes('claude-code')) hints.push('Claude Code: new sessions get push delivery (v2.1.224+); running sessions pick it up after a restart.');
-      if (ctx.json) return print.json({ agent: ctx.auth?.agentId, mbd, runtimes, changes, next_steps: hints });
-      print.success(`Moltbot Den Network connected for ${ctx.auth?.agentId ?? 'your agent'} on: ${runtimes.join(', ')}`);
-      for (const c of changes) print.hint(`${c.runtime}: ${c.action} ${c.file}`);
-      for (const h of hints) print.info(h);
-      print.hint('Check it: mbd net doctor    Undo: mbd net setup --remove');
+      const connected = runtimes.filter((r) => !failed.some((f) => f.runtime === r));
+      if (ctx.json) {
+        print.json({ agent: ctx.auth?.agentId, mbd, runtimes: connected, changes, next_steps: hints });
+      } else {
+        if (connected.length) print.success(`Moltbot Den Network connected for ${ctx.auth?.agentId ?? 'your agent'} on: ${connected.join(', ')}`);
+        for (const c of changes) if (c.action !== 'failed') print.hint(`${c.runtime}: ${c.action} ${c.file}`);
+        for (const f of failed) print.warn(`${f.runtime}: not connected: ${f.error}`);
+        for (const h of hints) print.info(h);
+        print.hint('Check it: mbd net doctor    Undo: mbd net setup --remove');
+      }
+      if (failed.length) throw new CliError(`${failed.length} runtime(s) could not be connected`, { details: failed });
     });
 
   // ─── who ────────────────────────────────────────────────────────────────────
@@ -294,11 +311,7 @@ setup keeps your edits and loses only the Moltbot Den Network entries.
     .addHelpText('after', examples(['mbd net mcp --runtime codex']))
     .action(async (opts: { runtime: NetRuntime }, cmd: Command) => {
       const conn = await backgroundClient(cmd);
-      if (!conn) {
-        process.stderr.write('mbd net mcp: not logged in. Run: mbd login\n');
-        process.exitCode = 3;
-        return;
-      }
+      if (!conn) throw new CliError('mbd net mcp: not logged in', { exitCode: ExitCode.AUTH, hint: 'Run: mbd login' });
       await new NetMcpServer({ client: conn.client, runtime: opts.runtime }).serve();
     });
 
@@ -310,12 +323,17 @@ setup keeps your edits and loses only the Moltbot Den Network entries.
     .argument('<event>', 'The runtime\'s hook event name')
     .option('--share-repo', 'Send owner/name with the repo hash')
     .option('--managed', 'Written by mbd net setup')
+    .allowUnknownOption()
+    .allowExcessArguments()
     .addHelpText('after', examples(['mbd net hook claude-code PostToolUse < payload.json']))
     .action(async (runtime: string, event: string, opts: { shareRepo?: boolean }, cmd: Command) => {
       // Whatever happens, exit 0 within the budget and print nothing unless there is mail.
       const started = Date.now();
       const left = () => HOOK_BUDGET_MS - (Date.now() - started);
-      const timer = setTimeout(() => process.exit(0), HOOK_BUDGET_MS);
+      // Hard stop: whatever is still pending, the runtime gets exit 0 in time.
+      setTimeout(() => process.exit(0), HOOK_BUDGET_MS).unref();
+      process.on('SIGTERM', () => process.exit(0));
+      let out = '';
       try {
         if (!(HOOK_RUNTIMES as readonly string[]).includes(runtime)) return;
         const kind = hookKind(event);
@@ -351,13 +369,13 @@ setup keeps your edits and loses only the Moltbot Den Network entries.
           return;
         }
         const res = await api.hook({ ...body, event }, timeoutMs);
-        const out = renderHookOutput(caller, kind, res.mail);
-        if (out) process.stdout.write(out + '\n');
+        out = renderHookOutput(caller, kind, res.mail);
       } catch {
         // Fail open: a network hiccup must never block the runtime.
-      } finally {
-        clearTimeout(timer);
       }
+      // Exit explicitly (exit 0) once the output is flushed, never later.
+      if (out) process.stdout.write(out + '\n', () => process.exit(0));
+      else process.exit(0);
     });
 
   // ─── push (started by a hook or plugin) ─────────────────────────────────────
@@ -405,13 +423,28 @@ setup keeps your edits and loses only the Moltbot Den Network entries.
       });
 
       const parent = process.ppid;
-      let stop = false;
+      const stopper = new AbortController();
+      const parentAlive = () => {
+        if (process.ppid !== parent) return false;
+        try {
+          process.kill(parent, 0); // Windows keeps a dead parent's ppid; ask the OS
+          return true;
+        } catch {
+          return false;
+        }
+      };
       const shouldStop = () =>
-        stop || process.ppid !== parent || (format === 'socket' && !!socketPath && !fs.existsSync(socketPath));
-      process.on('SIGTERM', () => (stop = true));
-      process.stdout.on('error', () => (stop = true)); // the plugin went away
+        stopper.signal.aborted || !parentAlive() || (format === 'socket' && !!socketPath && !fs.existsSync(socketPath));
+      const stop = () => stopper.abort();
+      process.on('SIGTERM', stop);
+      process.on('SIGINT', stop);
+      process.stdout.on('error', stop); // the plugin went away
+      if (format === 'jsonl') {
+        // The plugin holds our stdin open; EOF means its runtime exited.
+        process.stdin.on('end', stop).on('error', stop).resume();
+      }
       const heartbeat = setInterval(() => {
-        if (shouldStop()) process.exit(0);
+        if (shouldStop()) stop();
       }, 5000);
 
       try {
@@ -420,6 +453,7 @@ setup keeps your edits and loses only the Moltbot Den Network entries.
           apiKey: conn.apiKey,
           session: s.session,
           shouldStop,
+          signal: stopper.signal,
           log: (line) => debug('net', line),
           onMessage: async (msg) => {
             debug('net', `message ${msg.id} from ${msg.from}`);
@@ -430,12 +464,13 @@ setup keeps your edits and loses only the Moltbot Den Network entries.
           },
         });
       } catch (err) {
-        if (!(err instanceof FatalPushError)) throw err;
+        if (!(err instanceof FatalPushError) && !stopper.signal.aborted) throw err;
       } finally {
         clearInterval(heartbeat);
         // Hooks keep delivering if the bridge is gone.
         await api.updateSession(s.session, { tier: 'turn' }).catch(() => {});
       }
+      process.exit(0);
     });
 }
 
@@ -488,7 +523,7 @@ async function runNetChecks(client: MoltbotDenClient, loggedIn: boolean): Promis
       });
     }
     if (installed.includes('claude-code')) {
-      const v = spawnSync('claude', ['--version'], { encoding: 'utf-8', timeout: 3000 }).stdout?.match(/\d+\.\d+\.\d+/)?.[0];
+      const v = spawnSync('claude', ['--version'], { encoding: 'utf-8', timeout: 3000, shell: process.platform === 'win32' }).stdout?.match(/\d+\.\d+\.\d+/)?.[0];
       const ok = v ? compareVersion(v, CLAUDE_PUSH_MIN) >= 0 : false;
       checks.push({
         id: 'claude-push',

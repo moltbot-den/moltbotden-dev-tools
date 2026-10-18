@@ -2,20 +2,27 @@
  * `mbd net setup`: wire each installed runtime to Moltbot Den Network.
  *
  * Every runtime is a list of file edits. Each edit can add our entries to a
- * file and take them out again. Before touching a file the first time, its
- * exact bytes (or its absence) are saved in <config dir>/net-setup.json, so
- * `--remove` restores every file byte for byte. If a file changed after
- * setup wrote it, `--remove` takes only our entries out instead and keeps
- * the user's edits.
+ * file and take them out again. Before setup first changes a file, its exact
+ * bytes (or its absence) are recorded in <config dir>/net-setup.json, so
+ * `--remove` restores every file byte for byte. If a file changed after setup
+ * wrote it, `--remove` takes only our entries out and keeps the user's edits.
+ *
+ * Safety rules, each from a way this can go wrong:
+ * - The record is written before the file, so a crash between the two can
+ *   still be undone.
+ * - Re-running setup over a file the user edited since takes the edited
+ *   version as the new original, so `--remove` never rolls those edits back.
+ * - Symlinked configs (dotfile managers) are edited at their real path.
+ * - One setup or remove runs at a time (lock file), and a file that changes
+ *   while setup works on it is re-read and re-applied.
  */
 
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { atomicWriteFile, ensureConfigDir, getConfigDir } from '../config-store.js';
+import { ensureConfigDir, getConfigDir } from '../config-store.js';
 import { CliError } from '../errors.js';
-import { mergeCodexToml } from '../mcp-config.js';
 import { opencodePlugin, piExtension, skillMarkdown } from './templates.js';
 
 export const SETUP_RUNTIMES = ['claude-code', 'codex', 'cursor', 'gemini-cli', 'copilot-cli', 'opencode', 'pi', 'openclaw'] as const;
@@ -43,26 +50,41 @@ export interface FileEdit {
   remove(current: string): string | null;
 }
 
-// ─── helpers ──────────────────────────────────────────────────────────────────
+// ─── command strings ─────────────────────────────────────────────────────────
 
-function quote(arg: string): string {
-  return /^[\w@%+=:,./-]+$/.test(arg) ? arg : `"${arg.replace(/(["\\$`])/g, '\\$1')}"`;
+/** POSIX sh quoting. */
+function quoteSh(arg: string): string {
+  return /^[\w@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, `'\\''`)}'`;
 }
 
-function shell(e: SetupEnv, args: string[]): string {
-  return [...e.mbd, ...args].map(quote).join(' ');
+/** cmd.exe quoting (Windows hooks run through cmd or a cmd-compatible shell). */
+function quoteCmd(arg: string): string {
+  const escaped = arg.replace(/%/g, '%%');
+  return /^[\w@+=:,./\\-]+$/.test(escaped) ? escaped : `"${escaped.replace(/"/g, '""')}"`;
+}
+
+/** PowerShell: call operator plus single-quoted strings. */
+function powershell(argv: string[]): string {
+  return '& ' + argv.map((a) => `'${a.replace(/'/g, "''")}'`).join(' ');
+}
+
+export function shell(e: Pick<SetupEnv, 'mbd' | 'platform'>, args: string[]): string {
+  const argv = [...e.mbd, ...args];
+  return argv.map(e.platform === 'win32' ? quoteCmd : quoteSh).join(' ');
 }
 
 function isOurs(command: unknown): boolean {
-  return typeof command === 'string' && command.includes(MANAGED) && /\bnet (hook|push)\b/.test(command);
+  return typeof command === 'string' && command.includes(MANAGED) && /\bnet'? '?(hook|push)\b/.test(command);
 }
+
+// ─── JSON ─────────────────────────────────────────────────────────────────────
 
 type Json = Record<string, unknown>;
 
 function parseJson(file: string, text: string | undefined): Json {
   if (text === undefined || !text.trim()) return {};
   try {
-    const v = JSON.parse(text) as unknown;
+    const v = JSON.parse(text.replace(/^﻿/, '')) as unknown;
     if (v && typeof v === 'object' && !Array.isArray(v)) return v as Json;
   } catch {
     // fall through
@@ -152,11 +174,12 @@ function groupedHooksEdit(file: string, events: Record<string, HookGroup>): File
 }
 
 /** Cursor layout: { version: 1, hooks: { event: [handler] } }. */
-function flatHooksEdit(file: string, events: Record<string, Json>): FileEdit {
+function flatHooksEdit(file: string, events: Record<string, Json>, commandKeys: string[] = ['command']): FileEdit {
+  const ours = (h: unknown) => commandKeys.some((k) => isOurs(obj(h)[k]));
   const strip = (hooks: Json): Json => {
     const out: Json = {};
     for (const [event, handlers] of Object.entries(hooks)) {
-      const kept = Array.isArray(handlers) ? handlers.filter((h) => !isOurs(obj(h).command)) : handlers;
+      const kept = Array.isArray(handlers) ? handlers.filter((h) => !ours(h)) : handlers;
       if (!Array.isArray(kept) || kept.length) out[event] = kept;
     }
     return out;
@@ -178,17 +201,42 @@ function flatHooksEdit(file: string, events: Record<string, Json>): FileEdit {
   };
 }
 
-export function removeCodexServer(existing: string, name = NET_SERVER): string {
-  const header = `[mcp_servers.${name}]`;
-  const sub = `[mcp_servers.${name}.`;
+// ─── TOML (Codex) ─────────────────────────────────────────────────────────────
+
+/** A table header line for our server or one of its sub-tables, tolerant of quotes, spaces and a trailing comment. */
+const OUR_TABLE = new RegExp(`^\\s*\\[\\s*mcp_servers\\s*\\.\\s*"?${NET_SERVER}"?\\s*(\\.[^\\]]*)?\\]\\s*(#.*)?$`);
+/** Any table header line: `[a.b]` / `[[a.b]]`, key characters only (an array literal line has commas or values). */
+const ANY_TABLE = /^\s*\[{1,2}\s*[A-Za-z0-9_."' -]+\s*\]{1,2}\s*(#.*)?$/;
+
+function eolOf(text: string): string {
+  return text.includes('\r\n') ? '\r\n' : '\n';
+}
+
+/** Remove our [mcp_servers.moltbotden-net] table (and sub-tables), keeping every other byte's line. */
+export function removeCodexServer(existing: string): string {
+  const eol = eolOf(existing);
+  const lines = existing.split(/\r?\n/);
   const out: string[] = [];
   let skipping = false;
-  for (const line of existing.split(/\r?\n/)) {
-    const t = line.trim();
-    if (t.startsWith('[')) skipping = t === header || t.startsWith(sub);
+  let inMultiline: '"""' | "'''" | null = null;
+  for (const line of lines) {
+    if (!inMultiline && ANY_TABLE.test(line)) skipping = OUR_TABLE.test(line);
     if (!skipping) out.push(line);
+    for (const q of ['"""', "'''"] as const) {
+      const n = line.split(q).length - 1;
+      if (n % 2 === 1) inMultiline = inMultiline === q ? null : inMultiline ?? q;
+    }
   }
-  return out.join('\n').replace(/\n{3,}/g, '\n\n').replace(/\n+$/, '') + '\n';
+  // Drop blank lines left at the end where our table was, but nowhere else.
+  while (out.length > 1 && out[out.length - 1] === '' && out[out.length - 2] === '') out.pop();
+  return out.join(eol);
+}
+
+function addCodexServer(existing: string | undefined, block: string): string {
+  const base = existing === undefined ? '' : removeCodexServer(existing);
+  const eol = existing ? eolOf(existing) : '\n';
+  const trimmed = base.replace(/(\r?\n)+$/, '');
+  return (trimmed ? trimmed + eol + eol : '') + block.split('\n').join(eol) + (block.endsWith('\n') ? '' : eol);
 }
 
 function tomlString(s: string): string {
@@ -233,7 +281,8 @@ export const RUNTIME_BINARY: Record<SetupRuntime, string> = {
 export function planRuntime(runtime: SetupRuntime, e: SetupEnv): FileEdit[] {
   const dir = runtimeConfigDir(runtime, e);
   const extra = e.shareRepo ? ['--share-repo'] : [];
-  const hook = (event: string) => shell(e, ['net', 'hook', runtime, event, ...extra, MANAGED]);
+  const hookArgs = (event: string) => ['net', 'hook', runtime, event, ...extra, MANAGED];
+  const hook = (event: string) => shell(e, hookArgs(event));
   const mcpArgs = [...e.mbd.slice(1), 'net', 'mcp', '--runtime', runtime];
   const command = e.mbd[0];
 
@@ -261,11 +310,10 @@ export function planRuntime(runtime: SetupRuntime, e: SetupEnv): FileEdit[] {
     case 'codex': {
       const handler = (event: string): HookGroup => ({ hooks: [{ type: 'command', command: hook(event), timeout: 5 }] });
       const block = `[mcp_servers.${NET_SERVER}]\ncommand = ${tomlString(command)}\nargs = [${mcpArgs.map(tomlString).join(', ')}]\n`;
-      const toml = path.join(dir, 'config.toml');
       return [
         {
-          file: toml,
-          apply: (current) => mergeCodexToml(current ?? '', block, NET_SERVER),
+          file: path.join(dir, 'config.toml'),
+          apply: (current) => addCodexServer(current, block),
           remove: (current) => removeCodexServer(current),
         },
         groupedHooksEdit(path.join(dir, 'hooks.json'), {
@@ -310,7 +358,12 @@ export function planRuntime(runtime: SetupRuntime, e: SetupEnv): FileEdit[] {
       }];
     }
     case 'copilot-cli': {
-      const handler = (event: string): Json => ({ type: 'command', bash: hook(event), powershell: hook(event), timeoutSec: 5 });
+      const handler = (event: string): Json => ({
+        type: 'command',
+        bash: shell({ mbd: e.mbd, platform: 'linux' }, hookArgs(event)),
+        powershell: powershell([...e.mbd, ...hookArgs(event)]),
+        timeoutSec: 5,
+      });
       return [
         jsonServerEdit(path.join(dir, 'mcp-config.json'), 'mcpServers', { type: 'local', command, args: mcpArgs, tools: ['*'] }),
         wholeFile(
@@ -345,16 +398,18 @@ export function planRuntime(runtime: SetupRuntime, e: SetupEnv): FileEdit[] {
   }
 }
 
-/** The `openclaw mcp set` command that registers the MCP server. */
+/** The `openclaw mcp set` command that registers the MCP server (POSIX shell). */
 export function openclawMcpCommand(e: SetupEnv): string {
   const entry = JSON.stringify({ command: e.mbd[0], args: [...e.mbd.slice(1), 'net', 'mcp', '--runtime', 'openclaw'] });
-  return `openclaw mcp set ${NET_SERVER} '${entry}'`;
+  return `openclaw mcp set ${NET_SERVER} ${quoteSh(entry)}`;
 }
 
 // ─── state: original bytes for byte-for-byte removal ─────────────────────────
 
 interface FileRecord {
   runtime: SetupRuntime;
+  /** Index of the edit in planRuntime(runtime), so removal works even if paths moved. */
+  edit: number;
   existed: boolean;
   /** Original bytes, base64 (absent when the file did not exist). */
   original?: string;
@@ -366,7 +421,7 @@ interface FileRecord {
 interface SetupState {
   version: 1;
   files: Record<string, FileRecord>;
-  /** Directories setup created, deepest first, removed if empty. */
+  /** Directories setup created, removed again if empty. */
   dirs: string[];
 }
 
@@ -384,13 +439,51 @@ async function readState(): Promise<SetupState> {
   }
 }
 
+async function writeBytes(file: string, data: Buffer | string, mode: number): Promise<void> {
+  const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    await fs.writeFile(tmp, data, { mode, flag: 'wx' });
+    await fs.chmod(tmp, mode).catch(() => {});
+    await fs.rename(tmp, file);
+  } catch (err) {
+    await fs.unlink(tmp).catch(() => {});
+    throw err;
+  }
+}
+
 async function writeState(state: SetupState): Promise<void> {
   if (!Object.keys(state.files).length && !state.dirs.length) {
     await fs.rm(statePath(), { force: true });
     return;
   }
   await ensureConfigDir();
-  await atomicWriteFile(statePath(), JSON.stringify(state, null, 2) + '\n');
+  await writeBytes(statePath(), JSON.stringify(state, null, 2) + '\n', 0o600);
+}
+
+/** Run `fn` holding the setup lock, so two setups never interleave. */
+async function withLock<T>(fn: () => Promise<T>): Promise<T> {
+  await ensureConfigDir();
+  const lock = path.join(getConfigDir(), 'net-setup.lock');
+  try {
+    await fs.writeFile(lock, String(process.pid), { flag: 'wx' });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    const pid = Number(await fs.readFile(lock, 'utf-8').catch(() => ''));
+    let alive = false;
+    try {
+      if (pid) process.kill(pid, 0);
+      alive = Boolean(pid);
+    } catch {
+      alive = false;
+    }
+    if (alive) throw new CliError('Another mbd net setup is running.', { hint: 'Wait for it to finish, then retry.' });
+    await fs.writeFile(lock, String(process.pid)); // stale lock from a crashed run
+  }
+  try {
+    return await fn();
+  } finally {
+    await fs.rm(lock, { force: true });
+  }
 }
 
 function sha(data: Buffer | string): string {
@@ -406,7 +499,20 @@ async function readBytes(file: string): Promise<Buffer | undefined> {
   }
 }
 
-/** Create missing parent directories, returning the ones created (deepest first). */
+/** The real path of a config file (follows symlinks of the file and its directories). */
+async function realFile(file: string): Promise<string> {
+  try {
+    return await fs.realpath(file);
+  } catch {
+    try {
+      return path.join(await fs.realpath(path.dirname(file)), path.basename(file));
+    } catch {
+      return file;
+    }
+  }
+}
+
+/** Create missing parent directories, returning the ones created. */
 async function mkdirs(dir: string): Promise<string[]> {
   const created: string[] = [];
   let d = dir;
@@ -423,86 +529,126 @@ async function mkdirs(dir: string): Promise<string[]> {
 export interface Change {
   runtime: SetupRuntime;
   file: string;
-  action: 'created' | 'updated' | 'unchanged' | 'restored' | 'deleted' | 'cleaned';
+  action: 'created' | 'updated' | 'unchanged' | 'restored' | 'deleted' | 'cleaned' | 'failed';
+  error?: string;
+}
+
+async function applyEdit(runtime: SetupRuntime, index: number, edit: FileEdit, state: SetupState): Promise<Change> {
+  const file = await realFile(edit.file);
+  for (let attempt = 0; ; attempt++) {
+    const before = await readBytes(file);
+    const next = edit.apply(before?.toString('utf-8'));
+    if (before !== undefined && before.toString('utf-8') === next) return { runtime, file, action: 'unchanged' };
+
+    const rec = state.files[file];
+    const mode = before ? (await fs.stat(file)).mode & 0o777 : undefined;
+    if (!rec) {
+      // First touch: what is there now is the original to restore.
+      state.files[file] = { runtime, edit: index, existed: before !== undefined, original: before?.toString('base64'), written: sha(next), mode };
+    } else if ((before !== undefined && sha(before) !== rec.written) || (before === undefined && rec.existed)) {
+      // The user changed the file since setup last wrote it. Their version,
+      // minus our earlier entries, becomes the original, so --remove keeps it.
+      const theirs = before === undefined ? null : edit.remove(before.toString('utf-8'));
+      state.files[file] = {
+        runtime,
+        edit: index,
+        existed: theirs !== null,
+        original: theirs === null ? undefined : Buffer.from(theirs).toString('base64'),
+        written: sha(next),
+        mode: mode ?? rec.mode,
+      };
+    } else {
+      state.files[file] = { ...rec, runtime, edit: index, written: sha(next) };
+    }
+    for (const d of await mkdirs(path.dirname(file))) if (!state.dirs.includes(d)) state.dirs.push(d);
+    // Record first: a crash after this line can still be undone by --remove.
+    await writeState(state);
+
+    // A live writer (Claude Code rewrites ~/.claude.json) may have changed the
+    // file meanwhile; re-apply on the fresh content once instead of clobbering it.
+    const again = await readBytes(file);
+    if ((again === undefined) !== (before === undefined) || (again && before && !again.equals(before))) {
+      if (attempt === 0) continue;
+      throw new CliError(`${file} keeps changing while setup writes it; close the program using it and retry.`);
+    }
+    await writeBytes(file, next, state.files[file].mode ?? 0o644);
+    return { runtime, file, action: before === undefined ? 'created' : 'updated' };
+  }
 }
 
 export async function applySetup(runtimes: SetupRuntime[], e: SetupEnv): Promise<Change[]> {
-  const state = await readState();
-  const changes: Change[] = [];
-  for (const runtime of runtimes) {
-    for (const edit of planRuntime(runtime, e)) {
-      const before = await readBytes(edit.file);
-      const next = edit.apply(before?.toString('utf-8'));
-      if (before !== undefined && before.toString('utf-8') === next) {
-        changes.push({ runtime, file: edit.file, action: 'unchanged' });
-        continue;
+  return withLock(async () => {
+    const state = await readState();
+    const changes: Change[] = [];
+    for (const runtime of runtimes) {
+      const edits = planRuntime(runtime, e);
+      for (let i = 0; i < edits.length; i++) {
+        try {
+          changes.push(await applyEdit(runtime, i, edits[i], state));
+        } catch (err) {
+          // One unreadable file must not leave the other runtimes half done.
+          changes.push({ runtime, file: edits[i].file, action: 'failed', error: (err as Error).message });
+          break;
+        }
       }
-      if (!state.files[edit.file]) {
-        const mode = before ? (await fs.stat(edit.file)).mode & 0o777 : undefined;
-        state.files[edit.file] = {
-          runtime,
-          existed: before !== undefined,
-          original: before?.toString('base64'),
-          written: '',
-          mode,
-        };
-      }
-      const created = await mkdirs(path.dirname(edit.file));
-      for (const d of created) if (!state.dirs.includes(d)) state.dirs.push(d);
-      await atomicWriteFile(edit.file, next, state.files[edit.file].mode ?? 0o644);
-      state.files[edit.file].written = sha(next);
-      await writeState(state); // after each file, so a crash midway can still be undone
-      changes.push({ runtime, file: edit.file, action: before === undefined ? 'created' : 'updated' });
     }
-  }
-  return changes;
+    return changes;
+  });
 }
 
 export async function removeSetup(runtimes: SetupRuntime[] | 'all', e: SetupEnv): Promise<Change[]> {
-  const state = await readState();
-  const changes: Change[] = [];
-  const editsByFile = new Map<string, FileEdit>();
-  for (const runtime of SETUP_RUNTIMES) for (const edit of planRuntime(runtime, e)) editsByFile.set(edit.file, edit);
-
-  for (const [file, rec] of Object.entries(state.files)) {
-    if (runtimes !== 'all' && !runtimes.includes(rec.runtime)) continue;
-    const current = await readBytes(file);
-    if (current === undefined) {
-      changes.push({ runtime: rec.runtime, file, action: 'unchanged' });
-    } else if (sha(current) === rec.written) {
-      // Untouched since setup: put the original bytes back exactly.
-      if (rec.existed) {
-        await fs.writeFile(file, Buffer.from(rec.original ?? '', 'base64'));
-        if (rec.mode !== undefined) await fs.chmod(file, rec.mode).catch(() => {});
-        changes.push({ runtime: rec.runtime, file, action: 'restored' });
-      } else {
-        await fs.rm(file, { force: true });
-        changes.push({ runtime: rec.runtime, file, action: 'deleted' });
+  return withLock(async () => {
+    const state = await readState();
+    const changes: Change[] = [];
+    for (const [file, rec] of Object.entries(state.files)) {
+      if (runtimes !== 'all' && !runtimes.includes(rec.runtime)) continue;
+      const original = rec.existed ? Buffer.from(rec.original ?? '', 'base64') : undefined;
+      try {
+        const current = await readBytes(file);
+        if (current === undefined) {
+          changes.push({ runtime: rec.runtime, file, action: 'unchanged' });
+        } else if (original && current.equals(original)) {
+          changes.push({ runtime: rec.runtime, file, action: 'unchanged' }); // setup never got to write it
+        } else if (sha(current) === rec.written) {
+          // Untouched since setup: put the original bytes back exactly.
+          if (original) {
+            await writeBytes(file, original, rec.mode ?? 0o644);
+            changes.push({ runtime: rec.runtime, file, action: 'restored' });
+          } else {
+            await fs.rm(file, { force: true });
+            changes.push({ runtime: rec.runtime, file, action: 'deleted' });
+          }
+        } else {
+          // Edited since setup: take out only our entries, keep the rest.
+          const edit = planRuntime(rec.runtime, e)[rec.edit];
+          if (!edit) throw new CliError(`no edit recorded for ${file}`);
+          const next = edit.remove(current.toString('utf-8'));
+          if (next === null) {
+            if (original) await writeBytes(file, original, rec.mode ?? 0o644);
+            else await fs.rm(file, { force: true });
+            changes.push({ runtime: rec.runtime, file, action: original ? 'restored' : 'deleted' });
+          } else {
+            await writeBytes(file, next, rec.mode ?? 0o644);
+            changes.push({ runtime: rec.runtime, file, action: 'cleaned' });
+          }
+        }
+        delete state.files[file];
+      } catch (err) {
+        changes.push({ runtime: rec.runtime, file, action: 'failed', error: (err as Error).message });
       }
-    } else {
-      // Edited since setup: take out only our entries, keep the rest.
-      const edit = editsByFile.get(file);
-      const next = edit ? edit.remove(current.toString('utf-8')) : current.toString('utf-8');
-      if (next === null) {
-        await fs.rm(file, { force: true });
-        changes.push({ runtime: rec.runtime, file, action: 'deleted' });
-      } else {
-        await atomicWriteFile(file, next, rec.mode ?? 0o644);
-        changes.push({ runtime: rec.runtime, file, action: 'cleaned' });
-      }
+      await writeState(state); // after each file, so a failure midway resumes cleanly
     }
-    delete state.files[file];
-  }
 
-  // Directories setup created: remove each one no tracked file still needs,
-  // deepest first; rmdir only succeeds when the user put nothing else there.
-  const needed = (dir: string) => Object.keys(state.files).some((f) => f.startsWith(dir + path.sep));
-  for (const dir of [...state.dirs].sort((a, b) => b.length - a.length)) {
-    if (!needed(dir)) await fs.rmdir(dir).catch(() => {});
-  }
-  state.dirs = state.dirs.filter(needed);
-  await writeState(state);
-  return changes;
+    // Directories setup created: remove each one no tracked file still needs,
+    // deepest first; rmdir only succeeds when the user put nothing else there.
+    const needed = (dir: string) => Object.keys(state.files).some((f) => f.startsWith(dir + path.sep));
+    for (const dir of [...state.dirs].sort((a, b) => b.length - a.length)) {
+      if (!needed(dir)) await fs.rmdir(dir).catch(() => {});
+    }
+    state.dirs = state.dirs.filter(needed);
+    await writeState(state);
+    return changes;
+  });
 }
 
 /** Runtimes that look installed: config dir present or binary on PATH. */

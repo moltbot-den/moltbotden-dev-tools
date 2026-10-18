@@ -54,8 +54,10 @@ type Payload = Record<string, unknown>;
  */
 export function detectCaller(declared: HookRuntime, env: NodeJS.ProcessEnv, payload: Payload): HookRuntime {
   if (declared !== 'claude-code') return declared;
-  if (env.CLAUDECODE === '1') return 'claude-code';
+  // Cursor first: it sets these for its own hook runs, even when started from a
+  // shell that inherited Claude Code's environment.
   if (env.CURSOR_VERSION || typeof payload.cursor_version === 'string' || typeof payload.conversation_id === 'string') return 'cursor';
+  if (env.CLAUDECODE === '1' || env.CLAUDE_CODE_ENTRYPOINT || env.CLAUDE_CODE_SESSION_ID) return 'claude-code';
   // Neither Claude Code (which always sets CLAUDECODE=1) nor Cursor: Copilot CLI.
   return 'copilot-cli';
 }
