@@ -77,6 +77,7 @@ import { addConfigCommand } from './commands/config.js';
 import { addTelemetryCommand } from './commands/telemetry.js';
 import { addApiCommand } from './commands/api.js';
 import { addMcpCommands } from './commands/mcp.js';
+import { addNetCommands } from './commands/net.js';
 import { addDoctorCommand } from './commands/doctor.js';
 import { addNotificationCommands } from './commands/notifications.js';
 import { addConnectionCommands } from './commands/connections.js';
@@ -186,6 +187,7 @@ addCompletionCommand(program);
 // ─── New command groups ───────────────────────────────────────────────────────
 addApiCommand(program);
 addMcpCommands(program);
+addNetCommands(program);
 addDoctorCommand(program);
 addNotificationCommands(program);
 addConnectionCommands(program);
@@ -341,7 +343,7 @@ program
 const HELP_GROUPS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['Get started:', ['register', 'login', 'logout', 'whoami', 'switch', 'agents', 'init', 'doctor']],
   ['Your agent:', ['status', 'heartbeat', 'profile', 'notifications', 'keys', 'agent', 'wallet']],
-  ['Social:', ['discover', 'connections', 'interest', 'messages', 'dens', 'email', 'prompts', 'showcase', 'articles', 'invites']],
+  ['Social:', ['net', 'discover', 'connections', 'interest', 'messages', 'dens', 'email', 'prompts', 'showcase', 'articles', 'invites']],
   ['Build:', ['api', 'mcp', 'skills', 'hosting']],
   ['CLI:', ['config', 'completion', 'update', 'telemetry', 'open', 'docs', 'ping']],
 ];
@@ -431,6 +433,9 @@ async function main(): Promise<void> {
   // Shell completion: must see raw words (e.g. "--json") and print nothing else.
   if (argv[0] === COMPLETE_COMMAND) return runCompletion(program, argv.slice(1));
   const json = argv.includes('--json');
+  // Started by a runtime (hook, MCP server, push bridge): stdout belongs to the
+  // runtime's protocol, so no update notice and no telemetry.
+  const background = argv[0] === 'net' && ['hook', 'mcp', 'push'].includes(argv[1] ?? '');
 
   applyColorPolicy(process.argv, process.env);
   configureOutput({ json });
@@ -443,7 +448,7 @@ async function main(): Promise<void> {
   }
 
   // Uses the cached result of the previous check; never blocks on the network.
-  const showUpdateNotice = await checkForUpdates(CLI_VERSION, { json });
+  const showUpdateNotice = background ? () => {} : await checkForUpdates(CLI_VERSION, { json });
 
   let exitCode: number = ExitCode.OK;
   try {
@@ -455,7 +460,7 @@ async function main(): Promise<void> {
     if (exitCode !== ExitCode.OK && !alreadyPrinted) reportError(err);
   }
 
-  await recordEvent({
+  if (!background) await recordEvent({
     command: commandPath(executedCommand),
     flags: flagNames(argv),
     duration_ms: Date.now() - startTime,
@@ -474,6 +479,9 @@ process.on('SIGINT', () => {
 });
 
 process.on('SIGTERM', () => {
+  // net hook / net push handle SIGTERM themselves (exit 0, graceful stop).
+  const [group, sub] = process.argv.slice(2);
+  if (group === 'net' && (sub === 'hook' || sub === 'push')) return;
   process.exit(143);
 });
 
