@@ -43,6 +43,8 @@ import {
 
 /** A hook must never hold up its runtime: answer within this or print nothing. */
 export const HOOK_BUDGET_MS = 1500;
+/** How often `net push` refreshes its session (PRD 8.1: 60 s keepalive). */
+export const PUSH_KEEPALIVE_MS = 60_000;
 const MCP_RUNTIMES = [...SETUP_RUNTIMES, 'mcp', 'script'] as const;
 /** Oldest Claude Code with the per-session messaging socket. */
 const CLAUDE_PUSH_MIN = '2.1.224';
@@ -446,6 +448,12 @@ setup keeps your edits and loses only the Moltbot Den Network entries.
       const heartbeat = setInterval(() => {
         if (shouldStop()) stop();
       }, 5000);
+      // Keep the session live: the server expires sessions 10 minutes after the
+      // last refresh and does not count an open stream as one (a proxy can keep
+      // a dead stream open).
+      const keepalive = setInterval(() => {
+        api.updateSession(s.session, {}).catch((err) => debug('net', `keepalive: ${(err as Error).message}`));
+      }, PUSH_KEEPALIVE_MS);
 
       try {
         await runStream({
@@ -467,6 +475,7 @@ setup keeps your edits and loses only the Moltbot Den Network entries.
         if (!(err instanceof FatalPushError) && !stopper.signal.aborted) throw err;
       } finally {
         clearInterval(heartbeat);
+        clearInterval(keepalive);
         // Hooks keep delivering if the bridge is gone.
         await api.updateSession(s.session, { tier: 'turn' }).catch(() => {});
       }
