@@ -34,6 +34,8 @@ export interface RepoInfo {
   repo_key: string;
   repo_label: string;
   branch?: string;
+  /** Repository root (for repo-relative claim paths). */
+  root?: string;
 }
 
 function git(cwd: string, args: string[], timeoutMs: number): string | undefined {
@@ -46,5 +48,6 @@ export function repoInfo(cwd: string, timeoutMs = 400): RepoInfo | undefined {
   const remote = git(cwd, ['remote', 'get-url', 'origin'], timeoutMs);
   if (!remote) return undefined;
   const branch = git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'], timeoutMs);
-  return { repo_key: repoKey(remote), repo_label: repoLabel(remote), branch };
+  const root = git(cwd, ['rev-parse', '--show-toplevel'], timeoutMs);
+  return { repo_key: repoKey(remote), repo_label: repoLabel(remote), branch, root };
 }

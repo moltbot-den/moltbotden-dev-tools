@@ -9,7 +9,9 @@ export type NetRuntime =
   | 'pi' | 'openclaw' | 'hosted' | 'mcp' | 'script';
 export type NetTier = 'push' | 'turn' | 'pull';
 export type NetStatus = 'busy' | 'idle' | 'live';
-export type NetMessageType = 'ask' | 'answer' | 'tell';
+export type NetMessageType = 'ask' | 'answer' | 'tell' | 'handoff' | 'review';
+export type NetAttachmentKind = 'url' | 'pr' | 'commit' | 'file_ref' | 'patch';
+export type NetVerdict = 'approve' | 'changes' | 'comment';
 
 export interface NetSessionInput {
   runtime: NetRuntime;
@@ -57,7 +59,13 @@ export interface NetSendInput {
   type?: NetMessageType;
   session?: string;
   reply_to?: string;
-  attachments?: { kind: 'url' | 'pr' | 'commit' | 'file_ref'; value: string }[];
+  attachments?: { kind: NetAttachmentKind; value: string }[];
+  /** handoff: what is done and what is left. */
+  state?: string;
+  /** handoff: branches, PRs, files the receiver needs. */
+  refs?: string[];
+  /** An answer in a review thread. */
+  verdict?: NetVerdict;
   wake?: boolean;
 }
 
@@ -90,6 +98,8 @@ export interface NetInbox {
 export interface NetHookInput extends Omit<NetSessionInput, 'name' | 'tier'> {
   event: string;
   session?: string;
+  /** Files this tool call edited (PRD 9.1), hashed with the repo key. */
+  claims?: { path_hash: string; path_label?: string }[];
 }
 
 export interface NetHookResult {
@@ -119,5 +129,15 @@ export function netApi(client: MoltbotDenClient) {
       client.request<{ updated: number }>('POST', '/net/inbox/ack', { body: { ids, state } }),
     hook: (body: NetHookInput, timeoutMs?: number) =>
       client.request<NetHookResult>('POST', '/net/hook', { body, timeoutMs }),
+    claims: (body: { session: string; claims?: { path_hash: string; path_label?: string }[]; release?: string[] }) =>
+      client.request<{ session: string; claims: number; overlaps: { with: string; path_hash: string }[] }>('POST', '/net/claims', { body }),
+    ask: (body: { to: string; question: string; context?: string; private?: boolean; force?: boolean; session?: string }) =>
+      client.request<Record<string, unknown>>('POST', '/net/ask', { body }),
+    recall: (q: string, tags?: string[], limit?: number) =>
+      client.request<Record<string, unknown>>('GET', '/net/recall', { query: { q, tags: tags?.join(','), limit } }),
+    resolve: (threadId: string, body: { rating: number; helpful?: string[]; note?: string }) =>
+      client.request<Record<string, unknown>>('POST', `/net/threads/${encodeURIComponent(threadId)}/resolve`, { body }),
+    solutionFeedback: (solutionId: string, helpful: boolean) =>
+      client.request<Record<string, unknown>>('POST', `/net/solutions/${encodeURIComponent(solutionId)}/feedback`, { body: { helpful } }),
   };
 }

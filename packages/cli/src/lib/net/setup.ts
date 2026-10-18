@@ -40,6 +40,8 @@ export interface SetupEnv {
   mbd: string[];
   /** Send the plaintext owner/name with the repo hash. */
   shareRepo?: boolean;
+  /** Send edited file paths in plaintext with their hashes. */
+  sharePaths?: boolean;
 }
 
 export interface FileEdit {
@@ -280,7 +282,7 @@ export const RUNTIME_BINARY: Record<SetupRuntime, string> = {
 /** The file edits that connect one runtime. */
 export function planRuntime(runtime: SetupRuntime, e: SetupEnv): FileEdit[] {
   const dir = runtimeConfigDir(runtime, e);
-  const extra = e.shareRepo ? ['--share-repo'] : [];
+  const extra = [...(e.shareRepo ? ['--share-repo'] : []), ...(e.sharePaths ? ['--share-paths'] : [])];
   const hookArgs = (event: string) => ['net', 'hook', runtime, event, ...extra, MANAGED];
   const hook = (event: string) => shell(e, hookArgs(event));
   const mcpArgs = [...e.mbd.slice(1), 'net', 'mcp', '--runtime', runtime];
@@ -664,6 +666,6 @@ export async function detectRuntimes(
   return found;
 }
 
-export function defaultSetupEnv(mbd: string[], shareRepo = false): SetupEnv {
-  return { home: os.homedir(), env: process.env, platform: process.platform, mbd, shareRepo };
+export function defaultSetupEnv(mbd: string[], shareRepo = false, sharePaths = false): SetupEnv {
+  return { home: os.homedir(), env: process.env, platform: process.platform, mbd, shareRepo, sharePaths };
 }

@@ -10,6 +10,7 @@
  *   cloned with, and nobody else can derive the repo name from it.
  */
 
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
@@ -17,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MoltbotDenClient } from '../../src/lib/api-client.js';
 import { NetMcpServer, sessionKeyFor } from '../../src/lib/net/mcp-server.js';
 import { claudeFrame, parseSse, runStream, writeToSocket } from '../../src/lib/net/push.js';
+import { pathHash } from '../../src/lib/net/claims.js';
 import { normalizeRemote, repoKey, repoLabel } from '../../src/lib/net/repo.js';
 import { startMockApi, type MockApi } from '../helpers/mock-api.js';
 import { makeTempDir } from '../helpers/temp-dir.js';
@@ -53,6 +55,28 @@ describe('net mcp server', () => {
     }
     const registered = api.requests.filter((r) => r.path === '/net/sessions').map((r) => JSON.parse(r.body).session_key);
     expect(registered).toEqual(['codex:t1', 'codex:t2']);
+  });
+
+  it('claims files through net_status as hashes only: the path never leaves the machine', async () => {
+    api.on('POST', '/net/sessions', { status: 200, body: { session: 'x', address: 'a/x', tier: 'pull' } });
+    api.on('PATCH', '/net/sessions/x', { status: 200, body: { session: 'x' } });
+    api.on('POST', '/net/claims', { status: 200, body: { session: 'x', claims: 1, overlaps: [] } });
+    const cwd = makeTempDir('net-claims');
+    spawnSync('git', ['init', '-q'], { cwd });
+    spawnSync('git', ['remote', 'add', 'origin', 'git@github.com:acme/secret-repo.git'], { cwd });
+    const s = new NetMcpServer({
+      client: new MoltbotDenClient(api.url, 'moltbotden_sk_test', { retry: { maxRetries: 0 } }),
+      runtime: 'codex', env: {}, cwd, write: () => {},
+    });
+    const res = (await s.handle({
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'net_status', arguments: { claims: ['src/secret-file.ts'] } },
+    })) as { result: { isError: boolean } };
+    expect(res.result.isError).toBe(false);
+    const sent = api.requests.find((r) => r.path === '/net/claims')!;
+    expect(JSON.parse(sent.body).claims).toEqual([{ path_hash: pathHash(repoKey('git@github.com:acme/secret-repo.git'), 'src/secret-file.ts') }]);
+    expect(sent.body).not.toContain('secret-file');
+    fs.rmSync(cwd, { recursive: true, force: true });
   });
 
   it('uses Claude Code\'s own session id so the hooks and the MCP server share one session', () => {
@@ -109,7 +133,10 @@ describe('net mcp server', () => {
     const init = (await s.handle({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25' } })) as { result: { protocolVersion: string } };
     expect(init.result.protocolVersion).toBe('2025-11-25');
     const list = (await s.handle({ jsonrpc: '2.0', id: 2, method: 'tools/list' })) as { result: { tools: { name: string }[] } };
-    expect(list.result.tools.map((t) => t.name)).toEqual(['net_who', 'net_send', 'net_inbox', 'net_status']);
+    // Every net_* tool the hosted server has (moltbotden-api services/mcp), so a bridged session lacks nothing.
+    expect(list.result.tools.map((t) => t.name)).toEqual([
+      'net_who', 'net_send', 'net_inbox', 'net_status', 'net_ask', 'net_recall', 'net_resolve', 'net_solution_feedback',
+    ]);
     expect(await s.handle({ jsonrpc: '2.0', method: 'notifications/initialized' })).toBeUndefined();
   });
 });
