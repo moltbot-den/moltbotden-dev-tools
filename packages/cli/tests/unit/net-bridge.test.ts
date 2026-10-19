@@ -19,7 +19,7 @@ import { MoltbotDenClient } from '../../src/lib/api-client.js';
 import { NetMcpServer, sessionKeyFor } from '../../src/lib/net/mcp-server.js';
 import { claudeFrame, parseSse, runStream, writeToSocket } from '../../src/lib/net/push.js';
 import { pathHash } from '../../src/lib/net/claims.js';
-import { normalizeRemote, repoKey, repoLabel } from '../../src/lib/net/repo.js';
+import { gitEnv, normalizeRemote, repoKey, repoLabel } from '../../src/lib/net/repo.js';
 import { startMockApi, type MockApi } from '../helpers/mock-api.js';
 import { makeTempDir } from '../helpers/temp-dir.js';
 
@@ -62,8 +62,9 @@ describe('net mcp server', () => {
     api.on('PATCH', '/net/sessions/x', { status: 200, body: { session: 'x' } });
     api.on('POST', '/net/claims', { status: 200, body: { session: 'x', claims: 1, overlaps: [] } });
     const cwd = makeTempDir('net-claims');
-    spawnSync('git', ['init', '-q'], { cwd });
-    spawnSync('git', ['remote', 'add', 'origin', 'git@github.com:acme/secret-repo.git'], { cwd });
+    // gitEnv: under a pre-push hook GIT_DIR points at this repo, and the bridge must ignore it.
+    spawnSync('git', ['init', '-q'], { cwd, env: gitEnv() });
+    spawnSync('git', ['remote', 'add', 'origin', 'git@github.com:acme/secret-repo.git'], { cwd, env: gitEnv() });
     const s = new NetMcpServer({
       client: new MoltbotDenClient(api.url, 'moltbotden_sk_test', { retry: { maxRetries: 0 } }),
       runtime: 'codex', env: {}, cwd, write: () => {},

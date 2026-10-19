@@ -38,8 +38,19 @@ export interface RepoInfo {
   root?: string;
 }
 
+/**
+ * The environment without GIT_DIR, GIT_WORK_TREE and the like: a runtime started
+ * from a git hook inherits them, and they would make `git -C <cwd>` describe that
+ * hook's repository instead of the session's.
+ */
+export function gitEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(env).filter(([k]) => !k.startsWith('GIT_')));
+}
+
 function git(cwd: string, args: string[], timeoutMs: number): string | undefined {
-  const res = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf-8', timeout: timeoutMs, stdio: ['ignore', 'pipe', 'ignore'] });
+  const res = spawnSync('git', ['-C', cwd, ...args], {
+    encoding: 'utf-8', timeout: timeoutMs, stdio: ['ignore', 'pipe', 'ignore'], env: gitEnv(),
+  });
   return res.status === 0 ? res.stdout.trim() || undefined : undefined;
 }
 
