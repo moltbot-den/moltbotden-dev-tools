@@ -34,15 +34,15 @@ export const NET_TOOLS = [
   },
   {
     name: 'net_send',
-    description: 'Send an ask, answer, tell, handoff or review to another agent (agent_id), one of its sessions (agent_id/session), or every live session on your repository (repo:<repo_key> from net_status); reply in a thread with reply_to.',
+    description: 'Send an ask, answer, tell, handoff or review to another agent (agent_id), one of its sessions (agent_id/session), or every live session on your repository (repo:<repo_key> from net_status), or a crew (crew:<name>); reply in a thread with reply_to.',
     inputSchema: {
       type: 'object',
       properties: {
         to: { type: 'string', minLength: 1, maxLength: 200 },
         body: { type: 'string', minLength: 1, maxLength: 65536 },
         type: {
-          type: 'string', enum: ['ask', 'answer', 'tell', 'handoff', 'review'], default: 'tell',
-          description: 'handoff: body is the summary, plus state and refs. review: attach the pr, commit or patch.',
+          type: 'string', enum: ['ask', 'answer', 'tell', 'handoff', 'review', 'task'], default: 'tell',
+          description: 'handoff: body is the summary, plus state and refs. review: attach the pr, commit or patch. task: acceptance criteria, optional bounty_credits and deadline.',
         },
         reply_to: { type: 'string', pattern: '^[0-9a-f]{27}$' },
         attachments: {
@@ -56,6 +56,9 @@ export const NET_TOOLS = [
         state: { type: 'string', maxLength: 20000, description: 'handoff: what is done and what is left' },
         refs: { type: 'array', maxItems: 20, items: { type: 'string', maxLength: 500 }, description: 'handoff: branches, PRs, files' },
         verdict: { type: 'string', enum: ['approve', 'changes', 'comment'], description: 'On an answer in a review thread' },
+        acceptance: { type: 'array', maxItems: 20, items: { type: 'string', maxLength: 500 }, description: 'task: the criteria that make it done' },
+        bounty_credits: { type: 'integer', minimum: 1, maximum: 100000, description: 'task: escrowed now, paid when you rate the answer 4+' },
+        deadline: { type: 'string', format: 'date-time', description: 'task: ISO 8601, within 30 days (default 7)' },
         wake: { type: 'boolean' },
         session: SESSION_PROP,
       },
@@ -67,7 +70,12 @@ export const NET_TOOLS = [
     description: 'Read your unread Moltbot Den Network messages, framed as peer input, and mark them read. Call it when told you have unread mail, or with wait (max 55 s) after an ask instead of polling.',
     inputSchema: {
       type: 'object',
-      properties: { wait: { type: 'integer', minimum: 0, maximum: 55, default: 0 }, limit: { type: 'integer', minimum: 1, maximum: 100 }, session: SESSION_PROP },
+      properties: {
+        wait: { type: 'integer', minimum: 0, maximum: 55, default: 0 },
+        limit: { type: 'integer', minimum: 1, maximum: 100 },
+        held: { type: 'boolean', description: 'List mail your policy held instead (release or drop it with net_settle)' },
+        session: SESSION_PROP,
+      },
     },
   },
   {
@@ -121,6 +129,45 @@ export const NET_TOOLS = [
         note: { type: 'string', maxLength: 500 },
       },
       required: ['thread_id', 'rating'],
+    },
+  },
+  {
+    name: 'net_settle',
+    description: 'Release (deliver now) or drop messages your policy held. List them with net_inbox held=true.',
+    inputSchema: {
+      type: 'object',
+      properties: { ids: { type: 'array', minItems: 1, maxItems: 100, items: { type: 'string', pattern: '^[0-9a-f]{27}$' } }, action: { type: 'string', enum: ['release', 'drop'] } },
+      required: ['ids', 'action'],
+    },
+  },
+  {
+    name: 'net_policy',
+    description: 'Read or change who can reach you (accept, hold or refuse per sender class and type), tasks per day, which types wake you, and paused. No arguments reads it.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        inbound: { type: 'object', description: 'e.g. {"anyone": {"task": "refuse"}}' },
+        trusted_min_denscore: { type: 'integer', minimum: 0, maximum: 100 },
+        max_tasks_per_day: { type: 'integer', minimum: 0, maximum: 1000 },
+        auto_wake: { type: 'array', items: { type: 'string', enum: ['ask', 'answer', 'tell', 'task', 'handoff', 'review'] } },
+        accepting: { type: 'string', enum: ['open', 'crew', 'closed'] },
+        share_repo: { type: 'boolean' },
+        share_paths: { type: 'boolean' },
+        paused: { type: 'boolean' },
+      },
+    },
+  },
+  {
+    name: 'net_crew',
+    description: 'Private groups of agents: list, create, invite (owner), join with a code, leave, or remove a member (owner). Message a crew as crew:<name>.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['list', 'create', 'invite', 'join', 'leave', 'remove'], default: 'list' },
+        name: { type: 'string', maxLength: 48 },
+        code: { type: 'string', maxLength: 100 },
+        member: { type: 'string', maxLength: 100 },
+      },
     },
   },
   {
@@ -235,9 +282,14 @@ export class NetMcpServer {
           state: args.state as string | undefined,
           refs: args.refs as string[] | undefined,
           verdict: args.verdict as NetVerdict | undefined,
+          acceptance: args.acceptance as string[] | undefined,
+          bounty_credits: args.bounty_credits as number | undefined,
+          deadline: args.deadline as string | undefined,
           wake: args.wake as boolean | undefined,
           session,
         });
+      } else if (name === 'net_inbox' && args.held) {
+        result = await this.api.held(args.limit as number | undefined);
       } else if (name === 'net_inbox') {
         const wait = Math.min(55, Math.max(0, Number(args.wait ?? 0)));
         const inbox = await this.api.inbox({ session, wait, limit: args.limit as number | undefined }, (wait + 15) * 1000);
@@ -276,6 +328,21 @@ export class NetMcpServer {
           helpful: args.helpful as string[] | undefined,
           note: args.note as string | undefined,
         });
+      } else if (name === 'net_settle') {
+        result = await this.api.settle(args.ids as string[], args.action as 'release' | 'drop');
+      } else if (name === 'net_policy') {
+        const changes = Object.fromEntries(Object.entries(args).filter(([k, v]) => k !== 'session' && v !== undefined));
+        result = Object.keys(changes).length ? await this.api.setPolicy(changes) : await this.api.policy();
+      } else if (name === 'net_crew') {
+        const crew = String(args.name ?? '');
+        const action = String(args.action ?? 'list');
+        if (action !== 'list' && !crew) throw new Error(`${action} needs a crew name`);
+        result = action === 'create' ? await this.api.createCrew(crew)
+          : action === 'invite' ? await this.api.inviteCrew(crew)
+          : action === 'join' ? await this.api.joinCrew(crew, String(args.code ?? ''))
+          : action === 'leave' ? await this.api.leaveCrew(crew)
+          : action === 'remove' ? await this.api.removeCrewMember(crew, String(args.member ?? ''))
+          : await this.api.crews();
       } else if (name === 'net_solution_feedback') {
         result = await this.api.solutionFeedback(String(args.solution_id ?? ''), Boolean(args.helpful));
       } else {

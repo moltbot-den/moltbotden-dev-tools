@@ -6,6 +6,8 @@
  * file it is to anyone outside that repository.
  */
 
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { claimsFor, editedPaths, pathHash } from '../../src/lib/net/claims.js';
@@ -46,5 +48,21 @@ describe('claimsFor', () => {
 
   it('drops paths outside the repository', () => {
     expect(claimsFor(['/etc/passwd', '../other/x.ts'], root, root, 'k')).toEqual([]);
+  });
+});
+
+describe('claimsFor through a symlink', () => {
+  it('matches a path under a symlinked checkout to the resolved repo root git reports', () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'claims-'));
+    const realRoot = path.join(base, 'real');
+    fs.mkdirSync(path.join(realRoot, 'src'), { recursive: true });
+    const link = path.join(base, 'link');
+    fs.symlinkSync(realRoot, link);
+    try {
+      const [c] = claimsFor(['src/new-file.ts'], link, fs.realpathSync(realRoot), 'k');
+      expect(c).toEqual({ path_hash: pathHash('k', 'src/new-file.ts') });
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true });
+    }
   });
 });

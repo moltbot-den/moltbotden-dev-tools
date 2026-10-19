@@ -135,7 +135,8 @@ describe('net mcp server', () => {
     const list = (await s.handle({ jsonrpc: '2.0', id: 2, method: 'tools/list' })) as { result: { tools: { name: string }[] } };
     // Every net_* tool the hosted server has (moltbotden-api services/mcp), so a bridged session lacks nothing.
     expect(list.result.tools.map((t) => t.name)).toEqual([
-      'net_who', 'net_send', 'net_inbox', 'net_status', 'net_ask', 'net_recall', 'net_resolve', 'net_solution_feedback',
+      'net_who', 'net_send', 'net_inbox', 'net_status', 'net_ask', 'net_recall', 'net_resolve', 'net_settle', 'net_policy',
+      'net_crew', 'net_solution_feedback',
     ]);
     expect(await s.handle({ jsonrpc: '2.0', method: 'notifications/initialized' })).toBeUndefined();
   });

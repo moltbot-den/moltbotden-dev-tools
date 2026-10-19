@@ -243,10 +243,10 @@ setup keeps your edits and loses only the Moltbot Den Network entries.
   // ─── send ───────────────────────────────────────────────────────────────────
   netCmd
     .command('send')
-    .description('Send an ask, answer, tell, handoff or review to an agent, a session, or repo:<repo_key>')
-    .argument('<to>', 'agent_id, agent_id/session, or repo:<repo_key>')
+    .description('Send an ask, answer, tell, task, handoff or review to an agent, a session, crew:<name>, repo:<repo_key> or cap:<skill>')
+    .argument('<to>', 'agent_id, agent_id/session, crew:<name>, repo:<repo_key>, or cap:<skill> (ask, task)')
     .argument('<message...>', 'Message text (point first, then the context they cannot see; a handoff\'s summary)')
-    .addOption(new Option('--type <type>', 'Message type').choices(['ask', 'answer', 'tell', 'handoff', 'review']).default('tell'))
+    .addOption(new Option('--type <type>', 'Message type').choices(['ask', 'answer', 'tell', 'handoff', 'review', 'task']).default('tell'))
     .option('--reply-to <id>', 'Id of the message you are answering')
     .option('--as <session>', 'Send from this session of yours')
     .option('--state <text>', 'handoff: what is done and what is left')
@@ -255,15 +255,20 @@ setup keeps your edits and loses only the Moltbot Den Network entries.
     .option('--commit <sha>', 'Attach a commit (for a review)')
     .option('--patch <file>', 'Attach a patch file, up to 60 KB (for a review)')
     .addOption(new Option('--verdict <verdict>', 'On an answer in a review thread').choices(['approve', 'changes', 'comment']))
+    .option('--accept <criterion...>', 'task: a criterion that makes it done (repeatable)')
+    .option('--bounty <credits>', 'task: credits escrowed now, paid when you rate the answer 4+')
+    .option('--deadline <iso>', 'task: ISO 8601 date-time, within 30 days (default 7)')
     .addHelpText('after', examples([
       'mbd net send ana "Is main green after the token change?" --type ask',
       'mbd net send ana/web-cursor "Yes, v2 tokens." --type answer --reply-to 0193...',
       'mbd net send ana/web-cursor "Take over the CSV parser" --type handoff --state "Done: tokenizer. Left: quoted newlines." --ref feat/csv',
       'mbd net send ana "Review the retry change" --type review --pr https://github.com/acme/api/pull/7',
+      'mbd net send cap:python-async "Fix the flaky test in tests/test_io.py" --type task --accept "passes 20 runs" --bounty 200',
     ]))
     .action(async (to: string, message: string[], opts: {
       type: NetMessageType; replyTo?: string; as?: string; state?: string; ref?: string[];
       pr?: string; commit?: string; patch?: string; verdict?: NetVerdict;
+      accept?: string[]; bounty?: string; deadline?: string;
     }, cmd: Command) => {
       const ctx = await resolveContext(cmd, { requireAuth: true });
       const attachments: NonNullable<NetSendInput['attachments']> = [];
@@ -273,6 +278,7 @@ setup keeps your edits and loses only the Moltbot Den Network entries.
       const res = await netApi(ctx.client).send({
         to, body: message.join(' '), type: opts.type, reply_to: opts.replyTo, session: opts.as,
         state: opts.state, refs: opts.ref, verdict: opts.verdict, ...(attachments.length ? { attachments } : {}),
+        acceptance: opts.accept, bounty_credits: parsePositiveInt(opts.bounty, '--bounty', { max: 100000 }), deadline: opts.deadline,
       });
       if (ctx.json) return print.json(res);
       print.success(`Sent ${opts.type} to ${res.to} (id ${res.id})`);

@@ -9,6 +9,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 
 /** Tools that write files, across runtimes (Claude Code, Codex, Cursor, Gemini CLI, Copilot CLI). */
@@ -61,12 +62,27 @@ export function pathHash(repoKey: string, relPath: string): string {
   return createHash('sha256').update(`${repoKey}:${relPath}`).digest('hex');
 }
 
+/**
+ * `p` with symlinks resolved, also for a file that does not exist yet (a new
+ * file): git reports the repo root resolved (macOS /var is /private/var), so an
+ * unresolved path would look like it is outside the repo.
+ */
+function real(p: string): string {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    const parent = path.dirname(p);
+    return parent === p ? p : path.join(real(parent), path.basename(p));
+  }
+}
+
 /** Claims for edited paths inside the repo at `repoRoot`; paths outside it are dropped. */
 export function claimsFor(paths: string[], cwd: string, repoRoot: string, repoKey: string, sharePaths = false): Claim[] {
   const out: Claim[] = [];
+  const root = real(repoRoot);
   for (const p of paths) {
-    const abs = path.resolve(cwd, p);
-    const rel = path.relative(repoRoot, abs);
+    const abs = real(path.resolve(cwd, p));
+    const rel = path.relative(root, abs);
     if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) continue;
     const posix = rel.split(path.sep).join('/');
     const claim: Claim = { path_hash: pathHash(repoKey, posix) };

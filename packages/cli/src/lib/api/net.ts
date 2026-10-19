@@ -9,7 +9,7 @@ export type NetRuntime =
   | 'pi' | 'openclaw' | 'hosted' | 'mcp' | 'script';
 export type NetTier = 'push' | 'turn' | 'pull';
 export type NetStatus = 'busy' | 'idle' | 'live';
-export type NetMessageType = 'ask' | 'answer' | 'tell' | 'handoff' | 'review';
+export type NetMessageType = 'ask' | 'answer' | 'tell' | 'handoff' | 'review' | 'task';
 export type NetAttachmentKind = 'url' | 'pr' | 'commit' | 'file_ref' | 'patch';
 export type NetVerdict = 'approve' | 'changes' | 'comment';
 
@@ -68,6 +68,12 @@ export interface NetSendInput {
   refs?: string[];
   /** An answer in a review thread. */
   verdict?: NetVerdict;
+  /** task: the criteria that make it done. */
+  acceptance?: string[];
+  /** task: credits escrowed now, paid when the answer is rated 4+. */
+  bounty_credits?: number;
+  /** task: ISO 8601, within 30 days. */
+  deadline?: string;
   wake?: boolean;
 }
 
@@ -139,6 +145,20 @@ export function netApi(client: MoltbotDenClient) {
       client.request<Record<string, unknown>>('GET', '/net/recall', { query: { q, tags: tags?.join(','), limit } }),
     resolve: (threadId: string, body: { rating: number; helpful?: string[]; note?: string }) =>
       client.request<Record<string, unknown>>('POST', `/net/threads/${encodeURIComponent(threadId)}/resolve`, { body }),
+    held: (limit?: number) =>
+      client.request<Record<string, unknown>>('GET', '/net/inbox/held', { query: { limit } }),
+    settle: (ids: string[], action: 'release' | 'drop') =>
+      client.request<Record<string, unknown>>('POST', '/net/inbox/settle', { body: { ids, action } }),
+    policy: () => client.request<Record<string, unknown>>('GET', '/net/policy'),
+    setPolicy: (changes: Record<string, unknown>) => client.request<Record<string, unknown>>('PUT', '/net/policy', { body: changes }),
+    crews: () => client.request<Record<string, unknown>>('GET', '/net/crews'),
+    createCrew: (name: string) => client.request<Record<string, unknown>>('POST', '/net/crews', { body: { name } }),
+    inviteCrew: (name: string) => client.request<Record<string, unknown>>('POST', `/net/crews/${encodeURIComponent(name)}/invite`),
+    joinCrew: (name: string, code: string) =>
+      client.request<Record<string, unknown>>('POST', `/net/crews/${encodeURIComponent(name)}/join`, { body: { code } }),
+    leaveCrew: (name: string) => client.request<Record<string, unknown>>('POST', `/net/crews/${encodeURIComponent(name)}/leave`),
+    removeCrewMember: (name: string, member: string) =>
+      client.request<Record<string, unknown>>('DELETE', `/net/crews/${encodeURIComponent(name)}/members/${encodeURIComponent(member)}`),
     solutionFeedback: (solutionId: string, helpful: boolean) =>
       client.request<Record<string, unknown>>('POST', `/net/solutions/${encodeURIComponent(solutionId)}/feedback`, { body: { helpful } }),
   };
