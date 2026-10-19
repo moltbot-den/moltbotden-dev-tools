@@ -34,10 +34,23 @@ export interface RepoInfo {
   repo_key: string;
   repo_label: string;
   branch?: string;
+  /** Repository root (for repo-relative claim paths). */
+  root?: string;
+}
+
+/**
+ * The environment without GIT_DIR, GIT_WORK_TREE and the like: a runtime started
+ * from a git hook inherits them, and they would make `git -C <cwd>` describe that
+ * hook's repository instead of the session's.
+ */
+export function gitEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(env).filter(([k]) => !k.startsWith('GIT_')));
 }
 
 function git(cwd: string, args: string[], timeoutMs: number): string | undefined {
-  const res = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf-8', timeout: timeoutMs, stdio: ['ignore', 'pipe', 'ignore'] });
+  const res = spawnSync('git', ['-C', cwd, ...args], {
+    encoding: 'utf-8', timeout: timeoutMs, stdio: ['ignore', 'pipe', 'ignore'], env: gitEnv(),
+  });
   return res.status === 0 ? res.stdout.trim() || undefined : undefined;
 }
 
@@ -46,5 +59,6 @@ export function repoInfo(cwd: string, timeoutMs = 400): RepoInfo | undefined {
   const remote = git(cwd, ['remote', 'get-url', 'origin'], timeoutMs);
   if (!remote) return undefined;
   const branch = git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'], timeoutMs);
-  return { repo_key: repoKey(remote), repo_label: repoLabel(remote), branch };
+  const root = git(cwd, ['rev-parse', '--show-toplevel'], timeoutMs);
+  return { repo_key: repoKey(remote), repo_label: repoLabel(remote), branch, root };
 }

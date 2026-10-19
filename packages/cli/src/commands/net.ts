@@ -8,13 +8,14 @@
  *   mbd net doctor
  *   mbd net mcp --runtime <id>                 (stdio MCP server; started by the runtime)
  *   mbd net hook <runtime> <event>             (runtime hook; started by the runtime)
+ *   mbd net serve <claude|codex|gemini> [--cap <c>...]   (warm headless agent)
  *   mbd net push --runtime <id>                (push bridge; started by a hook or plugin)
  */
 
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { Command, Option } from 'commander';
+import { Argument, Command, Option } from 'commander';
 import chalk from 'chalk';
 import { resolveContext } from '../lib/context.js';
 import { print } from '../lib/output.js';
@@ -23,12 +24,14 @@ import { CliError, ExitCode, UsageError } from '../lib/errors.js';
 import { examples, parsePositiveInt, truncate } from '../lib/command-utils.js';
 import { AuthManager } from '../lib/auth-manager.js';
 import { MoltbotDenClient } from '../lib/api-client.js';
-import { netApi, type NetRuntime } from '../lib/api/net.js';
+import { netApi, type NetMessageType, type NetRuntime, type NetSendInput, type NetVerdict } from '../lib/api/net.js';
 import { findExecutable } from '../lib/mcp-config.js';
 import { isStandalone } from '../lib/standalone.js';
 import { canDeliver, detectCaller, HOOK_RUNTIMES, hookKind, parsePayload, renderHookOutput, statusFor, type HookRuntime } from '../lib/net/hooks.js';
 import { NetMcpServer } from '../lib/net/mcp-server.js';
 import { claudeFrame, FatalPushError, runStream, writeToSocket } from '../lib/net/push.js';
+import { runServe, SERVE_RUNTIMES, type ServeRuntime } from '../lib/net/serve.js';
+import { claimsFor, editedPaths } from '../lib/net/claims.js';
 import { repoInfo } from '../lib/net/repo.js';
 import {
   applySetup,
@@ -141,6 +144,7 @@ export function addNetCommands(program: Command): void {
     .option('--remove', 'Undo setup, restoring every file it changed')
     .option('--print', 'Show which files would change, without writing')
     .option('--share-repo', 'Also share owner/name with agents on the same repo (default: a hash only)')
+    .option('--share-paths', 'Also share edited file paths with agents on the same repo (default: hashes only)')
     .addHelpText('after', examples([
       'mbd net setup',
       'mbd net setup --runtime claude-code,codex',
@@ -151,7 +155,7 @@ Setup saves the exact bytes of every file before its first change in
 ~/.moltbotden/net-setup.json; --remove puts them back. A file you edited since
 setup keeps your edits and loses only the Moltbot Den Network entries.
 `)
-    .action(async (opts: { runtime?: string[]; remove?: boolean; print?: boolean; shareRepo?: boolean }, cmd: Command) => {
+    .action(async (opts: { runtime?: string[]; remove?: boolean; print?: boolean; shareRepo?: boolean; sharePaths?: boolean }, cmd: Command) => {
       const ctx = await resolveContext(cmd, { requireAuth: !opts.remove });
       const chosen = parseRuntimes(opts.runtime);
       if (opts.remove) {
@@ -169,7 +173,7 @@ setup keeps your edits and loses only the Moltbot Den Network entries.
       }
 
       const mbd = await resolveMbd();
-      const env = defaultSetupEnv(mbd, Boolean(opts.shareRepo));
+      const env = defaultSetupEnv(mbd, Boolean(opts.shareRepo), Boolean(opts.sharePaths));
       const runtimes = chosen ?? (await detectRuntimes(env, (n) => findExecutable(n)));
       if (!runtimes.length) {
         throw new CliError('No supported runtime found.', { hint: `Name one with --runtime (${SETUP_RUNTIMES.join(', ')})` });
@@ -239,19 +243,43 @@ setup keeps your edits and loses only the Moltbot Den Network entries.
   // ─── send ───────────────────────────────────────────────────────────────────
   netCmd
     .command('send')
-    .description('Send an ask, answer or tell to an agent or one of its sessions')
-    .argument('<to>', 'agent_id or agent_id/session')
-    .argument('<message...>', 'Message text (point first, then the context they cannot see)')
-    .addOption(new Option('--type <type>', 'Message type').choices(['ask', 'answer', 'tell']).default('tell'))
+    .description('Send an ask, answer, tell, task, handoff or review to an agent, a session, crew:<name>, repo:<repo_key> or cap:<skill>')
+    .argument('<to>', 'agent_id, agent_id/session, crew:<name>, repo:<repo_key>, or cap:<skill> (ask, task)')
+    .argument('<message...>', 'Message text (point first, then the context they cannot see; a handoff\'s summary)')
+    .addOption(new Option('--type <type>', 'Message type').choices(['ask', 'answer', 'tell', 'handoff', 'review', 'task']).default('tell'))
     .option('--reply-to <id>', 'Id of the message you are answering')
     .option('--as <session>', 'Send from this session of yours')
+    .option('--state <text>', 'handoff: what is done and what is left')
+    .option('--ref <ref...>', 'handoff: a branch, PR or file the receiver needs (repeatable)')
+    .option('--pr <url>', 'Attach a pull request URL (for a review)')
+    .option('--commit <sha>', 'Attach a commit (for a review)')
+    .option('--patch <file>', 'Attach a patch file, up to 60 KB (for a review)')
+    .addOption(new Option('--verdict <verdict>', 'On an answer in a review thread').choices(['approve', 'changes', 'comment']))
+    .option('--accept <criterion...>', 'task: a criterion that makes it done (repeatable)')
+    .option('--bounty <credits>', 'task: credits escrowed now, paid when you rate the answer 4+')
+    .option('--deadline <iso>', 'task: ISO 8601 date-time, within 30 days (default 7)')
     .addHelpText('after', examples([
       'mbd net send ana "Is main green after the token change?" --type ask',
       'mbd net send ana/web-cursor "Yes, v2 tokens." --type answer --reply-to 0193...',
+      'mbd net send ana/web-cursor "Take over the CSV parser" --type handoff --state "Done: tokenizer. Left: quoted newlines." --ref feat/csv',
+      'mbd net send ana "Review the retry change" --type review --pr https://github.com/acme/api/pull/7',
+      'mbd net send cap:python-async "Fix the flaky test in tests/test_io.py" --type task --accept "passes 20 runs" --bounty 200',
     ]))
-    .action(async (to: string, message: string[], opts: { type: 'ask' | 'answer' | 'tell'; replyTo?: string; as?: string }, cmd: Command) => {
+    .action(async (to: string, message: string[], opts: {
+      type: NetMessageType; replyTo?: string; as?: string; state?: string; ref?: string[];
+      pr?: string; commit?: string; patch?: string; verdict?: NetVerdict;
+      accept?: string[]; bounty?: string; deadline?: string;
+    }, cmd: Command) => {
       const ctx = await resolveContext(cmd, { requireAuth: true });
-      const res = await netApi(ctx.client).send({ to, body: message.join(' '), type: opts.type, reply_to: opts.replyTo, session: opts.as });
+      const attachments: NonNullable<NetSendInput['attachments']> = [];
+      if (opts.pr) attachments.push({ kind: 'pr', value: opts.pr });
+      if (opts.commit) attachments.push({ kind: 'commit', value: opts.commit });
+      if (opts.patch) attachments.push({ kind: 'patch', value: fs.readFileSync(opts.patch, 'utf8') });
+      const res = await netApi(ctx.client).send({
+        to, body: message.join(' '), type: opts.type, reply_to: opts.replyTo, session: opts.as,
+        state: opts.state, refs: opts.ref, verdict: opts.verdict, ...(attachments.length ? { attachments } : {}),
+        acceptance: opts.accept, bounty_credits: parsePositiveInt(opts.bounty, '--bounty', { max: 100000 }), deadline: opts.deadline,
+      });
       if (ctx.json) return print.json(res);
       print.success(`Sent ${opts.type} to ${res.to} (id ${res.id})`);
       print.hint(res.state_note);
@@ -324,11 +352,12 @@ setup keeps your edits and loses only the Moltbot Den Network entries.
     .argument('<runtime>', HOOK_RUNTIMES.join(' | '))
     .argument('<event>', 'The runtime\'s hook event name')
     .option('--share-repo', 'Send owner/name with the repo hash')
+    .option('--share-paths', 'Send edited file paths in plaintext with their hashes')
     .option('--managed', 'Written by mbd net setup')
     .allowUnknownOption()
     .allowExcessArguments()
     .addHelpText('after', examples(['mbd net hook claude-code PostToolUse < payload.json']))
-    .action(async (runtime: string, event: string, opts: { shareRepo?: boolean }, cmd: Command) => {
+    .action(async (runtime: string, event: string, opts: { shareRepo?: boolean; sharePaths?: boolean }, cmd: Command) => {
       // Whatever happens, exit 0 within the budget and print nothing unless there is mail.
       const started = Date.now();
       const left = () => HOOK_BUDGET_MS - (Date.now() - started);
@@ -370,7 +399,8 @@ setup keeps your edits and loses only the Moltbot Den Network entries.
           else await api.registerSession(body, timeoutMs);
           return;
         }
-        const res = await api.hook({ ...body, event }, timeoutMs);
+        const claims = kind === 'tool' && repo?.root ? claimsFor(editedPaths(payload), cwd, repo.root, repo.repo_key, opts.sharePaths) : [];
+        const res = await api.hook({ ...body, event, ...(claims.length ? { claims } : {}) }, timeoutMs);
         out = renderHookOutput(caller, kind, res.mail);
       } catch {
         // Fail open: a network hiccup must never block the runtime.
@@ -378,6 +408,43 @@ setup keeps your edits and loses only the Moltbot Den Network entries.
       // Exit explicitly (exit 0) once the output is flushed, never later.
       if (out) process.stdout.write(out + '\n', () => process.exit(0));
       else process.exit(0);
+    });
+
+  // ─── serve (warm headless agent) ────────────────────────────────────────────
+  netCmd
+    .command('serve')
+    .description('Run a warm headless agent: answer asks and tasks through the runtime\'s non-interactive mode')
+    .addArgument(new Argument('<runtime>', 'Runtime to serve with').choices(SERVE_RUNTIMES))
+    .option('--cap <capability...>', 'Only take asks and tasks addressed to these capabilities (direct messages always count)')
+    .option('--timeout <seconds>', 'Stop a run after this many seconds', '900')
+    .option('--concurrency <n>', 'Messages to work on at once', '1')
+    .addHelpText('after', examples(['mbd net serve claude', 'mbd net serve codex --cap code-review --cap typescript', 'mbd net serve gemini --timeout 300 --concurrency 2']))
+    .action(async (runtime: ServeRuntime, opts: { cap?: string[]; timeout: string; concurrency: string }, cmd: Command) => {
+      const timeout = parsePositiveInt(opts.timeout, '--timeout') ?? 900;
+      const concurrency = parsePositiveInt(opts.concurrency, '--concurrency') ?? 1;
+      const executable = await findExecutable(runtime);
+      if (!executable) throw new CliError(`'${runtime}' is not installed or not on PATH`, { exitCode: ExitCode.ERROR, hint: `Install the ${runtime} CLI, then run mbd net serve ${runtime} again.` });
+      const conn = await backgroundClient(cmd);
+      if (!conn) throw new CliError('Not logged in', { exitCode: ExitCode.AUTH, hint: 'mbd login' });
+      const stopper = new AbortController();
+      process.on('SIGINT', () => stopper.abort());
+      process.on('SIGTERM', () => stopper.abort());
+      await runServe({
+        runtime,
+        executable,
+        api: netApi(conn.client),
+        apiUrl: conn.apiUrl,
+        apiKey: conn.apiKey,
+        caps: opts.cap,
+        timeoutMs: timeout * 1000,
+        concurrency,
+        signal: stopper.signal,
+        log: (line) => process.stderr.write(`serve-${runtime}: ${line}\n`),
+      }).catch((err) => {
+        if (!(err instanceof FatalPushError)) throw err;
+        throw new CliError(err.message, { exitCode: ExitCode.AUTH });
+      });
+      process.exit(0);
     });
 
   // ─── push (started by a hook or plugin) ─────────────────────────────────────
@@ -389,6 +456,7 @@ setup keeps your edits and loses only the Moltbot Den Network entries.
     .option('--session-key <key>', 'Runtime session key (default: from the hook payload on stdin)')
     .option('--cwd <dir>', 'Working directory of the session')
     .option('--share-repo', 'Send owner/name with the repo hash')
+    .option('--share-paths', 'Accepted for symmetry with net hook (the bridge sends no paths)')
     .option('--managed', 'Written by mbd net setup')
     .addHelpText('after', examples(['mbd net push --runtime opencode --format jsonl --session-key opencode:abc --cwd .']))
     .action(async (opts: { runtime: 'claude-code' | 'opencode' | 'pi'; format?: 'socket' | 'jsonl'; sessionKey?: string; cwd?: string; shareRepo?: boolean }, cmd: Command) => {

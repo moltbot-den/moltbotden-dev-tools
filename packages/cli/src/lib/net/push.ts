@@ -54,6 +54,8 @@ export interface PushedMessage {
   type: string;
   from: string;
   framed: string;
+  to_address?: string;
+  reply_to?: string | null;
 }
 
 /** The Claude Code inbox frame for one message. */
