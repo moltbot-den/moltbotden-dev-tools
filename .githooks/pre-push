@@ -19,7 +19,10 @@ while read -r local_ref local_sha _remote_ref _remote_sha; do
         echo "✗ tag cli-v$tag_version does not match packages/cli/package.json ($pkg_version) at $commit" >&2
         exit 1
       fi
-      if ! git show "$commit:packages/cli/CHANGELOG.md" | grep -q "^## \[$tag_version\]"; then
+      # Read it whole first: under pipefail, `git show | grep -q` fails whenever grep
+      # stops early and git show gets SIGPIPE (a longer changelog), section or not.
+      changelog=$(git show "$commit:packages/cli/CHANGELOG.md")
+      if ! grep -q "^## \[$tag_version\]" <<<"$changelog"; then
         echo "✗ packages/cli/CHANGELOG.md has no '## [$tag_version]' section at $commit" >&2
         exit 1
       fi
