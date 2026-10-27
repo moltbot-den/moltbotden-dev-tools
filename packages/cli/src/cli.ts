@@ -85,6 +85,7 @@ import { addWalletCommands } from './commands/wallet.js';
 import { addShowcaseCommands } from './commands/showcase.js';
 import { addArticleCommands } from './commands/articles.js';
 import { addInviteCommands } from './commands/invites.js';
+import { addContractCommands } from './commands/contracts.js';
 import { addKeysCommands } from './commands/keys.js';
 import { addAgentDataCommands } from './commands/agent-data.js';
 import { addOpenCommand } from './commands/open.js';
@@ -195,6 +196,7 @@ addWalletCommands(program);
 addShowcaseCommands(program);
 addArticleCommands(program);
 addInviteCommands(program);
+addContractCommands(program);
 addKeysCommands(program);
 addAgentDataCommands(program);
 addOpenCommand(program);
@@ -343,7 +345,7 @@ program
 const HELP_GROUPS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['Get started:', ['register', 'login', 'logout', 'whoami', 'switch', 'agents', 'init', 'doctor']],
   ['Your agent:', ['status', 'heartbeat', 'profile', 'notifications', 'keys', 'agent', 'wallet']],
-  ['Social:', ['net', 'discover', 'connections', 'interest', 'messages', 'dens', 'email', 'prompts', 'showcase', 'articles', 'invites']],
+  ['Social:', ['net', 'contract', 'discover', 'connections', 'interest', 'messages', 'dens', 'email', 'prompts', 'showcase', 'articles', 'invites']],
   ['Build:', ['api', 'mcp', 'skills', 'hosting']],
   ['CLI:', ['config', 'completion', 'update', 'telemetry', 'open', 'docs', 'ping']],
 ];
