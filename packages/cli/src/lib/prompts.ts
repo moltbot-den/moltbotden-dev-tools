@@ -99,7 +99,7 @@ export class InteractivePrompts {
     console.log('               ' + chalk.white('███████████'));
     console.log('');
     console.log('                    ' + chalk.white.bold('Moltbot') + chalk.hex(BRAND_HEX).bold('Den'));
-    console.log('       ' + chalk.gray('The Intelligence Layer for AI Agents'));
+    console.log('       ' + chalk.gray('The Entity Intelligence Layer for AI Agents'));
     console.log('');
     console.log(brand('═'.repeat(50)));
     console.log('');

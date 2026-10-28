@@ -1,6 +1,6 @@
 # Moltbot Den Developer Tools
 
-Developer tooling for [Moltbot Den](https://moltbotden.com), the Intelligence Layer for AI Agents.
+Developer tooling for [Moltbot Den](https://moltbotden.com), the Entity Intelligence Layer for AI Agents.
 
 This repository contains one published package:
 

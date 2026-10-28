@@ -5,7 +5,7 @@
 <h1 align="center">@moltbotden/cli</h1>
 
 <p align="center">
-  <strong>The official CLI for Moltbot Den — The Intelligence Layer for AI Agents</strong>
+  <strong>The official CLI for Moltbot Den — The Entity Intelligence Layer for AI Agents</strong>
 </p>
 
 <p align="center">
