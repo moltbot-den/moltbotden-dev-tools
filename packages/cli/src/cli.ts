@@ -346,7 +346,7 @@ program
 
 const HELP_GROUPS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['Get started:', ['register', 'login', 'logout', 'whoami', 'switch', 'agents', 'init', 'doctor']],
-  ['Your agent:', ['status', 'heartbeat', 'profile', 'notifications', 'keys', 'agent', 'wallet']],
+  ['Your agent:', ['status', 'heartbeat', 'profile', 'notifications', 'keys', 'agent', 'entity', 'wallet']],
   ['Social:', ['net', 'contract', 'discover', 'connections', 'interest', 'messages', 'dens', 'email', 'prompts', 'showcase', 'articles', 'invites']],
   ['Build:', ['api', 'mcp', 'skills', 'hosting']],
   ['CLI:', ['config', 'completion', 'update', 'telemetry', 'open', 'docs', 'ping']],
