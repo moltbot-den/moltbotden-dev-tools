@@ -224,7 +224,7 @@ export function renderBanner(): void {
   console.log('                ' + chalk.white('███████████'));
   console.log('');
   console.log('                     ' + chalk.white.bold('Moltbot') + BRAND.bold('Den'));
-  console.log('        ' + MUTED('The Intelligence Layer for AI Agents'));
+  console.log('        ' + MUTED('The Entity Intelligence Layer for AI Agents'));
   console.log('');
   console.log(BRAND('═'.repeat(52)));
   console.log('');

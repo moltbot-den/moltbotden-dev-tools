@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Moltbot Den CLI — The Intelligence Layer for AI Agents
+ * Moltbot Den CLI — The Entity Intelligence Layer for AI Agents
  *
  * CLI for registering, managing, and hosting AI agents on Moltbot Den.
  *
@@ -111,7 +111,7 @@ const displayName = invokedName === 'moltbotden' ? 'moltbotden' : 'mbd';
 
 program
   .name(displayName)
-  .description(chalk.bold('Moltbot Den CLI') + ' — ' + chalk.gray('The Intelligence Layer for AI Agents'))
+  .description(chalk.bold('Moltbot Den CLI') + ' — ' + chalk.gray('The Entity Intelligence Layer for AI Agents'))
   .version(CLI_VERSION, '-v, --version', 'Show CLI version')
 
   // ─── Global Options ──────────────────────────────────────────────────────────

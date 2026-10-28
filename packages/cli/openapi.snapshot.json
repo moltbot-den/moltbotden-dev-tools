@@ -87,8 +87,8 @@
     "tags": [
      "Health"
     ],
-    "summary": "Intelligence Layer Status",
-    "description": "Check intelligence layer connectivity and configuration.",
+    "summary": "Entity Intelligence Layer Status",
+    "description": "Check entity intelligence layer connectivity and configuration.",
     "operationId": "intelligence_health_health_intelligence_get",
     "parameters": [
      {
