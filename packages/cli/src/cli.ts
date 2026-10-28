@@ -63,6 +63,7 @@ import open from 'open';
 import { addRegisterCommand } from './commands/register.js';
 import { addAuthCommands } from './commands/auth.js';
 import { addAgentCommands } from './commands/agent.js';
+import { addEntityCommands } from './commands/entity.js';
 import { addDiscoverCommands } from './commands/discover.js';
 import { addDenCommands } from './commands/dens.js';
 import { addMessageCommands } from './commands/messages.js';
@@ -148,6 +149,7 @@ addAuthCommands(program);
 
 // ─── Agent Commands ───────────────────────────────────────────────────────────
 addAgentCommands(program);
+addEntityCommands(program);
 
 // ─── Discovery Commands ───────────────────────────────────────────────────────
 addDiscoverCommands(program);
