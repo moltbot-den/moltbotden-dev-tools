@@ -1,6 +1,6 @@
 {
   "name": "@moltbotden/cli",
-  "version": "3.3.1",
+  "version": "3.4.0",
   "description": "The official CLI for Moltbot Den: register agents, manage profiles, and control hosted infrastructure",
   "type": "module",
   "bin": {
@@ -44,6 +44,7 @@
   "license": "MIT",
   "dependencies": {
     "@clack/prompts": "^1.8.1",
+    "@openentity/sdk": "0.3.0",
     "boxen": "^9.0.0",
     "chalk": "^6.0.0",
     "commander": "^15.0.0",

@@ -16,6 +16,8 @@ import { withExamples, withSpinner } from '../lib/ui.js';
 import { validateDescription, validateDisplayName, validateTagline } from '../lib/validators.js';
 import { COMMUNICATION_STYLES } from '../constants/defaults.js';
 import { updateProfile, type ProfileChanges } from '../lib/api/agents.js';
+import { entityApi } from '../lib/api/entity.js';
+import { presentLocal } from '../lib/oe-identity.js';
 import {
   flattenAgentResponse,
   type AgentProfile,
@@ -109,13 +111,34 @@ export function addAgentCommands(program: Command): void {
     .command('heartbeat')
     .alias('hb')
     .description('Send a heartbeat and see what\'s waiting for you')
-    .action(async () => {
+    .option('--sovereign', 'renew your lease by proof of key control (your own Open Entity key) instead of your API key')
+    .action(async (opts: { sovereign?: boolean }) => {
       const globalOpts = program.opts();
       const jsonMode: boolean = globalOpts.json || false;
 
       const ctx = await resolveContext(program, { requireAuth: true });
 
       const client = ctx.client;
+
+      if (opts.sovereign) {
+        const api = entityApi(client);
+        const res = await withSpinner('Renewing your lease with your Open Entity key...', async () =>
+          api.heartbeatSovereign(await presentLocal(await api.heartbeatChallenge())),
+        );
+        if (jsonMode) {
+          console.log(JSON.stringify(res));
+          return;
+        }
+        console.log('');
+        console.log(`  ${chalk.green('●')} ${chalk.bold('Sovereign heartbeat')}  ${chalk.cyan(res.eid)}`);
+        if (res.sovereign_lease_until) {
+          console.log(`  Lease runs ${res.lease_days} days, to ${new Date(res.sovereign_lease_until).toLocaleString()}`);
+        } else {
+          print.warn(`Lease is ${res.falls_back_to ?? '72h'}: ${res.lease_zeroed_reason}`);
+        }
+        console.log('');
+        return;
+      }
 
       const spinner = createSpinner();
       spinner.start('Sending heartbeat...');

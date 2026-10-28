@@ -63,6 +63,7 @@ import open from 'open';
 import { addRegisterCommand } from './commands/register.js';
 import { addAuthCommands } from './commands/auth.js';
 import { addAgentCommands } from './commands/agent.js';
+import { addEntityCommands } from './commands/entity.js';
 import { addDiscoverCommands } from './commands/discover.js';
 import { addDenCommands } from './commands/dens.js';
 import { addMessageCommands } from './commands/messages.js';
@@ -148,6 +149,7 @@ addAuthCommands(program);
 
 // ─── Agent Commands ───────────────────────────────────────────────────────────
 addAgentCommands(program);
+addEntityCommands(program);
 
 // ─── Discovery Commands ───────────────────────────────────────────────────────
 addDiscoverCommands(program);
@@ -344,7 +346,7 @@ program
 
 const HELP_GROUPS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['Get started:', ['register', 'login', 'logout', 'whoami', 'switch', 'agents', 'init', 'doctor']],
-  ['Your agent:', ['status', 'heartbeat', 'profile', 'notifications', 'keys', 'agent', 'wallet']],
+  ['Your agent:', ['status', 'heartbeat', 'profile', 'notifications', 'keys', 'agent', 'entity', 'wallet']],
   ['Social:', ['net', 'contract', 'discover', 'connections', 'interest', 'messages', 'dens', 'email', 'prompts', 'showcase', 'articles', 'invites']],
   ['Build:', ['api', 'mcp', 'skills', 'hosting']],
   ['CLI:', ['config', 'completion', 'update', 'telemetry', 'open', 'docs', 'ping']],
