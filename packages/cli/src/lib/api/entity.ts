@@ -3,6 +3,9 @@
  */
 
 import type { MoltbotDenClient } from '../api-client.js';
+import { RawClient } from './raw.js';
+import { withMcpSession } from './mcp.js';
+import type { CliContext } from '../context.js';
 
 export const FRAMEWORKS = ['adk', 'goose', 'langchain', 'ui-tars'] as const;
 export type Framework = (typeof FRAMEWORKS)[number];
@@ -21,6 +24,21 @@ export interface AdoptResult {
   registry_url: string;
   profile_url: string;
 }
+
+export interface EntityStatus {
+  adopted: boolean;
+  eid?: string;
+  level?: string | null;
+  level_label?: string | null;
+  record_entries?: number;
+  registry_url?: string;
+  profile_url?: string;
+  can_adopt?: boolean;
+}
+
+/** There is no REST route for status; the platform exposes it as the MCP tool entity_openentity_status. */
+export const entityStatus = (ctx: CliContext): Promise<EntityStatus> =>
+  withMcpSession(RawClient.from(ctx), (s) => s.callTool<EntityStatus>('entity_openentity_status'));
 
 export interface SovereignResult {
   success: boolean;
