@@ -119,6 +119,14 @@ export class McpSession {
     return tools;
   }
 
+  /** Call a tool and return its JSON text payload (tools reply with one text block). */
+  async callTool<T>(name: string, args: Record<string, unknown> = {}): Promise<T> {
+    const r = await this.rpc<{ content?: { text?: string }[]; isError?: boolean }>('tools/call', { name, arguments: args });
+    const text = r?.content?.[0]?.text ?? '';
+    if (r?.isError) throw new ApiError(400, `MCP ${name} failed: ${text.slice(0, 200)}`, text);
+    return parseJsonOr(text, undefined) as T;
+  }
+
   /** End the session server-side. Never throws. */
   async close(): Promise<void> {
     if (!this.sessionId) return;

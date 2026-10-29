@@ -94,6 +94,23 @@ describe('mbd entity', () => {
     expect(JSON.parse(res.stdout).eid).toBe('did:pkh:eip155:8453:0xabc');
   });
 
+  it('status calls the entity_openentity_status MCP tool and prints EID, level, log index, URL', async () => {
+    const payload = { adopted: true, eid: 'did:pkh:eip155:8453:0xabc', level: 'L1', level_label: 'Declared', record_entries: 7, profile_url: 'https://openentity.org/entities/x' };
+    api.on('POST', '/mcp', {
+      status: 200,
+      headers: { 'MCP-Session-Id': 's1' },
+      body: { jsonrpc: '2.0', id: 1, result: { content: [{ type: 'text', text: JSON.stringify(payload) }], isError: false } },
+    });
+    api.on('DELETE', '/mcp', { status: 204 });
+    const res = await run(['entity', 'status']);
+    expect(res.code).toBe(0);
+    for (const s of ['did:pkh:eip155:8453:0xabc', 'L1 Declared', '7', 'https://openentity.org/entities/x']) expect(res.stdout).toContain(s);
+    const call = api.requests.map((r) => JSON.parse(r.body || 'null')).find((b) => b?.method === 'tools/call');
+    expect(call.params.name).toBe('entity_openentity_status');
+    const json = await run(['entity', 'status', '--json']);
+    expect(JSON.parse(json.stdout).record_entries).toBe(7);
+  });
+
   it('adopt refuses an unknown framework before calling the API', async () => {
     const res = await run(['entity', 'adopt', '--framework', 'crewai']);
     expect(res.code).toBe(2);

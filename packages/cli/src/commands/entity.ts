@@ -7,7 +7,7 @@ import chalk from 'chalk';
 import { resolveContext } from '../lib/context.js';
 import { print } from '../lib/output.js';
 import { withExamples, withSpinner } from '../lib/ui.js';
-import { entityApi, FRAMEWORKS, type Framework } from '../lib/api/entity.js';
+import { entityApi, entityStatus, FRAMEWORKS, type Framework } from '../lib/api/entity.js';
 import { presentLocal } from '../lib/oe-identity.js';
 
 const frameworkOption = () =>
@@ -35,6 +35,29 @@ export function addEntityCommands(program: Command): void {
     console.log(`  ${chalk.green('●')} ${res.already_adopted ? 'Already adopted' : 'Adopted'}  ${chalk.cyan(res.eid)}  ${res.level ?? ''}`);
     console.log(`  ${chalk.gray(res.profile_url)}`);
     console.log('');
+  });
+
+  withExamples(
+    entity.command('status').description('Show your EID, level, log index and URL'),
+    ['mbd entity status', 'mbd entity status --json'],
+  ).action(async (_opts: unknown, cmd: Command) => {
+    const ctx = await resolveContext(cmd, { requireAuth: true });
+    const res = await withSpinner('Reading Open Entity status...', () => entityStatus(ctx));
+    if (ctx.json) {
+      print.json(res);
+      return;
+    }
+    if (!res.adopted) {
+      print.empty('Not adopted yet.', 'Adopt: mbd entity adopt');
+      return;
+    }
+    print.header('Open Entity');
+    print.keyValue([
+      { label: 'EID', value: chalk.cyan(res.eid ?? '') },
+      { label: 'Level', value: [res.level, res.level_label].filter(Boolean).join(' ') || null },
+      { label: 'Log index', value: res.record_entries === undefined ? null : String(res.record_entries) },
+      { label: 'URL', value: res.profile_url ?? res.registry_url ?? null },
+    ]);
   });
 
   withExamples(
