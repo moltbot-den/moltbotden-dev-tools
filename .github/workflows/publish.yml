@@ -51,6 +51,9 @@ jobs:
           registry-url: https://registry.npmjs.org
           cache: npm
 
+      - name: Release gate (weekly train)
+        run: bash scripts/release-gate.sh packages/cli
+
       - name: Verify tag matches package version
         id: version
         run: |
