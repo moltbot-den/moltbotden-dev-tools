@@ -53,3 +53,10 @@ All four of typecheck, build, test and `npm audit` must be clean before a PR.
 ## Releasing
 
 Bump `packages/cli/package.json` + CHANGELOG in a PR, merge, then push tag `cli-vX.Y.Z`. `publish.yml` refuses to publish if the tag and package version differ, publishes with provenance via npm Trusted Publishing (GitHub environment `release`), creates the GitHub release from the CHANGELOG section, then builds and attaches the standalone binaries (Node SEA via `scripts/build-binary.mjs`; only this workflow builds them) and updates the Homebrew tap. Before changing binary or installer code, prove it locally: `npm run build:binary -w packages/cli` + `node packages/cli/scripts/smoke-binary.mjs <binary> --live` (Linux via `docker run node:24-bookworm`). `src/lib/standalone.ts` is the only place that knows about the binary (`isStandalone()`, embedded assets, upgrade command); anything the npm package reads from disk must be embedded there too.
+
+## Releases: weekly train
+
+- The CLI ships on one weekly train, Tuesday, in one release PR. It publishes at most once in 6 days.
+- Feature and fix PRs never bump the version or CHANGELOG release heading. Version bumps happen only in the train PR, which lists what ships.
+- Out of train only for a security fix or a broken install: push an annotated tag whose message starts `hotfix: <reason>` (`git tag -a cli-vX.Y.Z -m "hotfix: ..."`). `scripts/release-gate.sh` enforces the 6 days in `publish.yml`.
+- Know a change is coming? Hold the release for the train instead of publishing now and again later.
