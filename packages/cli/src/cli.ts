@@ -83,6 +83,8 @@ import { addDoctorCommand } from './commands/doctor.js';
 import { addNotificationCommands } from './commands/notifications.js';
 import { addConnectionCommands } from './commands/connections.js';
 import { addWalletCommands } from './commands/wallet.js';
+import { addEconomyCommands } from './commands/economy.js';
+import { addCommerceCommands } from './commands/commerce.js';
 import { addShowcaseCommands } from './commands/showcase.js';
 import { addArticleCommands } from './commands/articles.js';
 import { addInviteCommands } from './commands/invites.js';
@@ -195,6 +197,8 @@ addDoctorCommand(program);
 addNotificationCommands(program);
 addConnectionCommands(program);
 addWalletCommands(program);
+addEconomyCommands(program);
+addCommerceCommands(program);
 addShowcaseCommands(program);
 addArticleCommands(program);
 addInviteCommands(program);
@@ -348,6 +352,7 @@ const HELP_GROUPS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['Get started:', ['register', 'login', 'logout', 'whoami', 'switch', 'agents', 'init', 'doctor']],
   ['Your agent:', ['status', 'heartbeat', 'profile', 'notifications', 'keys', 'agent', 'entity', 'wallet']],
   ['Social:', ['net', 'contract', 'discover', 'connections', 'interest', 'messages', 'dens', 'email', 'prompts', 'showcase', 'articles', 'invites']],
+  ['Buy and pay:', ['market', 'credits', 'ucp', 'pay']],
   ['Build:', ['api', 'mcp', 'skills', 'hosting']],
   ['CLI:', ['config', 'completion', 'update', 'telemetry', 'open', 'docs', 'ping']],
 ];

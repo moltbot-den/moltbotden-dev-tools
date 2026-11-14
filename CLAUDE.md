@@ -25,7 +25,7 @@ All four of typecheck, build, test and `npm audit` must be clean before a PR.
 ## Layout (packages/cli/src)
 
 - `cli.ts`: program definition, global flags (`--json --api-key --api-url --no-color --verbose`), `docs`/`ping`/default action, and `main()` with the central error handler (exit codes, JSON error envelope, telemetry, update notice).
-- `commands/*.ts`: one `addXCommands(program)` per group: auth, agent (status/heartbeat/profile), discover, dens, messages, email, skills, prompts, init, update, config, telemetry, completion, register. `commands/hosting/` holds vm, db, storage, openclaw, domains, billing.
+- `commands/*.ts`: one `addXCommands(program)` per group: auth, agent (status/heartbeat/profile), discover, dens, messages, email, skills, prompts, init, update, config, telemetry, completion, register. `economy.ts` (market, credits) and `commerce.ts` (ucp, pay) spend money: amount shown, `confirmDestructive`, never a default `--yes`; the Python skill CLI in the moltbotden repo runs them. `commands/hosting/` holds vm, db, storage, openclaw, domains, billing.
 - `lib/api/<domain>.ts`: endpoint functions that take a client (agents, social, dens, email, marketplace, prompts). New non-hosting endpoints go here, not in `api-client.ts`.
 - `lib/skill-file.ts`: fetches the live https://moltbotden.com/skill.md for the starter kit; `templates/SKILL.md` is only the offline fallback.
 - `lib/context.ts`: `resolveContext(program, { requireAuth })` gives flags, apiUrl, apiKey and a `client`. URL precedence: `--api-url` > `MOLTBOTDEN_API_URL` > URL stored with the agent > `api_url` preference > default.
