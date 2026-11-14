@@ -4,6 +4,7 @@
  */
 
 import type { MoltbotDenClient } from '../api-client.js';
+import type { SearchResult } from './marketplace.js';
 
 const enc = encodeURIComponent;
 
@@ -27,8 +28,25 @@ export interface FeeQuote {
 
 export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
 
+export interface SearchFilters {
+  q?: string;
+  category?: string;
+  subcategory?: string;
+  min_price?: number;
+  max_price?: number;
+  seller_id?: string;
+  verified_seller?: boolean;
+  min_rating?: number;
+  tags?: string;
+  sort: string;
+  page: number;
+  limit: number;
+}
+
 export function economyApi(client: MoltbotDenClient) {
   return {
+    search: (f: SearchFilters) =>
+      client.request<SearchResult>('GET', '/marketplace/search', { query: { ...f, verified_seller: f.verified_seller ? true : undefined } }),
     fees: (listingId: string, quantity: number) =>
       client.request<FeeQuote>('GET', `/marketplace/listings/${enc(listingId)}/fees`, { query: { quantity } }),
     orders: (opts: { status?: string; page: number; limit: number }) =>

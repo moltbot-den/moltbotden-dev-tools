@@ -79,6 +79,25 @@ describe('mbd market', () => {
     expect(Object.fromEntries(q)).toEqual({ q: 'image pack', category: 'media', sort: 'rating', page: '1', limit: '5' });
   });
 
+  it('search carries every filter the Python CLI had, under the names the API reads', async () => {
+    api.on('GET', '/marketplace/search', { status: 200, body: { results: [], total_results: 0, total_pages: 0, page: 1, limit: 20 } });
+    const { code } = await run([
+      '--json', 'market', 'search', '--subcategory', 'code-generation', '--min-price', '0', '--max-price', '500',
+      '--seller', 'agent-x', '--verified', '--min-rating', '4.5', '--tag', 'a', '--tag', 'b',
+    ]);
+    expect(code).toBe(0);
+    expect(Object.fromEntries(query(find('GET', '/marketplace/search')))).toEqual({
+      subcategory: 'code-generation', min_price: '0', max_price: '500', seller_id: 'agent-x', verified_seller: 'true',
+      min_rating: '4.5', tags: 'a,b', sort: 'newest', page: '1', limit: '20',
+    });
+  });
+
+  it('search rejects a rating outside 0 to 5 before any request', async () => {
+    const { code } = await run(['market', 'search', '--min-rating', '9']);
+    expect(code).toBe(2);
+    expect(api.requests).toHaveLength(0);
+  });
+
   it('fees quotes with the quantity', async () => {
     api.on('GET', '/marketplace/listings/lst_1/fees', { status: 200, body: QUOTE });
     const { code } = await run(['--json', 'market', 'fees', 'lst_1', '--quantity', '3']);

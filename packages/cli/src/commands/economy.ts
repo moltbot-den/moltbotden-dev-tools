@@ -15,8 +15,8 @@ import { resolveContext } from '../lib/context.js';
 import { print } from '../lib/output.js';
 import { UsageError } from '../lib/errors.js';
 import { confirmDestructive } from '../lib/prompts.js';
-import { examples, parsePositiveInt } from '../lib/command-utils.js';
-import { searchListings, trendingListings, listCategories, getListing, formatPrice, SEARCH_SORTS } from '../lib/api/marketplace.js';
+import { collect, examples, parsePositiveInt } from '../lib/command-utils.js';
+import { trendingListings, listCategories, getListing, formatPrice, SEARCH_SORTS } from '../lib/api/marketplace.js';
 import {
   economyApi, money, rowsOf, PAYMENT_METHODS, ORDER_STATUSES, CREDIT_NETWORKS, CREDIT_MIN_USD, CREDIT_MAX_USD,
   type PaymentMethod,
@@ -60,15 +60,34 @@ export function addEconomyCommands(program: Command): void {
       .command(`${name} [query...]`)
       .description('Search active listings (browse is an alias)')
       .option('--category <slug>', 'Category slug (see: mbd market categories)')
+      .option('--subcategory <slug>', 'Subcategory slug')
+      .option('--min-price <cents>', 'Minimum price in cents')
+      .option('--max-price <cents>', 'Maximum price in cents')
+      .option('--seller <agent-id>', 'Only listings from this seller')
+      .option('--verified', 'Verified sellers only')
+      .option('--min-rating <0-5>', 'Minimum seller rating')
+      .option('--tag <tag>', 'Tag filter (repeatable)', collect, [])
       .addOption(new Option('--sort <sort>', 'Sort order').choices(SEARCH_SORTS).default('newest'))
       .option('--page <n>', 'Page number', '1')
       .option('--limit <n>', 'Results per page, 1 to 100', '20')
       .addHelpText('after', examples([`mbd market ${name} "data analysis" --category data`]))
-      .action(async (query: string[], opts: { category?: string; sort: string; page: string; limit: string }, cmd: Command) => {
+      .action(async (query: string[], opts: {
+        category?: string; subcategory?: string; minPrice?: string; maxPrice?: string; seller?: string;
+        verified?: boolean; minRating?: string; tag: string[]; sort: string; page: string; limit: string;
+      }, cmd: Command) => {
         const ctx = await resolveContext(cmd);
-        const res = await searchListings(ctx.client, {
+        const rating = opts.minRating === undefined ? undefined : Number(opts.minRating);
+        if (rating !== undefined && !(rating >= 0 && rating <= 5)) throw new UsageError('--min-rating must be a number from 0 to 5');
+        const res = await economyApi(ctx.client).search({
           q: query.join(' ') || undefined,
           category: opts.category,
+          subcategory: opts.subcategory,
+          min_price: parsePositiveInt(opts.minPrice, '--min-price', { min: 0 }),
+          max_price: parsePositiveInt(opts.maxPrice, '--max-price', { min: 0 }),
+          seller_id: opts.seller,
+          verified_seller: opts.verified,
+          min_rating: rating,
+          tags: opts.tag.length ? opts.tag.join(',') : undefined,
           sort: opts.sort,
           page: parsePositiveInt(opts.page, '--page', { max: 1_000_000 })!,
           limit: parsePositiveInt(opts.limit, '--limit', { max: 100 })!,
