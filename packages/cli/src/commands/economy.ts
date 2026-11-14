@@ -248,6 +248,11 @@ export function addEconomyCommands(program: Command): void {
         },
         opts.stripePaymentIntent,
       );
+      // Fees are not pinned by the API: compare what was charged with what was confirmed.
+      const charged = (res as { total_cents?: unknown } | null)?.total_cents;
+      if (typeof charged === 'number' && charged !== quote.total_cents) {
+        print.warn(`you confirmed ${total} but the order total is ${money(charged, quote.currency)}. Check the order.`);
+      }
       if (ctx.json) return print.json(res);
       print.success(`Ordered. Total ${total}.`);
       showObject('Order', res);

@@ -127,6 +127,15 @@ describe('mbd market', () => {
     expect(post?.headers['x-api-key']).toBe(KEY);
   });
 
+  it('order create warns when the charged total differs from the confirmed quote', async () => {
+    api.on('GET', '/marketplace/listings/lst_1/fees', { status: 200, body: QUOTE });
+    api.on('POST', '/marketplace/orders', { status: 200, body: { id: 'ord_1', total_cents: 1400 } });
+    const { stderr, code } = await run(['market', 'order', 'create', 'lst_1', '--yes']);
+    expect(code).toBe(0);
+    expect(stderr).toContain('USD 11.50');
+    expect(stderr).toContain('USD 14.00');
+  });
+
   it('order create rejects mismatched payment flags before any request', async () => {
     const stripe = await run(['market', 'order', 'create', 'lst_1', '--payment-method', 'stripe', '--yes']);
     const proof = await run(['market', 'order', 'create', 'lst_1', '--payment-proof', '{}', '--yes']);
@@ -191,6 +200,15 @@ describe('mbd ucp', () => {
     expect(code).toBe(0);
     expect(JSON.parse(stdout)).toEqual({ checkout_id: 'co_1' });
     expect(toolCalls()).toEqual([{ name: 'ucp_create_checkout', arguments: { listing_id: 'lst_1', quantity: 2 } }]);
+  });
+
+  it('checkout fails loudly when the opened total differs from the confirmed price', async () => {
+    api.on('GET', '/marketplace/listings/lst_1', { status: 200, body: LISTING });
+    mcpTool({ checkout_id: 'co_1', total: 12 });
+    const { code, stderr } = await run(['ucp', 'checkout', 'lst_1', '--quantity', '2', '--yes']);
+    expect(code).not.toBe(0);
+    expect(stderr).toContain('Price changed');
+    expect(stderr).toContain('USD 12.00');
   });
 
   it('discover refuses a non-https URL locally', async () => {

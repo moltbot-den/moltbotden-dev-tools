@@ -118,6 +118,13 @@ export function addCommerceCommands(program: Command): void {
       const data = await withMcpSession(RawClient.from(ctx), (s) =>
         s.callTool<unknown>('ucp_create_checkout', { listing_id: id, quantity }),
       );
+      // The listing price was read separately: the opened checkout must carry the total the user confirmed.
+      const opened = (data as { total?: unknown } | null)?.total;
+      if (typeof opened === 'number' && Math.round(opened * 100) !== listing.price_cents * quantity) {
+        throw new UsageError(
+          `Price changed: you confirmed ${total} but the checkout opened at ${money(Math.round(opened * 100), listing.currency)}. Do not complete it; run the command again.`,
+        );
+      }
       show(ctx.json, 'Checkout', data);
     });
 
