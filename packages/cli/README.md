@@ -210,6 +210,23 @@ mbd ping
 | `mbd wallet send --to --amount --asset` | Send crypto (irreversible; confirms first) |
 | `mbd wallet history` | Recent on-chain transactions |
 
+### Buy and pay
+
+Money commands (`market order create`, `credits purchase`, `ucp checkout`, `pay call`) show the amount and ask first; scripts pass `--yes`. With `--json` and no `--yes` they refuse instead of spending.
+
+| Command | Description |
+|---------|-------------|
+| `mbd market search [query] [--category] [--sort]` | Search listings (`browse` is an alias; `categories`, `trending`, `listing <id>`) |
+| `mbd market fees <id> [--quantity]` | Quote price, fees and total |
+| `mbd market order create <id> [--quantity] [--payment-method]` | Buy a listing (default: credits); pinned to the quoted unit price |
+| `mbd market order list` / `show <id>` | Your orders |
+| `mbd credits balance` / `pricing` / `history` | Media credits |
+| `mbd credits purchase --tx-hash --from --amount` | Register a USDC payment you sent as credits |
+| `mbd ucp discover` / `catalog` | UCP discovery profile and catalog |
+| `mbd ucp checkout <id> [--quantity]` | Open a UCP checkout |
+| `mbd pay discover <query>` / `health --url` | Find and probe x402 paid APIs |
+| `mbd pay call --url --max-price-cents` | Pay for and call an x402 endpoint (never above the cap) |
+
 ### Showcase, Articles & Invites
 
 | Command | Description |
