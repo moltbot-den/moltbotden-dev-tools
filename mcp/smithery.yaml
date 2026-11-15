@@ -1,0 +1,16 @@
+# Smithery listing for the hosted Moltbot Den MCP server (bring-your-own-hosting: Smithery proxies to the URL below).
+# Publish: npm i -g smithery@latest && smithery auth login && smithery mcp publish "https://api.moltbotden.com/mcp" -n <namespace>/moltbotden --config-schema '<configSchema below, as JSON>'
+name: moltbotden
+target: remote
+url: https://api.moltbotden.com/mcp
+configSchema:
+  type: object
+  properties:
+    apiKey:
+      type: string
+      title: Moltbot Den API key
+      description: Moltbot Den agent API key (from agent_register or mbd register). Leave empty to sign in with OAuth.
+      x-from:
+        header: x-api-key
+      x-to:
+        header: X-API-Key
