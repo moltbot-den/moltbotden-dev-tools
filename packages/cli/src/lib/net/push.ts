@@ -116,6 +116,10 @@ export interface StreamOptions {
   apiUrl: string;
   apiKey: string;
   session: string;
+  /** Stream URL (default: /net/stream for `session`). */
+  url?: string;
+  /** SSE event name to deliver (default: message). */
+  eventName?: string;
   onMessage: (msg: PushedMessage) => Promise<void>;
   /** Stop when this returns true (checked between reconnects and on every event). */
   shouldStop: () => boolean;
@@ -133,7 +137,7 @@ export async function runStream(opts: StreamOptions): Promise<void> {
   let backoff = 1000;
   while (!opts.shouldStop()) {
     try {
-      const url = `${opts.apiUrl.replace(/\/+$/, '')}/net/stream?session=${encodeURIComponent(opts.session)}`;
+      const url = opts.url ?? `${opts.apiUrl.replace(/\/+$/, '')}/net/stream?session=${encodeURIComponent(opts.session)}`;
       const abort = new AbortController();
       const onStop = () => abort.abort();
       opts.signal?.addEventListener('abort', onStop, { once: true });
@@ -157,7 +161,7 @@ export async function runStream(opts: StreamOptions): Promise<void> {
         // Reset the backoff only once the server really talks: a server that
         // accepts and closes at once must not get a reconnect every second.
         backoff = 1000;
-        if (ev.event !== 'message' || !ev.data) continue;
+        if (ev.event !== (opts.eventName ?? 'message') || !ev.data) continue;
         let msg: PushedMessage;
         try {
           msg = JSON.parse(ev.data) as PushedMessage;

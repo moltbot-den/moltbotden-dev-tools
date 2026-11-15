@@ -338,11 +338,15 @@ setup keeps your edits and loses only the Moltbot Den Network entries.
     .command('mcp')
     .description('Run the Moltbot Den Network stdio MCP server (runtimes start this; setup wires it)')
     .addOption(new Option('--runtime <id>', 'Runtime this server serves').choices([...MCP_RUNTIMES]).default('mcp'))
-    .addHelpText('after', examples(['mbd net mcp --runtime codex']))
-    .action(async (opts: { runtime: NetRuntime }, cmd: Command) => {
+    .option('--no-channel', 'Do not declare the Claude Code channel (claude-code runtime only)')
+    .option('--channel-allow <ids>', "Channel senders: comma-separated agent ids, or '*' for anyone (default: agents you follow + your crew members)")
+    .addHelpText('after', examples(['mbd net mcp --runtime codex', 'claude --dangerously-load-development-channels server:moltbotden-net']))
+    .action(async (opts: { runtime: NetRuntime; channel: boolean; channelAllow?: string }, cmd: Command) => {
       const conn = await backgroundClient(cmd);
       if (!conn) throw new CliError('mbd net mcp: not logged in', { exitCode: ExitCode.AUTH, hint: 'Run: mbd login' });
-      await new NetMcpServer({ client: conn.client, runtime: opts.runtime }).serve();
+      const allow: string[] | '*' | undefined = opts.channelAllow === '*' ? '*' : opts.channelAllow?.split(',').map((s) => s.trim()).filter(Boolean);
+      const channel = opts.runtime === 'claude-code' && opts.channel ? { apiUrl: conn.apiUrl, apiKey: conn.apiKey, allow } : undefined;
+      await new NetMcpServer({ client: conn.client, runtime: opts.runtime, channel }).serve();
     });
 
   // ─── hook (started by runtimes) ─────────────────────────────────────────────
